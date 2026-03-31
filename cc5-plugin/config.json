@@ -1,0 +1,9 @@
+{
+  "Name": "CC5 MCP Bridge",
+  "Version": "1.0.0",
+  "Author": "CC5 MCP Server",
+  "Description": "HTTP bridge server for MCP integration with Character Creator 5",
+  "Icon": "",
+  "PluginType": "Python",
+  "PythonFile": "main.py"
+}

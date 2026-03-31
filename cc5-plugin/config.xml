@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<customPlugin>
+    <PluginName>CC5 MCP Bridge</PluginName>
+    <PythonFile>main.py</PythonFile>
+    <Version>1.0.0</Version>
+    <Author>CC5 MCP Server</Author>
+    <Description>HTTP bridge for MCP integration — enables AI control of CC5 via Claude</Description>
+</customPlugin>
