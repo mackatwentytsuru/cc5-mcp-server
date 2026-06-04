@@ -116,7 +116,7 @@ else:
         skip(n, "no light")
 s, r = call("GET", "/camera/info"); ok("get_camera_info", s == 200 and is_resp(r))
 s, r = call("POST", "/camera/focal", {"focal_length": 50}); ok("set_camera_focal_length (responds)", is_resp(r))
-s, r = call("GET", "/expressions"); ok("get_expression_info (success)", isinstance(res(r), dict) and res(r).get("success"))
+s, r = call("GET", "/expressions"); ok("get_expression_info (groups)", isinstance(res(r), dict) and len(res(r)) > 0)
 s, r = call("POST", "/subdivision", {"level": 0}); ok("set_subdivision_level", res(r).get("success"))
 
 print("== Content + asset load + item ops (real cloth) ==")

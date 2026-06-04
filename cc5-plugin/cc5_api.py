@@ -513,6 +513,12 @@ def export_fbx(
                 notes.append("use_smooth_mesh: CC5 UI exclusive — emulated via sub_d_level/flags (RExportFbxSetting unavailable or failed)")
                 # Best effort: ensure subdivision is on
                 if sub_d_level is None:
+                    # Snapshot for rollback (only None here means we didn't snapshot earlier).
+                    try:
+                        if _orig_subd is None and hasattr(avatar, "GetSubdivMeshLevel"):
+                            _orig_subd = int(avatar.GetSubdivMeshLevel())
+                    except Exception:
+                        _orig_subd = None
                     try:
                         set_subdivision_level(1)
                         notes.append("auto sub_d_level=1 to approximate smooth mesh")
@@ -860,8 +866,8 @@ def set_camera_focal_length(focal_length: float) -> dict[str, Any]:
         return {"success": False, "error": "No camera"}
     time = RLPy.RGlobal.GetTime()
     before = camera.GetFocalLength(time)
-    RLPy.RGlobal.BeginAction("Set Camera Focal Length")
     try:
+        RLPy.RGlobal.BeginAction("Set Camera Focal Length")
         camera.SetFocalLength(time, focal_length)
         RLPy.RGlobal.ObjectModified(camera, RLPy.EObjectModifiedType_Attribute)
         if hasattr(RLPy.RGlobal, "ForceViewportUpdate"):
@@ -962,8 +968,8 @@ def set_light_multiplier(light_name: str, multiplier: float) -> dict[str, Any]:
     if not light:
         return {"success": False, "error": f"Light not found: {light_name}"}
 
-    RLPy.RGlobal.BeginAction("Set Light Multiplier")
     try:
+        RLPy.RGlobal.BeginAction("Set Light Multiplier")
         light.SetMultiplier(RLPy.RGlobal.GetTime(), multiplier)
         RLPy.RGlobal.ObjectModified(light, RLPy.EObjectModifiedType_Attribute)
     finally:
@@ -991,7 +997,10 @@ def get_expression_info() -> dict[str, Any]:
     except Exception as e:
         return {"success": False, "error": f"Failed to get expressions: {e}"}
 
-    return {"success": True, "expressions": result}
+    # Return the bare group->names map (like get_lights/get_avatars). The TS tool
+    # (expression.ts) does Object.keys(info); a {success, expressions} wrapper broke it
+    # (EXPR-ENVELOPE). Failure paths above still return {success:False} -> HTTP 400.
+    return result
 
 
 # --- Material / Texture Control ---
@@ -2781,7 +2790,7 @@ def _auto_patch_server() -> None:
             remove_eyelash=bool(p.get("remove_eyelash", False)),
             remove_tearline_occlusion=bool(p.get("remove_tearline_occlusion", False)),
         ),
-        "capture_viewport":      lambda p: _self.capture_viewport(p.get("output_path", "")),
+        "capture_viewport":      lambda p: _self.capture_viewport(p.get("output_path", ""), int(p.get("width", 1280)), int(p.get("height", 720))),
         "set_subdivision_level": lambda p: _self.set_subdivision_level(int(p["level"])),
         "undo":                  lambda p: _self.undo(),
         "redo":                  lambda p: _self.redo(),

@@ -106,7 +106,7 @@ ACTION_MAP: dict[str, Any] = {
         remove_eyelash=bool(p.get("remove_eyelash", False)),
         remove_tearline_occlusion=bool(p.get("remove_tearline_occlusion", False)),
     ),
-    "capture_viewport":      lambda p: cc5_api.capture_viewport(p.get("output_path", "")),
+    "capture_viewport":      lambda p: cc5_api.capture_viewport(p.get("output_path", ""), int(p.get("width", 1280)), int(p.get("height", 720))),
     "set_subdivision_level": lambda p: cc5_api.set_subdivision_level(int(p["level"])),
     "undo":                  lambda p: cc5_api.undo(),
     "redo":                  lambda p: cc5_api.redo(),
