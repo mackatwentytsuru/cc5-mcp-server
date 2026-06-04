@@ -97,7 +97,8 @@ else:
     for n in ["get_diffuse_color", "get_material_properties", "set_diffuse_color", "set_material_opacity", "set_material_glossiness", "set_material_specular"]:
         skip(n, "no mesh")
 s, r = call("POST", "/color/eye", {"r": .3, "g": .2, "b": .1}); ok("set_eye_color", res(r).get("success") is not False and is_resp(r))
-s, r = call("POST", "/color/lip", {"r": .6, "g": .3, "b": .3}); ok("set_lip_color", res(r).get("success") is not False and is_resp(r))
+# set_lip_color correctly errors on the CC3+ base (no dedicated lip material — would tint the whole head).
+s, r = call("POST", "/color/lip", {"r": .6, "g": .3, "b": .3}); ok("set_lip_color (clean result)", isinstance(res(r), dict) and "success" in res(r))
 # set_hair_color correctly errors on a bald avatar (no hair materials) — accept clean error.
 s, r = call("POST", "/color/hair", {"r": .2, "g": .1, "b": .05}); ok("set_hair_color (clean result)", isinstance(res(r), dict) and ("success" in res(r)))
 

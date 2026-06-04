@@ -1424,12 +1424,11 @@ _EYE_TARGETS = [
 
 _HAIR_MESH_PREFIXES = ["CC_Base_Hair", "Hair", "hair"]
 
-_LIP_TARGETS = [
-    ("CC_Base_Body", "Std_Skin_Head"),
-    ("CC_Base_Body", "Ga_Skin_Head"),
-    ("CC_Base_Head", "Std_Skin_Head"),
-    ("CC_Base_Head", "Ga_Skin_Head"),
-]
+# Lip color must target a DEDICATED lip/mouth material only. The CC3+ base shares the
+# whole face with Std_Skin_Head, so falling back to it paints the ENTIRE head the lip
+# color (found via tutorial run). set_lip_color now relies solely on a name-based
+# 'lip'/'mouth' material search and fails cleanly when none exists.
+_LIP_TARGETS: list[tuple[str, str]] = []
 
 
 def _find_materials_by_prefix(avatar, mesh_prefixes: list[str]) -> list[tuple[str, str, Any]]:
@@ -1650,7 +1649,13 @@ def set_lip_color(r: float, g: float, b: float) -> dict[str, Any]:
 
     if applied:
         return {"success": True, "applied_to": applied}
-    return {"success": False, "error": "Could not find lip materials. Use get_material_info to discover mesh/material names."}
+    return {
+        "success": False,
+        "error": "No dedicated lip/mouth material on this character — lips share the head "
+                 "skin (Std_Skin_Head), so lip color cannot be set independently without "
+                 "tinting the whole face. Use a character with a separate lip material, or "
+                 "apply makeup in CC5.",
+    }
 
 
 # --- Visibility & Scene ---

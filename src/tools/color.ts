@@ -44,7 +44,7 @@ export function registerColorTools(server: McpServer, bridge: CC5Bridge) {
 
   server.tool(
     "set_lip_color",
-    "Set the lip/mouth color of the current avatar. RGB values are floats 0.0-1.0. This is a convenience shortcut that targets lip and mouth materials. Note: may also affect surrounding skin if no separate lip material exists.",
+    "Set the lip/mouth color of the current avatar. RGB values are floats 0.0-1.0. Targets only DEDICATED lip/mouth materials. Note: the CC3+ base character has NO separate lip material (lips share the head skin), so this returns a clean error there rather than tinting the whole face — use a character with a real lip material, or apply makeup in CC5.",
     {
       r: z.number().min(0).max(1).describe("Red component (0.0-1.0)"),
       g: z.number().min(0).max(1).describe("Green component (0.0-1.0)"),
