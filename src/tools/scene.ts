@@ -118,9 +118,16 @@ export function registerSceneTools(server: McpServer, bridge: CC5Bridge) {
         if (!base64Data) {
           const fallbackPath = output_path ?? path.join(os.tmpdir(), "cc5_viewport.png");
           try {
-            const psCmd = `Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $s=[System.Windows.Forms.Screen]::PrimaryScreen; $b=New-Object System.Drawing.Bitmap($s.Bounds.Width,$s.Bounds.Height); $g=[System.Drawing.Graphics]::FromImage($b); $g.CopyFromScreen($s.Bounds.Location,[System.Drawing.Point]::Empty,$s.Bounds.Size); $b.Save('${fallbackPath.replace(/\\/g, "/")}'); $g.Dispose(); $b.Dispose()`;
-            execSync(`powershell -Command "${psCmd}"`, { timeout: 15000 });
-            if (fs.existsSync(fallbackPath)) {
+            // Write to a FIXED temp path passed via an env var — never interpolate the
+            // caller-controlled path into the PowerShell command (command-injection guard).
+            const psTmp = path.join(os.tmpdir(), "cc5_screen_capture.png");
+            const psCmd = `Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $s=[System.Windows.Forms.Screen]::PrimaryScreen; $b=New-Object System.Drawing.Bitmap($s.Bounds.Width,$s.Bounds.Height); $g=[System.Drawing.Graphics]::FromImage($b); $g.CopyFromScreen($s.Bounds.Location,[System.Drawing.Point]::Empty,$s.Bounds.Size); $b.Save($env:CC5_CAP_TMP); $g.Dispose(); $b.Dispose()`;
+            execSync(`powershell -NoProfile -Command "${psCmd}"`, {
+              timeout: 15000,
+              env: { ...process.env, CC5_CAP_TMP: psTmp },
+            });
+            if (fs.existsSync(psTmp)) {
+              fs.copyFileSync(psTmp, fallbackPath);
               const data = fs.readFileSync(fallbackPath);
               base64Data = data.toString("base64");
               imgPath = fallbackPath;

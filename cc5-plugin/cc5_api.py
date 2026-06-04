@@ -398,8 +398,14 @@ def export_fbx(
 
     notes: list[str] = []
 
-    # --- Apply subdivision level first if requested ---
+    # --- Apply subdivision level first if requested (snapshot for rollback) ---
+    _orig_subd = None
     if sub_d_level is not None:
+        try:
+            if hasattr(avatar, "GetSubdivMeshLevel"):
+                _orig_subd = int(avatar.GetSubdivMeshLevel())
+        except Exception:
+            _orig_subd = None
         try:
             sub_result = set_subdivision_level(int(sub_d_level))
             if not sub_result.get("success", False):
@@ -471,6 +477,8 @@ def export_fbx(
         # Passing a bare int as the 3rd arg to ExportFbxFile can crash CC5.
         # Fall back to the 2-arg call only if RExportFbxSetting is unavailable.
         used_setting_object = False
+        applied_flags2 = False
+        applied_flags3 = False
         if hasattr(RLPy, "RExportFbxSetting"):
             try:
                 setting = RLPy.RExportFbxSetting()
@@ -478,13 +486,15 @@ def export_fbx(
                 if flags2:
                     try:
                         setting.SetOption2(flags2)
-                    except Exception:
-                        pass
+                        applied_flags2 = True
+                    except Exception as e:
+                        notes.append(f"WARNING: SetOption2 failed, flags2 NOT applied: {e}")
                 if flags3:
                     try:
                         setting.SetOption3(flags3)
-                    except Exception:
-                        pass
+                        applied_flags3 = True
+                    except Exception as e:
+                        notes.append(f"WARNING: SetOption3 failed, flags3 NOT applied: {e}")
                 if use_smooth_mesh and hasattr(setting, "EnableBakeSubdivision"):
                     setting.EnableBakeSubdivision(True)
                     notes.append("use_smooth_mesh: EnableBakeSubdivision(True) on RExportFbxSetting")
@@ -494,6 +504,11 @@ def export_fbx(
                 notes.append(f"RExportFbxSetting overload failed ({e}); falling back to 2-arg export")
 
         if not used_setting_object:
+            if flags or flags2 or flags3:
+                notes.append(
+                    "WARNING: option flags (target-tool preset / axis / etc.) were NOT "
+                    "applied — used the flag-less 2-arg ExportFbxFile fallback."
+                )
             if use_smooth_mesh:
                 notes.append("use_smooth_mesh: CC5 UI exclusive — emulated via sub_d_level/flags (RExportFbxSetting unavailable or failed)")
                 # Best effort: ensure subdivision is on
@@ -506,15 +521,25 @@ def export_fbx(
             # 2-arg fallback — avoids passing bare int as 3rd arg
             RLPy.RFileIO.ExportFbxFile(avatar, output_path)
 
+        # Honest reporting: echo flags only when actually applied.
         return {
             "success": True,
             "path": output_path,
-            "flags": flags,
-            "flags2": flags2,
+            "flags_applied": used_setting_object,
+            "flags": flags if used_setting_object else 0,
+            "flags2": flags2 if applied_flags2 else 0,
+            "flags3": flags3 if applied_flags3 else 0,
             "notes": notes,
             "target_tool": target_tool or "default",
         }
     except Exception as e:
+        # Roll back the subdivision change if we made one and the export failed.
+        if _orig_subd is not None:
+            try:
+                set_subdivision_level(_orig_subd)
+                notes.append(f"restored sub_d_level to {_orig_subd} after export failure")
+            except Exception:
+                pass
         return {"success": False, "error": str(e), "notes": notes}
 
 
