@@ -240,10 +240,10 @@ def process_command_queue() -> None:
 
             try:
                 handler = ACTION_MAP.get(action)
-                result = handler(params) if handler else {"error": f"Unknown action: {action}"}
+                result = handler(params) if handler else {"success": False, "error": f"Unknown action: {action}"}
             except Exception as e:
                 print(f"[CC5 MCP Bridge] Action '{action}' failed: {traceback.format_exc()}")
-                result = {"error": str(e)}
+                result = {"success": False, "error": str(e)}
 
             with _store_lock:
                 event = response_events.pop(cmd_id, None)
@@ -409,8 +409,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
         action = POST_ROUTES.get(path)
         if action:
-            if action == "exec_python" and not DEV_MODE and not RELOAD_SECRET:
-                self._send_json(403, {"error": "/exec/python disabled. Set CC5_DEV_MODE=1 or CC5_RELOAD_SECRET."})
+            if action == "exec_python" and not DEV_MODE and os.environ.get("CC5_ALLOW_EXEC", "").strip().lower() not in ("1", "true", "yes"):
+                self._send_json(403, {"error": "/exec/python disabled. Set CC5_DEV_MODE=1 or CC5_ALLOW_EXEC=1."})
                 return
             status, data = _execute_sync(action, params)
             self._send_json(status, data)
