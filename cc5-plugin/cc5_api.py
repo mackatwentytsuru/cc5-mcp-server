@@ -884,6 +884,44 @@ def set_camera_focal_length(focal_length: float) -> dict[str, Any]:
     return {"success": True, "focal_length": actual}
 
 
+_CAMERA_VIEWS = {
+    "face": "ECameraLocationType_Face",
+    "front": "ECameraLocationType_Front",
+    "back": "ECameraLocationType_Back",
+    "left": "ECameraLocationType_Left",
+    "right": "ECameraLocationType_Right",
+    "top": "ECameraLocationType_Top",
+    "bottom": "ECameraLocationType_Bottom",
+    "home": "ECameraLocationType_Home",
+    "all": "ECameraLocationType_All",
+    "focus": "ECameraLocationType_Focus",
+}
+
+
+def frame_camera(view: str = "face") -> dict[str, Any]:
+    """Move the current camera to a preset view (face/front/home/all/back/left/right/top/
+    bottom/focus). Enables face-level visual verification (eye/lip/skin color, facial
+    morphs) that a full-body shot is too small to show. Found needed via tutorial runs.
+    """
+    cam = RLPy.RScene.GetCurrentCamera()
+    if not cam:
+        return {"success": False, "error": "No camera in scene"}
+    key = (view or "").strip().lower()
+    enum_name = _CAMERA_VIEWS.get(key)
+    if not enum_name:
+        return {"success": False, "error": f"Unknown view '{view}'. Valid: {', '.join(sorted(_CAMERA_VIEWS))}"}
+    loc = getattr(RLPy, enum_name, None)
+    if loc is None:
+        return {"success": False, "error": f"Camera view '{view}' not available in this CC5 version"}
+    try:
+        cam.SetCameraLocation(loc)
+        if hasattr(RLPy.RGlobal, "ForceViewportUpdate"):
+            RLPy.RGlobal.ForceViewportUpdate()
+        return {"success": True, "view": key, "camera": cam.GetName()}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 # --- Light Control ---
 
 def get_lights() -> list[dict[str, Any]]:
@@ -2803,6 +2841,7 @@ def _auto_patch_server() -> None:
         "redo":                  lambda p: _self.redo(),
         "get_camera_info":       lambda p: _self.get_camera_info(),
         "set_camera_focal_length": lambda p: _self.set_camera_focal_length(float(p["focal_length"])),
+        "frame_camera":          lambda p: _self.frame_camera(p.get("view", "face")),
         "get_lights":            lambda p: _self.get_lights(),
         "set_light_color":       lambda p: _self.set_light_color(p["light_name"], float(p["r"]), float(p["g"]), float(p["b"])),
         "get_light_info":        lambda p: _self.get_light_info(p["light_name"]),
@@ -2853,6 +2892,7 @@ def _auto_patch_server() -> None:
             "/undo":             "undo",
             "/redo":             "redo",
             "/camera/focal":     "set_camera_focal_length",
+            "/camera/frame":     "frame_camera",
             "/light/color":      "set_light_color",
             "/light/info":       "get_light_info",
             "/light/multiplier": "set_light_multiplier",

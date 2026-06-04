@@ -237,6 +237,12 @@ export class CC5Bridge {
     });
   }
 
+  async frameCamera(
+    view: string,
+  ): Promise<{ success: boolean; view?: string; camera?: string; error?: string }> {
+    return this.request("/camera/frame", "POST", { view });
+  }
+
   // --- Lights ---
 
   async getLights(): Promise<LightInfo[]> {

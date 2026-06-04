@@ -35,4 +35,19 @@ export function registerCameraTools(server: McpServer, bridge: CC5Bridge) {
         : `Failed: ${result.error}`,
     )
   );
+
+  server.tool(
+    "frame_camera",
+    "Move the viewport camera to a preset view. Use 'face' to frame the head close-up (so eye/lip/skin color and facial morphs are actually visible in capture_viewport — a full-body shot is too small), 'home'/'all' to reset to the whole character, or front/back/left/right/top/bottom/focus.",
+    {
+      view: z.enum(["face", "front", "back", "left", "right", "top", "bottom", "home", "all", "focus"])
+        .default("face").describe("Preset view. 'face' = head close-up, 'home'/'all' = whole body."),
+    },
+    async ({ view }) => bridgeCall(
+      () => bridge.frameCamera(view),
+      (result) => result.success
+        ? `Camera framed to '${result.view ?? view}' view.`
+        : `Failed: ${result.error}`,
+    )
+  );
 }

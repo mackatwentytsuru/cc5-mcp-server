@@ -49,6 +49,7 @@ export function createMockBridge(): MockBridge {
     redo: vi.fn<[], Promise<OperationResult>>(),
     getCameraInfo: vi.fn<[], Promise<CameraInfo>>(),
     setCameraFocalLength: vi.fn<[number], Promise<FocalLengthResult>>(),
+    frameCamera: vi.fn<[string], Promise<{ success: boolean; view?: string; camera?: string; error?: string }>>(),
     getLights: vi.fn<[], Promise<LightInfo[]>>(),
     setLightColor: vi.fn<[string, number, number, number], Promise<LightColorResult>>(),
     getLightInfo: vi.fn<[string], Promise<LightDetailInfo>>(),
