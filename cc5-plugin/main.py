@@ -27,13 +27,18 @@ rl_plugin_info = {
     "ap_version": "8.0",
 }
 
-_timer = None
+# Keep both timers as module-level globals so PySide2/Qt cannot GC them while
+# the plugin is alive.
+_timer = None          # 16 ms  — command-queue drain (~60 Hz)
+_health_timer = None   # 5000 ms — watchdog health check (1/5 s)
 _server_thread = None
 
 BRIDGE_PORT = 5101
+HEALTH_CHECK_INTERVAL_MS = 5000   # watchdog cadence
+COMMAND_QUEUE_INTERVAL_MS = 16    # command-dispatch cadence (~60 fps)
 
 
-def _check_server_health():
+def _check_server_health() -> None:
     """Watchdog: restart HTTP server if it crashed."""
     global _server_thread
     if _server_thread is not None and not _server_thread.is_alive():
@@ -45,24 +50,34 @@ def _check_server_health():
             print(f"[CC5 MCP Bridge] Failed to restart: {e}")
 
 
-def _on_timer():
-    """QTimer callback: process command queue + watchdog."""
-    _check_server_health()
+def _on_timer() -> None:
+    """16 ms QTimer callback: drain the command queue only."""
     bridge_server.process_command_queue()
 
 
-def initialize_plugin():
+def _on_health_timer() -> None:
+    """5000 ms QTimer callback: watchdog health check only."""
+    _check_server_health()
+
+
+def initialize_plugin() -> int:
     """Entry point called by CC5 when the plugin is loaded."""
-    global _timer, _server_thread
+    global _timer, _health_timer, _server_thread
 
     print("[CC5 MCP Bridge] Initializing plugin...")
 
     try:
         _server_thread = bridge_server.start_server(port=BRIDGE_PORT)
 
+        # Command-queue timer — high frequency, no health overhead.
         _timer = QTimer()
         _timer.timeout.connect(_on_timer)
-        _timer.start(16)  # Poll every 16ms (~60fps) for low latency
+        _timer.start(COMMAND_QUEUE_INTERVAL_MS)
+
+        # Health-check timer — low frequency watchdog.
+        _health_timer = QTimer()
+        _health_timer.timeout.connect(_on_health_timer)
+        _health_timer.start(HEALTH_CHECK_INTERVAL_MS)
 
         print(f"[CC5 MCP Bridge] Bridge server running on http://127.0.0.1:{BRIDGE_PORT}")
     except Exception as e:
@@ -74,13 +89,17 @@ def initialize_plugin():
     return RLPy.RStatus.Success
 
 
-def uninitialize_plugin():
+def uninitialize_plugin() -> None:
     """Called by CC5 when the plugin is unloaded."""
-    global _timer, _server_thread
+    global _timer, _health_timer, _server_thread
 
     if _timer is not None:
         _timer.stop()
         _timer = None
+
+    if _health_timer is not None:
+        _health_timer.stop()
+        _health_timer = None
 
     bridge_server.stop_server()
     if _server_thread is not None:

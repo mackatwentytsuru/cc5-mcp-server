@@ -5,6 +5,7 @@
 /**
  * Wraps a bridge call with try/catch, returning a structured MCP content response.
  * Prevents unhandled errors from propagating to the MCP SDK.
+ * Logs the full error (including stack) to stderr so MCP stdio is not corrupted.
  */
 export async function bridgeCall<T>(
   fn: () => Promise<T>,
@@ -14,6 +15,7 @@ export async function bridgeCall<T>(
     const result = await fn();
     return { content: [{ type: "text" as const, text: formatSuccess(result) }] };
   } catch (err: unknown) {
+    console.error("[CC5 Bridge] bridgeCall caught error:", err);
     const message = err instanceof Error ? err.message : String(err);
     return {
       content: [{
