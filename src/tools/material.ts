@@ -17,12 +17,13 @@ export function registerMaterialTools(server: McpServer, bridge: CC5Bridge) {
     async ({ avatar_name }) => bridgeCall(
       () => bridge.getMaterialInfo(avatar_name),
       (info) => {
-        const meshNames = Object.keys(info);
+        const meshes = info.meshes ?? {};
+        const meshNames = Object.keys(meshes);
         if (meshNames.length === 0) {
           return "No meshes found on the avatar. The avatar may not have material data, or GetMeshNames() may not be available in this CC5 version.";
         }
         const lines = meshNames.map(mesh => {
-          const mats = info[mesh];
+          const mats = meshes[mesh];
           return `- ${mesh}: ${mats.length > 0 ? mats.join(", ") : "(no materials)"}`;
         });
         return `Found ${meshNames.length} mesh(es):\n${lines.join("\n")}`;

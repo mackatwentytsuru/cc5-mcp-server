@@ -63,8 +63,10 @@ describe("registerMaterialTools – registration", () => {
 
 describe("get_material_info handler", () => {
   const sampleInfo: MaterialInfo = {
-    CC_Base_Body: ["Std_Skin_Body", "Std_Skin_Arm"],
-    CC_Base_Eye: ["Std_Eye_R", "Std_Eye_L"],
+    meshes: {
+      CC_Base_Body: ["Std_Skin_Body", "Std_Skin_Arm"],
+      CC_Base_Eye: ["Std_Eye_R", "Std_Eye_L"],
+    },
   };
 
   it("returns mesh and material names on success", async () => {
@@ -84,7 +86,7 @@ describe("get_material_info handler", () => {
   });
 
   it("reports '(no materials)' for a mesh with an empty materials array", async () => {
-    const emptyMaterials: MaterialInfo = { CC_Base_Body: [] };
+    const emptyMaterials: MaterialInfo = { meshes: { CC_Base_Body: [] } };
     bridge.getMaterialInfo.mockResolvedValue(emptyMaterials);
     const handler = server.getRegisteredTool("get_material_info");
     const result = await handler({});
@@ -92,7 +94,7 @@ describe("get_material_info handler", () => {
   });
 
   it("returns the no-meshes message when result is an empty object", async () => {
-    bridge.getMaterialInfo.mockResolvedValue({});
+    bridge.getMaterialInfo.mockResolvedValue({ meshes: {} });
     const handler = server.getRegisteredTool("get_material_info");
     const result = await handler({});
     expect(result.content[0].text).toContain("No meshes found on the avatar");

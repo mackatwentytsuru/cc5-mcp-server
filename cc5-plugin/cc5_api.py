@@ -126,8 +126,10 @@ def _get_all_morph_ids() -> set[str]:
 
 def _invalidate_caches() -> None:
     """Clear morph ID and catalog caches (call after scene changes)."""
+    global _render_image_broken
     _morph_id_cache.clear()
     _morph_catalog_cache.clear()
+    _render_image_broken = False
 
 
 def get_morph_catalog() -> dict[str, list[dict[str, str]]]:
@@ -974,7 +976,7 @@ def get_material_info(avatar_name: str = "") -> dict[str, Any]:
                 result[mesh] = []
     except Exception as e:
         return {"success": False, "error": str(e)}
-    return {"success": True, **result}
+    return {"success": True, "meshes": result}
 
 
 MAX_MATERIAL_NAME_LENGTH = 256
@@ -1207,7 +1209,7 @@ def list_clothes() -> list[dict[str, Any]]:
         ]
     except Exception as e:
         print(f"[CC5 MCP Bridge] list_clothes failed: {e}")
-        return []
+        return {"success": False, "error": str(e)}
 
 
 def list_hair() -> list[dict[str, Any]]:
@@ -1227,7 +1229,7 @@ def list_hair() -> list[dict[str, Any]]:
         ]
     except Exception as e:
         print(f"[CC5 MCP Bridge] list_hair failed: {e}")
-        return []
+        return {"success": False, "error": str(e)}
 
 
 def list_accessories() -> list[dict[str, Any]]:
@@ -1243,7 +1245,7 @@ def list_accessories() -> list[dict[str, Any]]:
         ]
     except Exception as e:
         print(f"[CC5 MCP Bridge] list_accessories failed: {e}")
-        return []
+        return {"success": False, "error": str(e)}
 
 
 MAX_ITEM_NAME_LENGTH = 256
@@ -1410,8 +1412,8 @@ def _apply_diffuse_color_to_targets(
         try:
             mat_comp.AddDiffuseKey(key, mesh_name, material_name, color)
             applied.append(f"{mesh_name}/{material_name}")
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[CC5 MCP Bridge] AddDiffuseKey failed for {mesh_name}/{material_name}: {e}")
     return applied
 
 def set_eye_color(r: float, g: float, b: float) -> dict[str, Any]:
@@ -1483,8 +1485,8 @@ def set_hair_color(r: float, g: float, b: float) -> dict[str, Any]:
             try:
                 mat_comp.AddDiffuseKey(key, mesh_name, material_name, color)
                 applied.append(f"{mesh_name}/{material_name}")
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[CC5 MCP Bridge] AddDiffuseKey failed for {mesh_name}/{material_name}: {e}")
         if applied:
             RLPy.RGlobal.ObjectModified(avatar, _EOMTYPE_MATERIAL)
     finally:
@@ -1532,8 +1534,8 @@ def set_lip_color(r: float, g: float, b: float) -> dict[str, Any]:
                                 label = f"{mesh}/{mat_name}"
                                 if label not in applied:
                                     applied.append(label)
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                print(f"[CC5 MCP Bridge] AddDiffuseKey failed for {mesh}/{mat_name}: {e}")
                 except Exception:
                     pass
         except Exception:

@@ -742,21 +742,23 @@ describe("CC5Bridge.searchMorphs", () => {
 
 describe("CC5Bridge.getMaterialInfo", () => {
   const sampleInfo: MaterialInfo = {
-    CC_Base_Body: ["Std_Skin_Body", "Std_Skin_Arm"],
-    CC_Base_Eye: ["Std_Eye_R", "Std_Eye_L"],
+    meshes: {
+      CC_Base_Body: ["Std_Skin_Body", "Std_Skin_Arm"],
+      CC_Base_Eye: ["Std_Eye_R", "Std_Eye_L"],
+    },
   };
 
   it("returns material info on success", async () => {
     mockFetch<MaterialInfo>({ result: sampleInfo });
     const result = await bridge.getMaterialInfo();
     expect(result).toEqual(sampleInfo);
-    expect(Object.keys(result)).toHaveLength(2);
+    expect(Object.keys(result.meshes)).toHaveLength(2);
   });
 
   it("returns an empty object when no meshes exist", async () => {
-    mockFetch<MaterialInfo>({ result: {} });
+    mockFetch<MaterialInfo>({ result: { meshes: {} } });
     const result = await bridge.getMaterialInfo();
-    expect(result).toEqual({});
+    expect(result).toEqual({ meshes: {} });
   });
 
   it("sends POST /material/info with empty body when no avatar_name provided", async () => {

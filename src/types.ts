@@ -91,7 +91,8 @@ export interface ResetMorphsResult extends OperationResult {
 }
 
 export interface MaterialInfo {
-  [meshName: string]: string[];
+  success?: boolean;
+  meshes: Record<string, string[]>;
 }
 
 export interface DiffuseColor {
