@@ -86,7 +86,7 @@ export function registerAssetTools(server: McpServer, bridge: CC5Bridge) {
         return { content: [{ type: "text" as const, text: pathError }] };
       }
       return bridgeCall(
-        () => bridge.exportFbx(output_path, options ?? 0, extra),
+        () => bridge.exportFbx(output_path, options ?? 0, extra as import("../types.js").ExportFbxOptions),
         (result) => {
           if (!result.success) return `Export failed: ${result.error}${result.notes ? `\nNotes: ${result.notes.join("; ")}` : ""}`;
           const notes = result.notes && result.notes.length ? `\nNotes: ${result.notes.join("; ")}` : "";

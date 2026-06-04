@@ -55,7 +55,7 @@ export function registerCharacterTools(server: McpServer, bridge: CC5Bridge) {
       const morphs = BODY_PRESETS[preset];
       const scaled = morphs.map(m => ({
         morph_id: m.morph_id,
-        value: m.value * intensity,
+        value: Math.max(-1, Math.min(1, m.value * intensity)),
       }));
 
       return bridgeCall(

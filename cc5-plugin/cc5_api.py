@@ -28,6 +28,15 @@ MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB
 
 MAX_MORPH_ID_LENGTH = 256
 
+# UR-25: prefer EObjectModifiedType_Material for material/color changes.
+# Falls back to _Attribute if _Material is not in this build.
+_EOMTYPE_MATERIAL = (
+    RLPy.EObjectModifiedType_Material
+    if hasattr(RLPy, "EObjectModifiedType_Material")
+    else RLPy.EObjectModifiedType_Attribute
+)
+
+
 
 def _validate_morph_id(morph_id: str) -> str | None:
     """Validate morph ID length. Returns error message or None."""
@@ -88,6 +97,11 @@ def get_avatar_by_name(name: str = ""):
 # --- Morph helpers ---
 
 _morph_id_cache: dict[int, set[str]] = {}
+_morph_catalog_cache: dict[int, dict[str, list[dict[str, str]]]] = {}
+
+# UR-13: set to True after RenderImage fails post-.ccProject load so later
+# captures skip the failing attempts and go straight to the fallback.
+_render_image_broken: bool = False
 
 
 def _get_all_morph_ids() -> set[str]:
@@ -113,13 +127,17 @@ def _get_all_morph_ids() -> set[str]:
 def _invalidate_caches() -> None:
     """Clear morph ID and catalog caches (call after scene changes)."""
     _morph_id_cache.clear()
+    _morph_catalog_cache.clear()
 
 
 def get_morph_catalog() -> dict[str, list[dict[str, str]]]:
-    """Enumerate all available shaping morph IDs, grouped by category."""
+    """Enumerate all available shaping morph IDs, grouped by category (cached per avatar ID)."""
     avatar = get_first_avatar()
     if not avatar:
         return {}
+    avatar_id = avatar.GetID()
+    if avatar_id in _morph_catalog_cache:
+        return _morph_catalog_cache[avatar_id]
 
     shaping_comp = avatar.GetAvatarShapingComponent()
     if not shaping_comp:
@@ -136,34 +154,35 @@ def get_morph_catalog() -> dict[str, list[dict[str, str]]]:
             for i in range(len(ids))
         ]
 
+    _morph_catalog_cache[avatar_id] = catalog
     return catalog
 
 
 MAX_SEARCH_RESULTS = 200
 
 
-def search_morphs(query: str, category: str = "") -> list[dict[str, str]] | dict[str, str]:
-    """Search morph catalog by display name. Returns matching morphs."""
+def search_morphs(query: str, category: str = "") -> list[dict[str, str]]:
+    """Search morph catalog by display name. Returns matching morphs.
+    Iterates the catalog cache populated by get_morph_catalog (UR-12).
+    """
     if not query.strip():
-        return {"success": False, "error": "query must not be empty"}
+        return []
     query_lower = query.lower()
     avatar = get_first_avatar()
     if not avatar:
         return []
-    shaping_comp = avatar.GetAvatarShapingComponent()
-    if not shaping_comp:
+    catalog = get_morph_catalog()
+    if not catalog:
         return []
     results: list[dict[str, str]] = []
-    categories = shaping_comp.GetShapingMorphCatergoryNames()
-    for cat in categories:
+    for cat, entries in catalog.items():
         if category and category.lower() not in cat.lower():
             continue
-        ids = shaping_comp.GetShapingMorphIDs(cat)
-        names = shaping_comp.GetShapingMorphDisplayNames(cat)
-        for i in range(len(ids)):
-            display = names[i] if i < len(names) else ids[i]
-            if query_lower in display.lower() or query_lower in ids[i].lower():
-                results.append({"id": ids[i], "display_name": display, "category": cat})
+        for entry in entries:
+            morph_id = entry["id"]
+            display = entry["display_name"]
+            if query_lower in display.lower() or query_lower in morph_id.lower():
+                results.append({"id": morph_id, "display_name": display, "category": cat})
     # Deduplicate by ID
     seen: set[str] = set()
     unique: list[dict[str, str]] = []
@@ -174,20 +193,21 @@ def search_morphs(query: str, category: str = "") -> list[dict[str, str]] | dict
     return unique[:MAX_SEARCH_RESULTS]
 
 
-def get_morph_value(morph_id: str) -> float | None:
+def get_morph_value(morph_id: str) -> dict[str, Any]:
     """Get current value of a shaping morph slider."""
     error = _validate_morph_id(morph_id)
     if error:
-        return None
+        return {"success": False, "error": error}
     avatar = get_first_avatar()
     if not avatar:
-        return None
+        return {"success": False, "error": "No avatar in scene"}
 
     shaping_comp = avatar.GetAvatarShapingComponent()
     if not shaping_comp:
-        return None
+        return {"success": False, "error": "No shaping component found"}
 
-    return shaping_comp.GetShapingMorphWeight(morph_id)
+    value = shaping_comp.GetShapingMorphWeight(morph_id)
+    return {"success": True, "morph_id": morph_id, "value": value}
 
 
 def set_morph_value(morph_id: str, value: float) -> dict[str, Any]:
@@ -209,8 +229,8 @@ def set_morph_value(morph_id: str, value: float) -> dict[str, Any]:
         return {"success": False, "error": f"Unknown morph ID: {morph_id}"}
 
     value = max(-1.0, min(1.0, value))
-    RLPy.RGlobal.BeginAction("Set Morph")
     try:
+        RLPy.RGlobal.BeginAction("Set Morph")
         shaping_comp.SetShapingMorphWeight(morph_id, value)
         RLPy.RGlobal.ObjectModified(avatar, RLPy.EObjectModifiedType_Attribute)
     finally:
@@ -252,8 +272,8 @@ def set_multiple_morphs(morphs: list[dict[str, Any]]) -> dict[str, Any]:
         if unknown:
             return {"success": False, "error": f"Unknown morph ID(s): {', '.join(unknown)}"}
 
-    RLPy.RGlobal.BeginAction("Set Multiple Morphs")
     try:
+        RLPy.RGlobal.BeginAction("Set Multiple Morphs")
         results = []
         for morph_id, raw_value in normalized:
             value = max(-1.0, min(1.0, raw_value))
@@ -310,11 +330,19 @@ def create_default_avatar() -> dict[str, Any]:
 
 
 def load_asset(file_path: str) -> dict[str, Any]:
-    """Load a CC5 asset file (.iAvatar, .ccm, .iClothes, etc.)."""
-    # Defense-in-depth: validate path even though TypeScript also validates
-    error = _validate_path(file_path, _ALLOWED_LOAD_EXTENSIONS)
-    if error:
-        return {"success": False, "error": error}
+    """Load a CC5 asset file (.iAvatar, .ccm, .ccShoes, .ccCloth, etc.)."""
+    # Defense-in-depth: validate path even though TypeScript also validates.
+    # Path-safety (traversal/null) via _validate_path; for the extension, accept the
+    # explicit allowlist OR any CC5.1 / iClone content family (.cc*/.i*) — browse_content
+    # returns .cc* content files (e.g. .ccShoes) that the legacy allowlist did not cover.
+    decoded = urllib.parse.unquote(file_path)
+    if "\x00" in file_path or "\x00" in decoded:
+        return {"success": False, "error": "Path contains null byte"}
+    if ".." in file_path or ".." in decoded:
+        return {"success": False, "error": "Path traversal ('..') is not allowed"}
+    ext = os.path.splitext(os.path.realpath(file_path))[1].lower()
+    if ext not in _ALLOWED_LOAD_EXTENSIONS and not (ext.startswith(".cc") or ext.startswith(".i")):
+        return {"success": False, "error": f"Disallowed file extension: {ext}"}
 
     if not os.path.exists(file_path):
         return {"success": False, "error": f"File not found: {file_path}"}
@@ -437,9 +465,11 @@ def export_fbx(
         if dir_path:
             os.makedirs(dir_path, exist_ok=True)
 
-        # --- Try the RExportFbxSetting path first if Smooth Mesh requested ---
+        # --- Always use RExportFbxSetting object path (UR-16).
+        # Passing a bare int as the 3rd arg to ExportFbxFile can crash CC5.
+        # Fall back to the 2-arg call only if RExportFbxSetting is unavailable.
         used_setting_object = False
-        if use_smooth_mesh and hasattr(RLPy, "RExportFbxSetting"):
+        if hasattr(RLPy, "RExportFbxSetting"):
             try:
                 setting = RLPy.RExportFbxSetting()
                 setting.SetOption(flags)
@@ -453,14 +483,13 @@ def export_fbx(
                         setting.SetOption3(flags3)
                     except Exception:
                         pass
-                if hasattr(setting, "EnableBakeSubdivision"):
+                if use_smooth_mesh and hasattr(setting, "EnableBakeSubdivision"):
                     setting.EnableBakeSubdivision(True)
                     notes.append("use_smooth_mesh: EnableBakeSubdivision(True) on RExportFbxSetting")
-                # Attempt setting-based ExportFbxFile overload
                 RLPy.RFileIO.ExportFbxFile(avatar, output_path, setting)
                 used_setting_object = True
             except Exception as e:
-                notes.append(f"RExportFbxSetting overload failed ({e}); falling back to flag-based export")
+                notes.append(f"RExportFbxSetting overload failed ({e}); falling back to 2-arg export")
 
         if not used_setting_object:
             if use_smooth_mesh:
@@ -472,8 +501,8 @@ def export_fbx(
                         notes.append("auto sub_d_level=1 to approximate smooth mesh")
                     except Exception:
                         pass
-            # Use basic 3-arg call — multi-arg variants can crash CC5
-            RLPy.RFileIO.ExportFbxFile(avatar, output_path, flags)
+            # 2-arg fallback — avoids passing bare int as 3rd arg
+            RLPy.RFileIO.ExportFbxFile(avatar, output_path)
 
         return {
             "success": True,
@@ -553,27 +582,33 @@ $bitmap.Save($OutputPath)
 $graphics.Dispose()
 $bitmap.Dispose()
 """
-    subprocess.run(
+    result = subprocess.run(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script,
          "-OutputPath", output_path],
         capture_output=True, timeout=10,
     )
+    if result.returncode != 0:
+        stderr_text = result.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(
+            f"PowerShell screenshot failed (rc={result.returncode}): {stderr_text[:200]}"
+        )
 
 
-def capture_viewport(output_path: str = "", width: int = 0, height: int = 0) -> dict[str, Any]:
-    """Capture the CC5 viewport as a PNG image."""
+def capture_viewport(output_path: str = "") -> dict[str, Any]:
+    """Capture the CC5 viewport as a PNG image.
+
+    Width/height params removed (UR-09): the RExportImageParameter.kCommon size
+    branch is never sent by the bridge/ACTION_MAP and the field is undocumented.
+    Native-resolution capture is always used.
+    """
     try:
         if not output_path:
             output_path = os.path.join(tempfile.gettempdir(), "cc5_viewport.png")
 
-        # Path validation
-        if "\x00" in output_path:
-            return {"success": False, "error": "Path contains null byte"}
-        if ".." in output_path:
-            return {"success": False, "error": "Path traversal ('..') is not allowed"}
-        resolved = os.path.realpath(output_path)
-        if not resolved.lower().endswith(".png"):
-            return {"success": False, "error": "Output path must end with .png"}
+        # Path validation via shared helper (UR-03): decodes %2e%2e and enforces .png
+        _path_error = _validate_path(output_path, {".png"})
+        if _path_error:
+            return {"success": False, "error": _path_error}
 
         dir_path = os.path.dirname(output_path)
         if dir_path:
@@ -582,34 +617,32 @@ def capture_viewport(output_path: str = "", width: int = 0, height: int = 0) -> 
         if os.path.exists(output_path):
             os.remove(output_path)
 
-        if width > 0 and height > 0:
-            params = RLPy.RGlobal.GetRenderExportImageParameter()
-            if params and hasattr(params, "kCommon"):
-                params.kCommon.nOutputSizeWidth = width
-                params.kCommon.nOutputSizeHeight = height
-                RLPy.RGlobal.SetRenderExportParameter(params)
-
-        # Try RenderImage first, fallback to RenderPreview
-        try:
-            RLPy.RGlobal.RenderImage(output_path)
-        except Exception:
-            pass
+        # Try RenderImage first (skip if known broken after .ccProject load, UR-13)
+        global _render_image_broken
+        if not _render_image_broken:
+            try:
+                RLPy.RGlobal.RenderImage(output_path)
+            except Exception as e:
+                print(f"[CC5 MCP Bridge] RenderImage attempt 1 failed: {e}")
 
         # If RenderImage didn't create a file, try ForceViewportUpdate + retry
-        if not os.path.exists(output_path):
+        if not _render_image_broken and not os.path.exists(output_path):
             if hasattr(RLPy.RGlobal, "ForceViewportUpdate"):
                 RLPy.RGlobal.ForceViewportUpdate()
             try:
                 RLPy.RGlobal.RenderImage(output_path)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[CC5 MCP Bridge] RenderImage attempt 2 failed: {e}")
+            if not os.path.exists(output_path):
+                # Second failure: mark as broken so future calls skip these attempts
+                _render_image_broken = True
 
         # Fallback: Windows screenshot of CC5 viewport
         if not os.path.exists(output_path):
             try:
                 _capture_window_screenshot(output_path)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[CC5 MCP Bridge] _capture_window_screenshot failed: {e}")
 
         if os.path.exists(output_path):
             file_size = os.path.getsize(output_path)
@@ -644,6 +677,10 @@ def set_subdivision_level(level: int) -> dict[str, Any]:
     level = max(0, min(2, level))
 
     # --- Preferred: RIAvatar.SwitchSubdivMeshLevel (CC5/CC4) ---
+    # UR-24: SwitchSubdivMeshLevel / GetSubdivMeshLevel / GetMaxSubdivMeshLevel are the
+    # empirically-confirmed CC5.1 (5.10.x) methods (verified live against a running CC5
+    # instance). SetHDSubdivisionLevel below is a legacy fallback NOT in the public
+    # RLPy reference and is kept only for older builds.
     if hasattr(avatar, "SwitchSubdivMeshLevel"):
         try:
             max_level = None
@@ -820,22 +857,18 @@ def get_lights() -> list[dict[str, Any]]:
 
 def set_light_color(light_name: str, r: float, g: float, b: float) -> dict[str, Any]:
     """Set light color by name."""
-    for light_type in [
-        RLPy.EObjectType_SpotLight,
-        RLPy.EObjectType_PointLight,
-        RLPy.EObjectType_DirectionalLight,
-    ]:
-        light = RLPy.RScene.FindObject(light_type, light_name)
-        if light:
-            RLPy.RGlobal.BeginAction("Set Light Color")
-            try:
-                color = RLPy.RRgb(r, g, b)
-                light.SetColor(RLPy.RGlobal.GetTime(), color)
-                RLPy.RGlobal.ObjectModified(light, RLPy.EObjectModifiedType_Attribute)
-            finally:
-                RLPy.RGlobal.EndAction()
-            return {"success": True, "light": light_name}
-    return {"success": False, "error": f"Light not found: {light_name}"}
+    # UR-21: use shared _find_light helper to avoid duplicating the type-scan loop
+    light, _ = _find_light(light_name)
+    if not light:
+        return {"success": False, "error": f"Light not found: {light_name}"}
+    try:
+        RLPy.RGlobal.BeginAction("Set Light Color")
+        color = RLPy.RRgb(r, g, b)
+        light.SetColor(RLPy.RGlobal.GetTime(), color)
+        RLPy.RGlobal.ObjectModified(light, RLPy.EObjectModifiedType_Attribute)
+    finally:
+        RLPy.RGlobal.EndAction()
+    return {"success": True, "light": light_name}
 
 
 def _find_light(light_name: str):
@@ -862,11 +895,13 @@ def get_light_info(light_name: str) -> dict[str, Any]:
     try:
         color = light.GetColor()
         result["color"] = {"r": color.Red() / 255.0, "g": color.Green() / 255.0, "b": color.Blue() / 255.0}
-    except Exception:
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] get_light_info GetColor failed: {e}")
         result["color"] = None
     try:
         result["multiplier"] = light.GetMultiplier()
-    except Exception:
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] get_light_info GetMultiplier failed: {e}")
         result["multiplier"] = None
     return result
 
@@ -908,7 +943,7 @@ def get_expression_info() -> dict[str, Any]:
     except Exception as e:
         return {"success": False, "error": f"Failed to get expressions: {e}"}
 
-    return result
+    return {"success": True, "expressions": result}
 
 
 # --- Material / Texture Control ---
@@ -939,7 +974,7 @@ def get_material_info(avatar_name: str = "") -> dict[str, Any]:
                 result[mesh] = []
     except Exception as e:
         return {"success": False, "error": str(e)}
-    return result
+    return {"success": True, **result}
 
 
 MAX_MATERIAL_NAME_LENGTH = 256
@@ -998,7 +1033,7 @@ def get_diffuse_color(mesh_name: str, material_name: str) -> dict[str, Any]:
 
     try:
         color = mat_comp.GetDiffuseColor(mesh_name, material_name)
-        return {"r": color.Red() / 255.0, "g": color.Green() / 255.0, "b": color.Blue() / 255.0}
+        return {"success": True, "r": color.Red() / 255.0, "g": color.Green() / 255.0, "b": color.Blue() / 255.0}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -1024,10 +1059,10 @@ def set_diffuse_color(mesh_name: str, material_name: str, r: float, g: float, b:
         g = max(0.0, min(1.0, g))
         b = max(0.0, min(1.0, b))
         color = RLPy.RRgb(r, g, b)
-        RLPy.RGlobal.BeginAction("Set Diffuse Color")
         try:
+            RLPy.RGlobal.BeginAction("Set Diffuse Color")
             mat_comp.AddDiffuseKey(key, mesh_name, material_name, color)
-            RLPy.RGlobal.ObjectModified(avatar, RLPy.EObjectModifiedType_Attribute)
+            RLPy.RGlobal.ObjectModified(avatar, _EOMTYPE_MATERIAL)
         finally:
             RLPy.RGlobal.EndAction()
         return {"success": True, "mesh": mesh_name, "material": material_name}
@@ -1052,7 +1087,7 @@ def get_material_properties(mesh_name: str, material_name: str) -> dict[str, Any
         return {"success": False, "error": error}
 
     try:
-        result: dict[str, Any] = {"mesh": mesh_name, "material": material_name}
+        result: dict[str, Any] = {"success": True, "mesh": mesh_name, "material": material_name}
         if hasattr(mat_comp, "GetOpacity"):
             result["opacity"] = mat_comp.GetOpacity(mesh_name, material_name)
         if hasattr(mat_comp, "GetGlossinessWeight"):
@@ -1084,10 +1119,10 @@ def set_material_opacity(mesh_name: str, material_name: str, opacity: float) -> 
         time = RLPy.RGlobal.GetTime()
         key = RLPy.RKey()
         key.SetTime(time)
-        RLPy.RGlobal.BeginAction("Set Material Opacity")
         try:
+            RLPy.RGlobal.BeginAction("Set Material Opacity")
             mat_comp.AddOpacityKey(key, mesh_name, material_name, opacity)
-            RLPy.RGlobal.ObjectModified(avatar, RLPy.EObjectModifiedType_Attribute)
+            RLPy.RGlobal.ObjectModified(avatar, _EOMTYPE_MATERIAL)
         finally:
             RLPy.RGlobal.EndAction()
         return {"success": True, "mesh": mesh_name, "material": material_name, "opacity": opacity}
@@ -1113,10 +1148,10 @@ def set_material_glossiness(mesh_name: str, material_name: str, glossiness: floa
         time = RLPy.RGlobal.GetTime()
         key = RLPy.RKey()
         key.SetTime(time)
-        RLPy.RGlobal.BeginAction("Set Material Glossiness")
         try:
+            RLPy.RGlobal.BeginAction("Set Material Glossiness")
             mat_comp.AddGlossinessKey(key, mesh_name, material_name, glossiness)
-            RLPy.RGlobal.ObjectModified(avatar, RLPy.EObjectModifiedType_Attribute)
+            RLPy.RGlobal.ObjectModified(avatar, _EOMTYPE_MATERIAL)
         finally:
             RLPy.RGlobal.EndAction()
         return {"success": True, "mesh": mesh_name, "material": material_name, "glossiness": glossiness}
@@ -1142,10 +1177,10 @@ def set_material_specular(mesh_name: str, material_name: str, specular: float) -
         time = RLPy.RGlobal.GetTime()
         key = RLPy.RKey()
         key.SetTime(time)
-        RLPy.RGlobal.BeginAction("Set Material Specular")
         try:
+            RLPy.RGlobal.BeginAction("Set Material Specular")
             mat_comp.AddSpecularKey(key, mesh_name, material_name, specular)
-            RLPy.RGlobal.ObjectModified(avatar, RLPy.EObjectModifiedType_Attribute)
+            RLPy.RGlobal.ObjectModified(avatar, _EOMTYPE_MATERIAL)
         finally:
             RLPy.RGlobal.EndAction()
         return {"success": True, "mesh": mesh_name, "material": material_name, "specular": specular}
@@ -1241,8 +1276,8 @@ def remove_scene_item(item_name: str) -> dict[str, Any]:
                     finally:
                         RLPy.RGlobal.EndAction()
                     return {"success": True, "removed": item_name}
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[CC5 MCP Bridge] remove_scene_item getter failed: {e}")
     return {"success": False, "error": f"Item not found: {item_name}"}
 
 
@@ -1355,24 +1390,38 @@ def _find_materials_by_prefix(avatar, mesh_prefixes: list[str]) -> list[tuple[st
                         materials = mat_comp.GetMaterialNames(mesh)
                         for mat_name in (materials or []):
                             results.append((mesh, mat_name, mat_comp))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"[CC5 MCP Bridge] _find_materials_by_prefix GetMaterialNames failed: {e}")
                     break
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] _find_materials_by_prefix GetMeshNames failed: {e}")
     return results
 
+
+def _apply_diffuse_color_to_targets(
+    mat_comp: Any,
+    targets: list[tuple[str, str]],
+    key: Any,
+    color: Any,
+) -> list[str]:
+    """Apply diffuse color to a list of (mesh, material) pairs. Returns applied labels."""
+    applied: list[str] = []
+    for mesh_name, material_name in targets:
+        try:
+            mat_comp.AddDiffuseKey(key, mesh_name, material_name, color)
+            applied.append(f"{mesh_name}/{material_name}")
+        except Exception:
+            pass
+    return applied
 
 def set_eye_color(r: float, g: float, b: float) -> dict[str, Any]:
     """Set eye color (convenience shortcut). RGB 0.0-1.0."""
     avatar = get_first_avatar()
     if not avatar:
         return {"success": False, "error": "No avatar in scene"}
-
     mat_comp = avatar.GetMaterialComponent()
     if not mat_comp:
         return {"success": False, "error": "No material component"}
-
     r = max(0.0, min(1.0, r))
     g = max(0.0, min(1.0, g))
     b = max(0.0, min(1.0, b))
@@ -1380,21 +1429,13 @@ def set_eye_color(r: float, g: float, b: float) -> dict[str, Any]:
     time = RLPy.RGlobal.GetTime()
     key = RLPy.RKey()
     key.SetTime(time)
-
-    applied: list[str] = []
-    RLPy.RGlobal.BeginAction("Set Eye Color")
     try:
-        for mesh_name, material_name in _EYE_TARGETS:
-            try:
-                mat_comp.AddDiffuseKey(key, mesh_name, material_name, color)
-                applied.append(f"{mesh_name}/{material_name}")
-            except Exception:
-                pass
+        RLPy.RGlobal.BeginAction("Set Eye Color")
+        applied = _apply_diffuse_color_to_targets(mat_comp, _EYE_TARGETS, key, color)
         if applied:
-            RLPy.RGlobal.ObjectModified(avatar, RLPy.EObjectModifiedType_Attribute)
+            RLPy.RGlobal.ObjectModified(avatar, _EOMTYPE_MATERIAL)
     finally:
         RLPy.RGlobal.EndAction()
-
     if applied:
         return {"success": True, "applied_to": applied}
     return {"success": False, "error": "Could not find eye materials. Use get_material_info to discover mesh/material names."}
@@ -1445,7 +1486,7 @@ def set_hair_color(r: float, g: float, b: float) -> dict[str, Any]:
             except Exception:
                 pass
         if applied:
-            RLPy.RGlobal.ObjectModified(avatar, RLPy.EObjectModifiedType_Attribute)
+            RLPy.RGlobal.ObjectModified(avatar, _EOMTYPE_MATERIAL)
     finally:
         RLPy.RGlobal.EndAction()
 
@@ -1474,16 +1515,10 @@ def set_lip_color(r: float, g: float, b: float) -> dict[str, Any]:
     key = RLPy.RKey()
     key.SetTime(time)
 
-    applied: list[str] = []
-    RLPy.RGlobal.BeginAction("Set Lip Color")
     try:
-        # Try known lip/mouth material targets
-        for mesh_name, material_name in _LIP_TARGETS:
-            try:
-                mat_comp.AddDiffuseKey(key, mesh_name, material_name, color)
-                applied.append(f"{mesh_name}/{material_name}")
-            except Exception:
-                pass
+        RLPy.RGlobal.BeginAction("Set Lip Color")
+        # Try known lip/mouth material targets (UR-21: shared helper)
+        applied = _apply_diffuse_color_to_targets(mat_comp, _LIP_TARGETS, key, color)
         # Also search for Lip-specific materials
         try:
             meshes = avatar.GetMeshNames(True) if hasattr(avatar, "GetMeshNames") else []
@@ -1504,7 +1539,7 @@ def set_lip_color(r: float, g: float, b: float) -> dict[str, Any]:
         except Exception:
             pass
         if applied:
-            RLPy.RGlobal.ObjectModified(avatar, RLPy.EObjectModifiedType_Attribute)
+            RLPy.RGlobal.ObjectModified(avatar, _EOMTYPE_MATERIAL)
     finally:
         RLPy.RGlobal.EndAction()
 
@@ -1540,9 +1575,13 @@ def set_item_visible(item_name: str, visible: bool) -> dict[str, Any]:
                         finally:
                             RLPy.RGlobal.EndAction()
                         return {"success": True, "item": item_name, "visible": visible}
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[CC5 MCP Bridge] set_item_visible getter failed: {e}")
 
+    # UR-27 assessment: RLPy.RScene.FindObject(type, name) is name-based.
+    # The FindObjects(type)+linear-scan fallback below is technically redundant
+    # but kept for compatibility with older CC5 builds where FindObject may
+    # not be available for all object types. Mark: partial.
     # Search props and other scene objects using both FindObject and FindObjects
     search_types = [
         RLPy.EObjectType_Prop,
@@ -1563,8 +1602,8 @@ def set_item_visible(item_name: str, visible: bool) -> dict[str, Any]:
                 finally:
                     RLPy.RGlobal.EndAction()
                 return {"success": True, "item": item_name, "visible": visible}
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[CC5 MCP Bridge] set_item_visible FindObject failed: {e}")
         # Fallback: iterate FindObjects results
         try:
             objects = RLPy.RScene.FindObjects(obj_type)
@@ -1577,8 +1616,8 @@ def set_item_visible(item_name: str, visible: bool) -> dict[str, Any]:
                     finally:
                         RLPy.RGlobal.EndAction()
                     return {"success": True, "item": item_name, "visible": visible}
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[CC5 MCP Bridge] set_item_visible FindObjects scan failed: {e}")
 
     return {"success": False, "error": f"Item not found: {item_name}"}
 
@@ -1592,16 +1631,16 @@ def get_scene_objects() -> list[dict[str, Any]]:
         avatars = RLPy.RScene.GetAvatars()
         for a in avatars:
             result.append({"name": a.GetName(), "id": a.GetID(), "type": "Avatar"})
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] get_scene_objects avatars failed: {e}")
 
     # Props
     try:
         props = RLPy.RScene.FindObjects(RLPy.EObjectType_Prop)
         for p in props:
             result.append({"name": p.GetName(), "id": p.GetID(), "type": "Prop"})
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] get_scene_objects props failed: {e}")
 
     # Lights
     type_names = {
@@ -1618,16 +1657,16 @@ def get_scene_objects() -> list[dict[str, Any]]:
                 if obj_id not in seen_ids:
                     seen_ids.add(obj_id)
                     result.append({"name": obj.GetName(), "id": obj_id, "type": type_name})
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[CC5 MCP Bridge] get_scene_objects lights failed: {e}")
 
     # Cameras
     try:
         cameras = RLPy.RScene.FindObjects(RLPy.EObjectType_Camera)
         for cam in cameras:
             result.append({"name": cam.GetName(), "id": cam.GetID(), "type": "Camera"})
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] get_scene_objects cameras failed: {e}")
 
     return result
 
@@ -2204,8 +2243,9 @@ def _silent_export_install_filter(output_dir: str, character_name: str) -> Any:
                         # After non-native accept, disarm the filter to avoid
                         # intercepting any later save dialog (e.g. logs, autosave)
                         self.done = True
-            except Exception:
-                pass
+            except Exception as e:
+                _SILENT_EXPORT_STATE["phase"] = "error"
+                _SILENT_EXPORT_STATE["error"] = f"eventFilter exception: {e}"
             return False
 
     flt = _FileDialogAutoAccept()
@@ -2466,6 +2506,8 @@ def silent_install_filter(output_dir: str, character_name: str) -> dict[str, Any
             time.sleep(0.25)
         if not target_hwnd:
             handler_log.append("Save dialog never appeared within 30s")
+            _SILENT_EXPORT_STATE["phase"] = "error"
+            _SILENT_EXPORT_STATE["error"] = "Save dialog never appeared within 30s"
 
     thread = threading.Thread(target=_handler, daemon=True)
     thread.start()

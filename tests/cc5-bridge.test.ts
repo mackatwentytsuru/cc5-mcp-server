@@ -581,14 +581,14 @@ describe("CC5Bridge.captureViewport", () => {
     expect(result.path).toBe("C:/temp/capture.png");
   });
 
-  it("sends POST /viewport/capture with empty path when no path provided", async () => {
+  it("sends POST /viewport/capture with empty body when no path provided", async () => {
     mockFetch<CaptureResult>({ result: { success: true, path: "/tmp/cc5_capture.png" } });
     await bridge.captureViewport();
     expect(vi.mocked(fetch)).toHaveBeenCalledWith(
       "http://localhost:5101/viewport/capture",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ output_path: "" }),
+        body: JSON.stringify({}),
       })
     );
   });
@@ -759,14 +759,14 @@ describe("CC5Bridge.getMaterialInfo", () => {
     expect(result).toEqual({});
   });
 
-  it("sends POST /material/info with empty avatar_name by default", async () => {
+  it("sends POST /material/info with empty body when no avatar_name provided", async () => {
     mockFetch<MaterialInfo>({ result: {} });
     await bridge.getMaterialInfo();
     expect(vi.mocked(fetch)).toHaveBeenCalledWith(
       "http://localhost:5101/material/info",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ avatar_name: "" }),
+        body: JSON.stringify({}),
       })
     );
   });

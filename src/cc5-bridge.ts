@@ -110,7 +110,8 @@ export class CC5Bridge {
     try {
       await this.request<{ status: string }>("/health");
       return true;
-    } catch {
+    } catch (err) {
+      console.error("[CC5 Bridge] healthCheck failed:", err);
       return false;
     }
   }
@@ -201,9 +202,9 @@ export class CC5Bridge {
   }
 
   async captureViewport(outputPath?: string): Promise<CaptureResult> {
-    return this.request<CaptureResult>("/viewport/capture", "POST", {
-      output_path: outputPath ?? "",
-    });
+    const body: Record<string, unknown> = {};
+    if (outputPath) body.output_path = outputPath;
+    return this.request<CaptureResult>("/viewport/capture", "POST", body);
   }
 
   async setSubdivisionLevel(level: number): Promise<OperationResult> {
@@ -277,17 +278,17 @@ export class CC5Bridge {
   // --- Reset Morphs ---
 
   async resetAllMorphs(avatarName?: string): Promise<ResetMorphsResult> {
-    return this.request<ResetMorphsResult>("/morphs/reset", "POST", {
-      avatar_name: avatarName ?? "",
-    });
+    const body: Record<string, unknown> = {};
+    if (avatarName) body.avatar_name = avatarName;
+    return this.request<ResetMorphsResult>("/morphs/reset", "POST", body);
   }
 
   // --- Material / Texture ---
 
   async getMaterialInfo(avatarName?: string): Promise<MaterialInfo> {
-    return this.request<MaterialInfo>("/material/info", "POST", {
-      avatar_name: avatarName ?? "",
-    });
+    const body: Record<string, unknown> = {};
+    if (avatarName) body.avatar_name = avatarName;
+    return this.request<MaterialInfo>("/material/info", "POST", body);
   }
 
   async getDiffuseColor(meshName: string, materialName: string): Promise<DiffuseColor> {

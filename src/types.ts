@@ -19,6 +19,7 @@ export interface MorphCatalog {
 
 export interface MorphSetRequest {
   morph_id: string;
+  /** Morph blend weight. Valid range: -1..1 (negative values shrink the feature, positive enlarge it). */
   value: number;
 }
 
@@ -167,8 +168,8 @@ export interface SceneObject {
 // --- Mesh-to-MetaHuman pipeline ---
 
 export interface ExportFbxOptions {
-  target_tool?: string;
-  sub_d_level?: number;
+  target_tool?: "UE5" | "Default" | "Maya" | "Unity" | "Unreal";
+  sub_d_level?: 0 | 1 | 2;
   include_current_pose?: boolean;
   delete_hidden_faces?: boolean;
   use_smooth_mesh?: boolean;
