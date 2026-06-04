@@ -57,4 +57,20 @@ export function registerColorTools(server: McpServer, bridge: CC5Bridge) {
         : `Failed: ${result.error}`,
     )
   );
+
+  server.tool(
+    "set_skin_color",
+    "Set the skin tone of the current avatar across ALL body skin materials (head, body, arms, legs) at once. RGB values are floats 0.0-1.0. Use this instead of set_diffuse_color when you want a uniform skin tone — CC body skin is split across several materials, so setting one leaves the rest the wrong color.",
+    {
+      r: z.number().min(0).max(1).describe("Red component (0.0-1.0)"),
+      g: z.number().min(0).max(1).describe("Green component (0.0-1.0)"),
+      b: z.number().min(0).max(1).describe("Blue component (0.0-1.0)"),
+    },
+    async ({ r, g, b }) => bridgeCall(
+      () => bridge.setSkinColor(r, g, b),
+      (result) => result.success
+        ? `Skin color set to RGB(${r}, ${g}, ${b}). Applied to: ${result.applied_to?.join(", ") ?? "skin materials"}`
+        : `Failed: ${result.error}`,
+    )
+  );
 }

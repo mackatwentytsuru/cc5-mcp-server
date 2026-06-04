@@ -402,6 +402,10 @@ export class CC5Bridge {
     return this.request<ColorResult>("/color/lip", "POST", { r, g, b });
   }
 
+  async setSkinColor(r: number, g: number, b: number): Promise<ColorResult> {
+    return this.request<ColorResult>("/color/skin", "POST", { r, g, b });
+  }
+
   // --- Visibility & Scene (Tier 4) ---
 
   async setItemVisible(itemName: string, visible: boolean): Promise<SetVisibleResult> {

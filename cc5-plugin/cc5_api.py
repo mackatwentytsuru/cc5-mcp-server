@@ -596,12 +596,30 @@ $bitmap.Dispose()
         )
 
 
-def capture_viewport(output_path: str = "") -> dict[str, Any]:
-    """Capture the CC5 viewport as a PNG image.
+def _set_render_resolution(width: int, height: int) -> None:
+    """Set RenderImage output size. The default RenderImage output is uselessly
+    small (~100x32), making captures unusable for visual verification. Setting
+    RExportImageParameter.kCommon.nOutputSizeWidth/Height fixes it (verified live).
+    """
+    try:
+        g = RLPy.RGlobal
+        if hasattr(g, "GetRenderExportImageParameter") and hasattr(g, "SetRenderExportParameter"):
+            p = g.GetRenderExportImageParameter()
+            if hasattr(p, "kCommon"):
+                p.kCommon.nOutputSizeWidth = max(16, int(width))
+                p.kCommon.nOutputSizeHeight = max(16, int(height))
+                g.SetRenderExportParameter(p)
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] _set_render_resolution failed: {e}")
 
-    Width/height params removed (UR-09): the RExportImageParameter.kCommon size
-    branch is never sent by the bridge/ACTION_MAP and the field is undocumented.
-    Native-resolution capture is always used.
+
+def capture_viewport(output_path: str = "", width: int = 1280, height: int = 720) -> dict[str, Any]:
+    """Capture the CC5 viewport as a PNG image at width x height (default 1280x720).
+
+    NOTE: RenderImage's native default is ~100x32 px (unusable), so we set the
+    render-export resolution first via _set_render_resolution (re-instated after
+    UR-09, which wrongly assumed the size field was dead — it is wired via
+    GetRenderExportImageParameter/SetRenderExportParameter, not the old kCommon arg).
     """
     try:
         if not output_path:
@@ -618,6 +636,9 @@ def capture_viewport(output_path: str = "") -> dict[str, Any]:
 
         if os.path.exists(output_path):
             os.remove(output_path)
+
+        # Render at a usable resolution (RenderImage default is ~100x32).
+        _set_render_resolution(width, height)
 
         # Try RenderImage first (skip if known broken after .ccProject load, UR-13)
         global _render_image_broken
@@ -1441,6 +1462,52 @@ def set_eye_color(r: float, g: float, b: float) -> dict[str, Any]:
     if applied:
         return {"success": True, "applied_to": applied}
     return {"success": False, "error": "Could not find eye materials. Use get_material_info to discover mesh/material names."}
+
+
+def set_skin_color(r: float, g: float, b: float) -> dict[str, Any]:
+    """Set skin tone across ALL skin materials (Std_Skin_Head/Body/Arm/Leg, etc.)
+    of the avatar's body (convenience shortcut). RGB 0.0-1.0.
+
+    Found via tutorial run: setting one skin material leaves arms/legs the wrong
+    color because CC body skin is split across several materials.
+    """
+    avatar = get_first_avatar()
+    if not avatar:
+        return {"success": False, "error": "No avatar in scene"}
+    mat_comp = avatar.GetMaterialComponent()
+    if not mat_comp:
+        return {"success": False, "error": "No material component"}
+    r = max(0.0, min(1.0, r))
+    g = max(0.0, min(1.0, g))
+    b = max(0.0, min(1.0, b))
+    color = RLPy.RRgb(r, g, b)
+    key = RLPy.RKey()
+    key.SetTime(RLPy.RGlobal.GetTime())
+    # Discover skin materials dynamically: name contains 'skin' but not 'eyelash'.
+    targets: list[tuple[str, str]] = []
+    try:
+        meshes = avatar.GetMeshNames(True) if hasattr(avatar, "GetMeshNames") else []
+        for mesh in meshes:
+            try:
+                for mat_name in (mat_comp.GetMaterialNames(mesh) or []):
+                    low = mat_name.lower()
+                    if "skin" in low and "eyelash" not in low:
+                        targets.append((mesh, mat_name))
+            except Exception as e:
+                print(f"[CC5 MCP Bridge] set_skin_color GetMaterialNames failed for {mesh}: {e}")
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] set_skin_color GetMeshNames failed: {e}")
+    applied: list[str] = []
+    try:
+        RLPy.RGlobal.BeginAction("Set Skin Color")
+        applied = _apply_diffuse_color_to_targets(mat_comp, targets, key, color)
+        if applied:
+            RLPy.RGlobal.ObjectModified(avatar, _EOMTYPE_MATERIAL)
+    finally:
+        RLPy.RGlobal.EndAction()
+    if applied:
+        return {"success": True, "applied_to": applied}
+    return {"success": False, "error": "Could not find skin materials. Use get_material_info to discover mesh/material names."}
 
 
 def set_hair_color(r: float, g: float, b: float) -> dict[str, Any]:
@@ -2718,6 +2785,7 @@ def _auto_patch_server() -> None:
         "set_eye_color":         lambda p: _self.set_eye_color(float(p["r"]), float(p["g"]), float(p["b"])),
         "set_hair_color":        lambda p: _self.set_hair_color(float(p["r"]), float(p["g"]), float(p["b"])),
         "set_lip_color":         lambda p: _self.set_lip_color(float(p["r"]), float(p["g"]), float(p["b"])),
+        "set_skin_color":        lambda p: _self.set_skin_color(float(p["r"]), float(p["g"]), float(p["b"])),
         # Tier 4: Visibility & Scene
         "set_item_visible":      lambda p: _self.set_item_visible(p["item_name"], bool(p["visible"])),
         "get_scene_objects":     lambda p: _self.get_scene_objects(),
@@ -2763,6 +2831,7 @@ def _auto_patch_server() -> None:
             "/color/eye":        "set_eye_color",
             "/color/hair":       "set_hair_color",
             "/color/lip":        "set_lip_color",
+            "/color/skin":       "set_skin_color",
             # Tier 4: Visibility & Scene
             "/item/visible":     "set_item_visible",
             "/exec/python":      "exec_python",
@@ -2807,6 +2876,7 @@ def _auto_patch_server() -> None:
             "set_eye_color":           ["r", "g", "b"],
             "set_hair_color":          ["r", "g", "b"],
             "set_lip_color":           ["r", "g", "b"],
+            "set_skin_color":          ["r", "g", "b"],
             # Tier 4: Visibility
             "set_item_visible":        ["item_name", "visible"],
             # Mesh-to-MetaHuman pipeline helpers

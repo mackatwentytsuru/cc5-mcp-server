@@ -74,6 +74,7 @@ REQUIRED_PARAMS: dict[str, list[str]] = {
     "set_eye_color":        ["r", "g", "b"],
     "set_hair_color":       ["r", "g", "b"],
     "set_lip_color":        ["r", "g", "b"],
+    "set_skin_color":       ["r", "g", "b"],
     # Tier 4: Visibility
     "set_item_visible":     ["item_name", "visible"],
     "exec_python":          ["code"],
@@ -134,6 +135,7 @@ ACTION_MAP: dict[str, Any] = {
     "set_eye_color":         lambda p: cc5_api.set_eye_color(float(p["r"]), float(p["g"]), float(p["b"])),
     "set_hair_color":        lambda p: cc5_api.set_hair_color(float(p["r"]), float(p["g"]), float(p["b"])),
     "set_lip_color":         lambda p: cc5_api.set_lip_color(float(p["r"]), float(p["g"]), float(p["b"])),
+    "set_skin_color":        lambda p: cc5_api.set_skin_color(float(p["r"]), float(p["g"]), float(p["b"])),
     # Tier 4: Visibility & Scene
     "set_item_visible":      lambda p: cc5_api.set_item_visible(p["item_name"], bool(p["visible"])),
     "get_scene_objects":     lambda p: cc5_api.get_scene_objects(),
@@ -186,6 +188,7 @@ POST_ROUTES: dict[str, str] = {
     "/color/eye":        "set_eye_color",
     "/color/hair":       "set_hair_color",
     "/color/lip":        "set_lip_color",
+    "/color/skin":       "set_skin_color",
     # Tier 4: Visibility
     "/item/visible":     "set_item_visible",
     "/exec/python":      "exec_python",
