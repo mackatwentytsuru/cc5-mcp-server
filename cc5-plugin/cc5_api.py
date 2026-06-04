@@ -1572,7 +1572,8 @@ def set_item_visible(item_name: str, visible: bool) -> dict[str, Any]:
                     if item.GetName() == item_name:
                         RLPy.RGlobal.BeginAction("Set Item Visible")
                         try:
-                            item.SetVisible(RLPy.RGlobal.GetTime(), visible)
+                            # RICloth/RIHair have NO SetVisible; RScene.Show/Hide is generic.
+                            (RLPy.RScene.Show if visible else RLPy.RScene.Hide)(item)
                             RLPy.RGlobal.ObjectModified(item, RLPy.EObjectModifiedType_Attribute)
                         finally:
                             RLPy.RGlobal.EndAction()
@@ -1599,7 +1600,7 @@ def set_item_visible(item_name: str, visible: bool) -> dict[str, Any]:
             if obj:
                 RLPy.RGlobal.BeginAction("Set Item Visible")
                 try:
-                    obj.SetVisible(RLPy.RGlobal.GetTime(), visible)
+                    (RLPy.RScene.Show if visible else RLPy.RScene.Hide)(obj)
                     RLPy.RGlobal.ObjectModified(obj, RLPy.EObjectModifiedType_Attribute)
                 finally:
                     RLPy.RGlobal.EndAction()
@@ -1613,7 +1614,7 @@ def set_item_visible(item_name: str, visible: bool) -> dict[str, Any]:
                 if obj.GetName() == item_name:
                     RLPy.RGlobal.BeginAction("Set Item Visible")
                     try:
-                        obj.SetVisible(RLPy.RGlobal.GetTime(), visible)
+                        (RLPy.RScene.Show if visible else RLPy.RScene.Hide)(obj)
                         RLPy.RGlobal.ObjectModified(obj, RLPy.EObjectModifiedType_Attribute)
                     finally:
                         RLPy.RGlobal.EndAction()

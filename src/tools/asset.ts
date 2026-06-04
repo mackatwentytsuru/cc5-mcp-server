@@ -20,8 +20,10 @@ function validateAssetPath(filePath: string): string | null {
   }
   const normalized = path.resolve(filePath);
   const ext = path.extname(normalized).toLowerCase();
-  if (!ALLOWED_ASSET_EXTENSIONS.has(ext)) {
-    return `Disallowed file extension: ${ext}. Allowed: ${[...ALLOWED_ASSET_EXTENSIONS].join(", ")}`;
+  // Accept the explicit allowlist OR any CC5.1 / iClone content family (.cc*/.i*) —
+  // browse_content returns .cc* content files (e.g. .ccShoes) that load_asset accepts.
+  if (!ALLOWED_ASSET_EXTENSIONS.has(ext) && !ext.startsWith(".cc") && !ext.startsWith(".i")) {
+    return `Disallowed file extension: ${ext}`;
   }
   return null;
 }
