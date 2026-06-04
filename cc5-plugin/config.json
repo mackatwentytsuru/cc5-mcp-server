@@ -1,6 +1,6 @@
 {
   "Name": "CC5 MCP Bridge",
-  "Version": "1.0.0",
+  "Version": "1.1.0",
   "Author": "CC5 MCP Server",
   "Description": "HTTP bridge server for MCP integration with Character Creator 5",
   "Icon": "",

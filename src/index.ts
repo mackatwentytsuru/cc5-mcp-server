@@ -7,7 +7,7 @@
  * Enables AI-powered character creation via natural language.
  *
  * Architecture:
- *   LLM <-> MCP Server (this) <-> HTTP <-> CC5 Plugin (Flask) <-> RLPy API <-> CC5
+ *   LLM <-> MCP Server (this) <-> HTTP <-> CC5 Plugin (http.server) <-> RLPy API <-> CC5
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -17,12 +17,22 @@ import { registerMorphTools } from "./tools/morph.js";
 import { registerSceneTools } from "./tools/scene.js";
 import { registerAssetTools } from "./tools/asset.js";
 import { registerCharacterTools } from "./tools/character.js";
+import { registerEditTools } from "./tools/edit.js";
+import { registerCameraTools } from "./tools/camera.js";
+import { registerLightTools } from "./tools/light.js";
+import { registerExpressionTools } from "./tools/expression.js";
+import { registerMaterialTools } from "./tools/material.js";
+import { registerContentTools } from "./tools/content.js";
+import { registerColorTools } from "./tools/color.js";
+import { registerVisibilityTools } from "./tools/visibility.js";
+import { registerScriptingTools } from "./tools/scripting.js";
+import { registerMetaHumanTools } from "./tools/metahuman.js";
 import { registerMorphResources } from "./resources/morphs.js";
 
 async function main() {
   const server = new McpServer({
     name: "cc5-mcp-server",
-    version: "1.0.0",
+    version: "1.1.0",
   });
 
   // Bridge to CC5's Python plugin HTTP server
@@ -33,6 +43,16 @@ async function main() {
   registerSceneTools(server, bridge);
   registerAssetTools(server, bridge);
   registerCharacterTools(server, bridge);
+  registerEditTools(server, bridge);
+  registerCameraTools(server, bridge);
+  registerLightTools(server, bridge);
+  registerExpressionTools(server, bridge);
+  registerMaterialTools(server, bridge);
+  registerContentTools(server, bridge);
+  registerColorTools(server, bridge);
+  registerVisibilityTools(server, bridge);
+  registerScriptingTools(server, bridge);
+  registerMetaHumanTools(server, bridge);
 
   // Register resources
   registerMorphResources(server, bridge);

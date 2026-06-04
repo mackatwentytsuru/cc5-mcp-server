@@ -7,36 +7,37 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CC5Bridge } from "../cc5-bridge.js";
+import { bridgeCall } from "../util.js";
 
 /**
  * Preset body type mappings.
  * Maps descriptive terms to morph combinations.
  */
-const BODY_PRESETS: Record<string, Array<{ id: string; value: number }>> = {
+export const BODY_PRESETS: Record<string, Array<{ morph_id: string; value: number }>> = {
   athletic: [
-    { id: "Muscular", value: 0.6 },
-    { id: "Fat", value: 0.1 },
-    { id: "Thin", value: 0.2 },
+    { morph_id: "cc embed morphs/embed_full_body6", value: 0.6 },   // Body Muscular A
+    { morph_id: "essential body morphs/pack_full_body1", value: 0.1 }, // Body Fat A
+    { morph_id: "cc embed morphs/embed_full_body5", value: 0.2 },   // Body Thin
   ],
   muscular: [
-    { id: "Muscular", value: 0.9 },
-    { id: "Fat", value: 0.05 },
-    { id: "Thin", value: 0.1 },
+    { morph_id: "cc embed morphs/embed_full_body6", value: 0.9 },   // Body Muscular A
+    { morph_id: "essential body morphs/pack_full_body1", value: 0.05 }, // Body Fat A
+    { morph_id: "cc embed morphs/embed_full_body5", value: 0.1 },   // Body Thin
   ],
   slim: [
-    { id: "Thin", value: 0.7 },
-    { id: "Fat", value: 0.0 },
-    { id: "Muscular", value: 0.1 },
+    { morph_id: "cc embed morphs/embed_full_body5", value: 0.7 },   // Body Thin
+    { morph_id: "essential body morphs/pack_full_body1", value: 0.0 }, // Body Fat A
+    { morph_id: "cc embed morphs/embed_full_body6", value: 0.1 },   // Body Muscular A
   ],
   heavy: [
-    { id: "Fat", value: 0.7 },
-    { id: "Thin", value: 0.0 },
-    { id: "Muscular", value: 0.2 },
+    { morph_id: "essential body morphs/pack_full_body1", value: 0.7 }, // Body Fat A
+    { morph_id: "cc embed morphs/embed_full_body5", value: 0.0 },   // Body Thin
+    { morph_id: "cc embed morphs/embed_full_body6", value: 0.2 },   // Body Muscular A
   ],
   average: [
-    { id: "Fat", value: 0.3 },
-    { id: "Thin", value: 0.3 },
-    { id: "Muscular", value: 0.3 },
+    { morph_id: "essential body morphs/pack_full_body1", value: 0.3 }, // Body Fat A
+    { morph_id: "cc embed morphs/embed_full_body5", value: 0.3 },   // Body Thin
+    { morph_id: "cc embed morphs/embed_full_body6", value: 0.3 },   // Body Muscular A
   ],
 };
 
@@ -52,26 +53,17 @@ export function registerCharacterTools(server: McpServer, bridge: CC5Bridge) {
     },
     async ({ preset, intensity }) => {
       const morphs = BODY_PRESETS[preset];
-      if (!morphs) {
-        return {
-          content: [{ type: "text" as const, text: `Unknown preset: ${preset}` }],
-        };
-      }
-
       const scaled = morphs.map(m => ({
-        id: m.id,
+        morph_id: m.morph_id,
         value: m.value * intensity,
       }));
 
-      const result = await bridge.setMultipleMorphs(scaled);
-      return {
-        content: [{
-          type: "text" as const,
-          text: result.success
-            ? `Applied '${preset}' body preset at ${Math.round(intensity * 100)}% intensity`
-            : `Failed: ${result.error}`,
-        }],
-      };
+      return bridgeCall(
+        () => bridge.setMultipleMorphs(scaled),
+        (result) => result.success
+          ? `Applied '${preset}' body preset at ${Math.round(intensity * 100)}% intensity`
+          : `Failed: ${result.error}`,
+      );
     }
   );
 
@@ -79,42 +71,36 @@ export function registerCharacterTools(server: McpServer, bridge: CC5Bridge) {
     "describe_character",
     "Get a natural language description of the current character's appearance based on active morph values. Useful for understanding what the character looks like before making changes.",
     {},
-    async () => {
-      const info = await bridge.getAvatarInfo();
-      if (!info) {
-        return {
-          content: [{ type: "text" as const, text: "No avatar in the scene." }],
-        };
-      }
+    async () => bridgeCall(
+      () => bridge.getAvatarInfo(),
+      (info) => {
+        if (!info) return "No avatar in the scene.";
 
-      const morphs = info.active_morphs;
-      const descriptions: string[] = [];
+        const morphs = info.active_morphs;
+        const descriptions: string[] = [];
 
-      // Body analysis
-      const fat = morphs["Fat"] ?? 0;
-      const thin = morphs["Thin"] ?? 0;
-      const muscular = morphs["Muscular"] ?? 0;
+        const fat = morphs["essential body morphs/pack_full_body1"] ?? morphs["cc embed morphs/embed_full_body3"] ?? 0;
+        const thin = morphs["cc embed morphs/embed_full_body5"] ?? 0;
+        const muscular = morphs["cc embed morphs/embed_full_body6"] ?? morphs["essential body morphs/pack_full_body4"] ?? 0;
 
-      if (muscular > 0.5) descriptions.push("muscular build");
-      else if (fat > 0.5) descriptions.push("heavy build");
-      else if (thin > 0.5) descriptions.push("slim build");
-      else descriptions.push("average build");
+        if (muscular > 0.5) descriptions.push("muscular build");
+        else if (fat > 0.5) descriptions.push("heavy build");
+        else if (thin > 0.5) descriptions.push("slim build");
+        else descriptions.push("average build");
 
-      // Head
-      const headScale = morphs["Head Scale"] ?? 0;
-      if (headScale > 0.5) descriptions.push("larger head");
-      else if (headScale < -0.3) descriptions.push("smaller head");
+        const headScale = morphs["cc embed morphs/embed_full_head9"] ?? 0;
+        if (headScale > 0.5) descriptions.push("larger head");
+        else if (headScale < -0.3) descriptions.push("smaller head");
 
-      const morphCount = Object.keys(morphs).length;
-      let text = `Character: ${info.name}\n`;
-      text += `Description: ${descriptions.join(", ")}\n`;
-      text += `Total active morphs: ${morphCount}\n`;
-      text += `\nDetailed morph values:\n`;
-      for (const [id, value] of Object.entries(morphs)) {
-        text += `  ${id}: ${(value * 100).toFixed(0)}%\n`;
-      }
-
-      return { content: [{ type: "text" as const, text }] };
-    }
+        const morphCount = Object.keys(morphs).length;
+        let text = `Character: ${info.name}\n`;
+        text += `Description: ${descriptions.join(", ")}\n`;
+        text += `Total active morphs: ${morphCount}\n\nDetailed morph values:\n`;
+        for (const [id, value] of Object.entries(morphs)) {
+          text += `  ${id}: ${(value * 100).toFixed(0)}%\n`;
+        }
+        return text;
+      },
+    )
   );
 }

@@ -3,3 +3,20 @@ build/
 *.js.map
 *.d.ts
 cc5-plugin/libs/
+
+# Test / build artifacts
+coverage/
+
+# Logs
+*.log
+debug.log
+
+# Local Claude settings (machine-specific permissions)
+.claude/settings.local.json
+
+# Verification screenshots / scratch images
+cc5-restart-verify.png
+
+# Python caches
+__pycache__/
+*.pyc

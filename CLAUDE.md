@@ -6,8 +6,126 @@ Reallusion Character Creator 5 (CC5) を Claude などの LLM から自然言語
 ## アーキテクチャ
 
 ```
-LLM (Claude) <--stdio--> MCP Server (Node.js) <--HTTP:5100--> CC5 Plugin (Python/Flask-free) <--RLPy--> CC5
+LLM (Claude) <--stdio--> MCP Server (Node.js) <--HTTP:5101--> CC5 Plugin (Python) <--RLPy--> CC5
 ```
+
+## 起動の仕組み（重要）
+
+### 自動起動フロー（通常の動作）
+
+```
+CC5 起動
+  → OpenPlugin/CC5_MCP_Bridge/main.py を自動検出
+  → rl_plugin_info をチェック（CC5 互換性確認）
+  → initialize_plugin() を呼び出し
+    → bridge_server.start_server(port=5101) で HTTP サーバー起動
+    → QTimer(16ms) で process_command_queue を登録
+  → ブリッジが http://127.0.0.1:5101 で待機開始
+```
+
+**自動起動に必要な3つの条件:**
+1. `main.py` に `initialize_plugin()` 関数（CC5 の命名規約。`load_plugin` は不可）
+2. `main.py` に `rl_plugin_info = {"ap": "iClone", "ap_version": "8.0"}` 辞書（CC5 は iClone 8 エンジン）
+3. プラグインが `OpenPlugin/CC5_MCP_Bridge/` にインストール済み
+
+**よくある問題と対処:**
+- `load_plugin` → CC5 は無視する。必ず `initialize_plugin` を使う
+- `PySide6` → CC5 は PySide2。インポートエラーでサイレント失敗
+- `from __future__ import annotations` がない → Python 3.10 で型ヒントエラー
+- Flask 依存 → CC5 の Python に Flask はない。stdlib `http.server` を使う
+
+### ウォッチドッグ（自動復旧）
+
+QTimer コールバックにサーバーヘルスチェックを内蔵:
+```python
+def _check_server_health():
+    if _server_thread is not None and not _server_thread.is_alive():
+        _server_thread = bridge_server.start_server(port=BRIDGE_PORT)
+```
+→ HTTP サーバースレッドがクラッシュしても、次の QTimer tick で自動再起動
+
+### ホットリロード（コード変更の即時反映）
+
+```
+cc5_api.py を編集
+  → curl http://127.0.0.1:5101/reload (または Claude が自動実行)
+  → importlib.reload(cc5_api) が実行される
+  → _auto_patch_server() が ACTION_MAP / POST_ROUTES / GET_ROUTES を更新
+  → 新しいコードが即座に有効化（CC5 再起動不要）
+```
+
+**制限:** server.py の変更（ルート追加、バリデーション変更等）は CC5 再起動が必要。
+cc5_api.py の変更（API 関数の修正、新関数追加）はリロードで即反映。
+
+### トラブルシューティング
+
+| 症状 | 原因 | 対処 |
+|------|------|------|
+| CC5 起動してもブリッジが立たない | `initialize_plugin` でない / `rl_plugin_info` がない | main.py の関数名・辞書を確認 |
+| ポート 5101 に接続できない | プラグイン未インストール | `install-plugin.ps1` を管理者権限で実行 |
+| `curl /reload` が 404 | 古い server.py が動いている | CC5 を再起動して新しい server.py を読み込み |
+| RLPy の関数が見つからない | CC5 バージョン差異 | `hasattr()` でチェックしてグレースフルに失敗 |
+| モーフが効かない | アバターがシーンにいない | `create_avatar` で先にアバターを作成 |
+| マテリアル色が変わらない | メッシュ/マテリアル名が間違い | `get_material_info` で正しい名前を確認 |
+| Undo が効かない | `BeginAction/EndAction` で囲まれていない | 変更操作は必ず BeginAction/EndAction で囲む |
+| キャプチャが空画像 | シーンにアバターがいない | アバター作成 → モーフ適用 → キャプチャ |
+| RenderImage が失敗 | .ccProject 読み込み後に発生することがある | 自動で Windows スクリーンショットにフォールバック |
+| ウェルカムダイアログが邪魔 | CC5 起動時に表示される | `scripts/cc5-restart.ps1` で自動 Close、または「Don't show this again」にチェック |
+| FBX エクスポートがライセンスエラー | キャラに iContent ライセンスのアセットが含まれている | Help→Activate Purchased Items を試す。Content Store アセットを外せばデフォルトコンテンツはエクスポート可。アップグレードは定価の20% |
+| カメラ焦点距離が変わらない | Preview Camera は API で変更不可 | CC5 で新規カメラを作成して使用。API は正直にエラーを返す |
+| 色の範囲 | 入力は 0.0-1.0、RLPy は 0-255 を返す | API 側で正規化済み（0.0-1.0 で統一） |
+| `set_subdivision_level` で HD ディテールが増えない / `max_level` が 0 を返す | SubD（HD サブディビジョン）データの生成は CC5 UI 専用の `Modify > Subdivide` 操作。RLPy からは生成できない。アバターに HD データが未生成だと `max_level = 0` になる | これは失敗ではなく仕様。HD を使うには CC5 UI で一度 `Modify > Subdivide` を実行して HD データを生成しておく。生成済みなら API でレベル切替が効く |
+| CC5 5.07 未満で SubD/HD やプラグインの挙動がおかしい | 5.07 より前のビルドは SubD キャッシュやプラグインモジュールの再構築が必要なことがある | CC5 を 5.07 以降に更新する。更新できない場合はプロジェクトを開き直して SubD を再生成（rebuild）してから API 操作を行う |
+
+### サブディビジョン（SubD / HD）についての補足
+
+`set_subdivision_level` はあくまで「既に生成済みの HD サブディビジョンレベルを切り替える」ツール。
+HD データそのものの**生成**は CC5 の UI 操作 `Modify > Subdivide` でのみ可能で、RLPy/API からはトリガーできない。
+そのため、HD 未生成のアバターでは `max_level = 0`（HD データなし）となり、これは**エラーではなく正常な状態**。
+`export_fbx` の `sub_d_level` も同様で、HD データが無いアバターでは高レベルを指定しても効果がない。
+
+> **5.07 未満の注意:** CC5 5.07 より前のビルドでは、SubD キャッシュ／プラグインモジュールの再構築（rebuild）が必要になるケースがある。可能なら 5.07 以降へ更新する。
+
+### CC5 再起動の完全手順（Claude が自動実行）
+
+```bash
+# 1. CC5 を正常終了（//F を使わない → 未保存ダイアログ防止）
+pid=$(tasklist 2>/dev/null | grep "CharacterCreator" | awk '{print $2}')
+taskkill //PID $pid
+sleep 15  # 正常終了は時間がかかる。15秒待つ
+# まだ生きていたら強制終了
+tasklist 2>/dev/null | grep -q "CharacterCreator" && taskkill //F //PID $pid
+sleep 5
+
+# 2. CC5 を起動（プラグインが自動でブリッジを起動する）
+"/c/Program Files/Reallusion/Character Creator 5/Bin64/CharacterCreator.exe" &
+
+# 3. ブリッジの起動を待機（通常 7-10秒）
+for i in $(seq 1 60); do
+  curl -s --connect-timeout 1 http://127.0.0.1:5101/health | grep -q "ok" && break
+  sleep 2
+done
+
+# 4. 起動時ダイアログを自動クローズ（重要！）
+#   a) 「Unsaved project data found」→ Enter で OK（正常終了なら出ない）
+#   b) ウェルカム画面 → Escape で閉じる（「Don't show this again」済みなら出ない）
+#   これらを閉じないとビューポートが正しくレンダリングされない
+sleep 5
+powershell -ExecutionPolicy Bypass -File scripts/cc5-restart.ps1
+```
+
+### ダイアログの恒久対策
+CC5 のウェルカム画面で「Don't show this again」にチェックを入れて Close すると、
+次回以降はウェルカムダイアログが表示されなくなる。
+ユーザーに一度だけこの操作をしてもらうのが最も確実。
+
+### ビューポートキャプチャの仕組み
+`capture_viewport` は3段階のフォールバックで動作:
+1. **RLPy.RenderImage()** — 最速、通常はこれで成功
+2. **ForceViewportUpdate + リトライ** — RenderImage 初回失敗時
+3. **Windows スクリーンショット（PowerShell）** — .ccProject 読み込み後など RenderImage が完全に動かない場合
+
+注意: フォールバック3は全画面キャプチャなので、CC5 ウィンドウが最前面にある必要がある。
 
 ## ディレクトリ構成
 
@@ -17,86 +135,153 @@ cc5-mcp-server/
 │   ├── index.ts            # エントリポイント
 │   ├── cc5-bridge.ts       # CC5 HTTP クライアント
 │   ├── types.ts            # 型定義
-│   ├── tools/              # MCP ツール定義
-│   │   ├── morph.ts        # モーフ調整ツール
-│   │   ├── scene.ts        # シーン管理ツール
+│   ├── util.ts             # 共通ユーティリティ (bridgeCall)
+│   ├── tools/              # MCP ツール定義 (12ファイル)
+│   │   ├── morph.ts        # モーフ調整 + 検索 + リセット
+│   │   ├── scene.ts        # シーン管理 + キャプチャ
 │   │   ├── asset.ts        # アセット読込/FBX書出
-│   │   └── character.ts    # 高レベルキャラ操作
+│   │   ├── character.ts    # 体型プリセット + 外見記述
+│   │   ├── content.ts      # コンテンツ管理 (衣服/髪/アクセサリー)
+│   │   ├── color.ts        # 便利色設定 (目/髪/唇)
+│   │   ├── visibility.ts   # 表示/非表示 + シーンオブジェクト一覧
+│   │   ├── edit.ts         # Undo/Redo
+│   │   ├── camera.ts       # カメラ制御
+│   │   ├── light.ts        # ライト制御
+│   │   ├── expression.ts   # 表情情報
+│   │   └── material.ts     # マテリアル/色制御
 │   └── resources/
 │       └── morphs.ts       # モーフカタログリソース
 ├── cc5-plugin/             # CC5 Python プラグイン
-│   ├── main.py             # CC5 プラグインエントリ (load_plugin/unload_plugin)
-│   ├── server.py           # Python 標準 http.server ブリッジ
-│   ├── cc5_api.py          # RLPy API ラッパー
-│   ├── config.json         # CC5 プラグイン設定
-│   └── config.xml          # CC5 プラグイン設定 (XML フォーマット)
-├── start_bridge.py         # CC5 Script Editor から手動起動用
-├── install-plugin.ps1      # プラグインインストールスクリプト (要管理者権限)
-├── claude-mcp-config.json  # Claude Code 用 MCP 設定スニペット
+│   ├── main.py             # プラグインエントリ (initialize_plugin/uninitialize_plugin)
+│   ├── server.py           # HTTP ブリッジサーバー
+│   ├── cc5_api.py          # RLPy API ラッパー (全API関数 + _auto_patch_server)
+│   ├── config.json         # プラグイン設定
+│   └── config.xml          # プラグイン設定 (XML)
+├── tests/                  # テスト (314件, 12ファイル)
+├── start_bridge.py         # 手動起動用（通常不要 — 自動起動が動作するため）
+├── install-plugin.ps1      # プラグインインストール (要管理者権限)
+├── claude-mcp-config.json  # Claude Code 用 MCP 設定
 └── CLAUDE.md               # このファイル
 ```
 
 ## 重要な技術情報
 
-- **CC5 Python バージョン**: Python 3.10
-- **CC5 Qt バインディング**: PySide2 (PySide6 ではない！)
-- **RLPy スレッド安全性**: NOT スレッドセーフ — 全 RLPy 呼び出しは QTimer 経由でメインスレッドで実行
-- **ブリッジ方式**: Flask 不使用、Python 標準 `http.server` を使用
-- **ブリッジポート**: 5100 (環境変数 CC5_BRIDGE_URL で変更可)
+- **CC5 Python**: Python 3.10 + PySide2（PySide6 ではない！）
+- **RLPy**: NOT スレッドセーフ — QTimer 経由でメインスレッド実行必須
+- **ブリッジ**: `http.server` (Flask 不使用) on port 5101
+- **QTimer**: 16ms 間隔（~60fps）— レスポンス最適化済み
+- **プラグイン関数名**: `initialize_plugin` / `uninitialize_plugin`（`load/unload` は不可）
+- **型ヒント互換性**: `from __future__ import annotations` 必須
+- **モーフ値範囲**: [-1.0, 1.0]（負の値で特徴を縮小）
+- **morph ID キャッシュ**: アバター変更時に自動無効化
 
 ## セットアップ手順
 
 ### 1. MCP Server ビルド
 ```bash
-cd cc5-mcp-server
-npm install
-npm run build
+npm install && npm run build
 ```
 
-### 2. CC5 プラグインインストール (管理者権限必要)
+### 2. CC5 プラグインインストール (管理者権限)
 ```powershell
-# 管理者 PowerShell で実行
-powershell -Command "Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -File C:\Users\macka\Projects\cc5-mcp-server\install-plugin.ps1' -Verb RunAs"
+powershell -ExecutionPolicy Bypass -File install-plugin.ps1
 ```
 
 ### 3. Claude Code への MCP 登録
-~/.claude.json の mcpServers に以下を追加済み:
 ```json
 "cc5": {
   "command": "node",
-  "args": ["C:/Users/macka/Projects/cc5-mcp-server/build/index.js"],
-  "env": { "CC5_BRIDGE_URL": "http://127.0.0.1:5100" }
+  "args": ["<path-to-project>/build/index.js"],
+  "env": { "CC5_BRIDGE_URL": "http://127.0.0.1:5101" }
 }
 ```
 
-### 4. CC5 ブリッジ起動
+### 4. CC5 起動 → 自動でブリッジ起動（手動操作不要）
 
-**方法A: プラグイン自動起動（推奨）**
-CC5 を起動すると OpenPlugin/CC5_MCP_Bridge/ が自動的にロードされる。
-CC5 の Plugin Manager で有効化が必要な場合がある。
+## 利用可能な MCP ツール (35個)
 
-**方法B: Script Editor から手動起動**
-CC5 メニュー → Script → Load Python → `start_bridge.py` を選択して実行
-
-## 利用可能な MCP ツール (11個)
-
+### シーン管理
 | ツール | 説明 |
 |--------|------|
 | check_cc5_connection | CC5 接続確認 |
 | list_avatars | シーン内アバター一覧 |
 | get_avatar_info | アバター詳細情報・モーフ値 |
+| create_avatar | デフォルトCC3+アバター作成 |
 | describe_character | 自然言語でキャラ外見を記述 |
-| adjust_morph | 単一モーフスライダー調整 |
-| adjust_multiple_morphs | 複数モーフ一括調整 |
+| get_scene_objects | シーン内全オブジェクト一覧 (アバター, プロップ, ライト, カメラ) |
+
+### モーフ操作
+| ツール | 説明 |
+|--------|------|
+| search_morphs | モーフカタログをキーワード検索 |
+| adjust_morph | 単一モーフスライダー調整 [-1, 1] |
+| adjust_multiple_morphs | 複数モーフ一括調整 (最大500) |
 | get_morph_value | モーフ現在値取得 |
-| apply_body_preset | 体型プリセット適用 |
-| set_subdivision_level | HD 細分化レベル設定 |
-| load_asset | アセットファイル読込 |
+| reset_morphs | 全モーフをゼロにリセット |
+| apply_body_preset | 体型プリセット (athletic/muscular/slim/heavy/average) |
+
+### コンテンツ管理 (衣服・髪・アクセサリー)
+| ツール | 説明 |
+|--------|------|
+| list_clothes | アバター上の衣服一覧 |
+| list_hair | アバター上の髪型一覧 |
+| list_accessories | アバター上のアクセサリー一覧 |
+| remove_scene_item | 衣服/髪/アクセサリーを名前で削除 |
+| browse_content | CC5コンテンツフォルダを参照 (cloth_upper, shoes 等) |
+
+### カメラ・ライト・表情
+| ツール | 説明 |
+|--------|------|
+| get_camera_info | カメラ位置・焦点距離取得 |
+| set_camera_focal_length | カメラ焦点距離設定 |
+| get_lights | シーン内ライト一覧 (重複排除済み) |
+| set_light_color | ライトRGBカラー変更 |
+| get_expression_info | 表情グループ・スライダー名取得 |
+
+### マテリアル・色
+| ツール | 説明 |
+|--------|------|
+| get_material_info | メッシュ・マテリアル名一覧 |
+| get_diffuse_color | ディフューズカラー取得 |
+| set_diffuse_color | ディフューズカラー設定 (肌色等) |
+| set_eye_color | 目の色設定 (便利ショートカット) |
+| set_hair_color | 髪の色設定 (便利ショートカット) |
+| set_lip_color | 唇の色設定 (便利ショートカット) |
+
+### 表示/非表示
+| ツール | 説明 |
+|--------|------|
+| set_item_visible | シーンアイテムの表示/非表示切替 |
+
+### アセット・エクスポート
+| ツール | 説明 |
+|--------|------|
+| load_asset | アセット読込 (.iAvatar, .ccAvatar, .ccm 等) |
 | export_fbx | FBX エクスポート |
+| set_subdivision_level | HD 細分化レベル |
+| capture_viewport | ビューポートスクリーンショット (画像をLLMに返却) |
+
+### 編集
+| ツール | 説明 |
+|--------|------|
+| undo | 最後の操作を元に戻す |
+| redo | 元に戻した操作を再適用 |
 
 ## 開発メモ
 
 - ビルド: `npm run build`
-- 開発中ウォッチ: `npm run dev`
-- CC5 プラグイン更新後は CC5 再起動が必要
-- ポート変更: cc5-plugin/main.py の `BRIDGE_PORT` を変更して再インストール
+- テスト: `npm test` (314件) / `npm run test:coverage` (80%+)
+- ホットリロード: `curl http://127.0.0.1:5101/reload` (cc5_api.py の変更を即反映)
+- API ディスカバリ: `curl http://127.0.0.1:5101/api`
+- CC5 再起動: `taskkill` → `CharacterCreator.exe &` → ブリッジ自動起動
+
+## 環境変数
+
+| 変数 | デフォルト | 説明 |
+|------|-----------|------|
+| CC5_BRIDGE_URL | http://127.0.0.1:5101 | ブリッジ接続先 |
+| CC5_BRIDGE_PORT | 5101 | ブリッジポート (start_bridge.py用) |
+| CC5_RELOAD_SECRET | (空) | /reload 認証トークン |
+| CC5_DEV_MODE | 1 | 開発モード (1=reload有効) |
+| CC5_REQUEST_TIMEOUT_MS | 30000 | リクエストタイムアウト (ms) |
+| CC5_ROOT | (自動検出) | CC5 インストールパス |

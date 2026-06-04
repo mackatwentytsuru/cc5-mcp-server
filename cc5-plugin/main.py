@@ -21,24 +21,48 @@ from PySide2.QtCore import QTimer  # CC5 uses PySide2
 
 import server as bridge_server
 
+# CC5 plugin metadata — required for auto-loading
+rl_plugin_info = {
+    "ap": "iClone",
+    "ap_version": "8.0",
+}
+
 _timer = None
 _server_thread = None
 
-BRIDGE_PORT = 5100
+BRIDGE_PORT = 5101
 
 
-def load_plugin():
+def _check_server_health():
+    """Watchdog: restart HTTP server if it crashed."""
+    global _server_thread
+    if _server_thread is not None and not _server_thread.is_alive():
+        print("[CC5 MCP Bridge] Server thread died — restarting...")
+        try:
+            _server_thread = bridge_server.start_server(port=BRIDGE_PORT)
+            print(f"[CC5 MCP Bridge] Server restarted on http://127.0.0.1:{BRIDGE_PORT}")
+        except Exception as e:
+            print(f"[CC5 MCP Bridge] Failed to restart: {e}")
+
+
+def _on_timer():
+    """QTimer callback: process command queue + watchdog."""
+    _check_server_health()
+    bridge_server.process_command_queue()
+
+
+def initialize_plugin():
     """Entry point called by CC5 when the plugin is loaded."""
     global _timer, _server_thread
 
-    print("[CC5 MCP Bridge] Loading plugin...")
+    print("[CC5 MCP Bridge] Initializing plugin...")
 
     try:
         _server_thread = bridge_server.start_server(port=BRIDGE_PORT)
 
         _timer = QTimer()
-        _timer.timeout.connect(bridge_server.process_command_queue)
-        _timer.start(100)  # Poll every 100ms
+        _timer.timeout.connect(_on_timer)
+        _timer.start(16)  # Poll every 16ms (~60fps) for low latency
 
         print(f"[CC5 MCP Bridge] Bridge server running on http://127.0.0.1:{BRIDGE_PORT}")
     except Exception as e:
@@ -50,7 +74,7 @@ def load_plugin():
     return RLPy.RStatus.Success
 
 
-def unload_plugin():
+def uninitialize_plugin():
     """Called by CC5 when the plugin is unloaded."""
     global _timer, _server_thread
 
@@ -58,5 +82,8 @@ def unload_plugin():
         _timer.stop()
         _timer = None
 
-    _server_thread = None
+    bridge_server.stop_server()
+    if _server_thread is not None:
+        _server_thread.join(timeout=5.0)
+        _server_thread = None
     print("[CC5 MCP Bridge] Plugin unloaded.")
