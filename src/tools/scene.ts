@@ -96,8 +96,10 @@ export function registerSceneTools(server: McpServer, bridge: CC5Bridge) {
     "Capture a screenshot of the CC5 3D viewport. Returns the image file path. Use this to see the current character appearance.",
     {
       output_path: z.string().optional().describe("Output PNG file path. Defaults to a temp file if omitted."),
+      width: z.number().int().min(16).max(7680).optional().describe("Image width in px (default 1280)."),
+      height: z.number().int().min(16).max(4320).optional().describe("Image height in px (default 720)."),
     },
-    async ({ output_path }) => {
+    async ({ output_path, width, height }) => {
       if (output_path) {
         const pathError = validateCapturePath(output_path);
         if (pathError) {
@@ -105,7 +107,7 @@ export function registerSceneTools(server: McpServer, bridge: CC5Bridge) {
         }
       }
       try {
-        const result = await bridge.captureViewport(output_path);
+        const result = await bridge.captureViewport(output_path, width, height);
         let imgPath = result.path;
         let base64Data = result.base64;
 

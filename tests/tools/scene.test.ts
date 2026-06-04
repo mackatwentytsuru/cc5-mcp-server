@@ -341,7 +341,7 @@ describe("capture_viewport handler", () => {
     bridge.captureViewport.mockResolvedValue(CAPTURE_SUCCESS);
     const handler = server.getRegisteredTool("capture_viewport");
     await handler({ output_path: "C:/temp/capture.png" });
-    expect(bridge.captureViewport).toHaveBeenCalledWith("C:/temp/capture.png");
+    expect(bridge.captureViewport).toHaveBeenCalledWith("C:/temp/capture.png", undefined, undefined);
   });
 
   it("calls bridge.captureViewport with undefined when no path given", async () => {
@@ -349,7 +349,7 @@ describe("capture_viewport handler", () => {
     bridge.captureViewport.mockResolvedValue(captured);
     const handler = server.getRegisteredTool("capture_viewport");
     await handler({});
-    expect(bridge.captureViewport).toHaveBeenCalledWith(undefined);
+    expect(bridge.captureViewport).toHaveBeenCalledWith(undefined, undefined, undefined);
   });
 
   it("returns bridge error text when bridge throws (does not propagate)", async () => {

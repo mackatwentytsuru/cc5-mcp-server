@@ -1486,6 +1486,7 @@ def set_eye_color(r: float, g: float, b: float) -> dict[str, Any]:
     time = RLPy.RGlobal.GetTime()
     key = RLPy.RKey()
     key.SetTime(time)
+    applied: list[str] = []
     try:
         RLPy.RGlobal.BeginAction("Set Eye Color")
         applied = _apply_diffuse_color_to_targets(mat_comp, _EYE_TARGETS, key, color)
@@ -1580,8 +1581,8 @@ def set_hair_color(r: float, g: float, b: float) -> dict[str, Any]:
         pass
 
     applied: list[str] = []
-    RLPy.RGlobal.BeginAction("Set Hair Color")
     try:
+        RLPy.RGlobal.BeginAction("Set Hair Color")
         for mesh_name, material_name, mat_comp in targets:
             try:
                 mat_comp.AddDiffuseKey(key, mesh_name, material_name, color)
@@ -1618,6 +1619,7 @@ def set_lip_color(r: float, g: float, b: float) -> dict[str, Any]:
     key = RLPy.RKey()
     key.SetTime(time)
 
+    applied: list[str] = []
     try:
         RLPy.RGlobal.BeginAction("Set Lip Color")
         # Try known lip/mouth material targets (UR-21: shared helper)
@@ -1788,8 +1790,8 @@ def reset_all_morphs(avatar_name: str = "") -> dict[str, Any]:
         return {"success": False, "error": "No shaping component"}
     categories = shaping_comp.GetShapingMorphCatergoryNames()
     count = 0
-    RLPy.RGlobal.BeginAction("Reset All Morphs")
     try:
+        RLPy.RGlobal.BeginAction("Reset All Morphs")
         for cat in categories:
             ids = shaping_comp.GetShapingMorphIDs(cat)
             for morph_id in ids:

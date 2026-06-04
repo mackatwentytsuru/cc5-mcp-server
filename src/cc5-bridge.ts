@@ -203,9 +203,11 @@ export class CC5Bridge {
     });
   }
 
-  async captureViewport(outputPath?: string): Promise<CaptureResult> {
+  async captureViewport(outputPath?: string, width?: number, height?: number): Promise<CaptureResult> {
     const body: Record<string, unknown> = {};
     if (outputPath) body.output_path = outputPath;
+    if (width !== undefined) body.width = width;
+    if (height !== undefined) body.height = height;
     return this.request<CaptureResult>("/viewport/capture", "POST", body);
   }
 
