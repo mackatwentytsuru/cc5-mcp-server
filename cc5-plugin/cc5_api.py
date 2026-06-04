@@ -1209,7 +1209,7 @@ def list_clothes() -> list[dict[str, Any]]:
         ]
     except Exception as e:
         print(f"[CC5 MCP Bridge] list_clothes failed: {e}")
-        return {"success": False, "error": str(e)}
+        return []
 
 
 def list_hair() -> list[dict[str, Any]]:
@@ -1229,7 +1229,7 @@ def list_hair() -> list[dict[str, Any]]:
         ]
     except Exception as e:
         print(f"[CC5 MCP Bridge] list_hair failed: {e}")
-        return {"success": False, "error": str(e)}
+        return []
 
 
 def list_accessories() -> list[dict[str, Any]]:
@@ -1245,7 +1245,7 @@ def list_accessories() -> list[dict[str, Any]]:
         ]
     except Exception as e:
         print(f"[CC5 MCP Bridge] list_accessories failed: {e}")
-        return {"success": False, "error": str(e)}
+        return []
 
 
 MAX_ITEM_NAME_LENGTH = 256

@@ -37,7 +37,7 @@ export function createMockBridge(): MockBridge {
     getAvatars: vi.fn<[], Promise<CC5Avatar[]>>(),
     getAvatarInfo: vi.fn<[], Promise<AvatarInfo | null>>(),
     getMorphCatalog: vi.fn<[], Promise<MorphCatalog>>(),
-    getMorphValue: vi.fn<[string], Promise<number | null>>(),
+    getMorphValue: vi.fn<[string], Promise<{ success: boolean; morph_id?: string; value?: number; error?: string }>>(),
     setMorph: vi.fn<[string, number], Promise<OperationResult>>(),
     setMultipleMorphs: vi.fn<[Array<{ morph_id: string; value: number }>], Promise<OperationResult>>(),
     createDefaultAvatar: vi.fn<[], Promise<CreateAvatarResult>>(),

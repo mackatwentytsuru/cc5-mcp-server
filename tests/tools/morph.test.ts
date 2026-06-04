@@ -245,29 +245,29 @@ describe("adjust_multiple_morphs handler", () => {
 
 describe("get_morph_value handler", () => {
   it("returns the morph value when found", async () => {
-    bridge.getMorphValue.mockResolvedValue(0.75);
+    bridge.getMorphValue.mockResolvedValue({ success: true, morph_id: "Fat", value: 0.75 });
     const handler = server.getRegisteredTool("get_morph_value");
     const result = await handler({ morph_id: "Fat" });
     expect(result.content[0].text).toBe("Morph 'Fat' current value: 0.75");
   });
 
-  it("returns not-found message when getMorphValue returns null", async () => {
-    bridge.getMorphValue.mockResolvedValue(null);
+  it("returns not-found message when getMorphValue fails", async () => {
+    bridge.getMorphValue.mockResolvedValue({ success: false, error: "Unknown morph ID" });
     const handler = server.getRegisteredTool("get_morph_value");
     const result = await handler({ morph_id: "NonExistent" });
-    expect(result.content[0].text).toBe("Could not get morph value for 'NonExistent'");
+    expect(result.content[0].text).toBe("Could not get morph value for 'NonExistent': Unknown morph ID");
   });
 
   it("returns the morph value when it is 0 (not null)", async () => {
-    bridge.getMorphValue.mockResolvedValue(0);
+    bridge.getMorphValue.mockResolvedValue({ success: true, morph_id: "Thin", value: 0 });
     const handler = server.getRegisteredTool("get_morph_value");
     const result = await handler({ morph_id: "Thin" });
-    // 0 !== null, so it should show the value
+    // success path shows the numeric value, including 0
     expect(result.content[0].text).toBe("Morph 'Thin' current value: 0");
   });
 
   it("calls bridge.getMorphValue with the morph_id", async () => {
-    bridge.getMorphValue.mockResolvedValue(0.5);
+    bridge.getMorphValue.mockResolvedValue({ success: true, morph_id: "Muscular", value: 0.5 });
     const handler = server.getRegisteredTool("get_morph_value");
     await handler({ morph_id: "Muscular" });
     expect(bridge.getMorphValue).toHaveBeenCalledWith("Muscular");

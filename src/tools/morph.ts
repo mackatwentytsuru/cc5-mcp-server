@@ -60,9 +60,9 @@ export function registerMorphTools(server: McpServer, bridge: CC5Bridge) {
     },
     async ({ morph_id }) => bridgeCall(
       () => bridge.getMorphValue(morph_id),
-      (value) => value !== null
-        ? `Morph '${morph_id}' current value: ${value}`
-        : `Could not get morph value for '${morph_id}'`,
+      (result) => result.success
+        ? `Morph '${morph_id}' current value: ${result.value}`
+        : `Could not get morph value for '${morph_id}': ${result.error ?? "unknown error"}`,
     )
   );
 

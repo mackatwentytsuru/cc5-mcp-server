@@ -135,8 +135,10 @@ export class CC5Bridge {
     return this.request<MorphCatalog>("/morphs/catalog");
   }
 
-  async getMorphValue(morphId: string): Promise<number | null> {
-    return this.request<number | null>("/morph/get", "POST", {
+  async getMorphValue(
+    morphId: string,
+  ): Promise<{ success: boolean; morph_id?: string; value?: number; error?: string }> {
+    return this.request("/morph/get", "POST", {
       morph_id: morphId,
     });
   }
