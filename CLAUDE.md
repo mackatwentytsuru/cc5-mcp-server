@@ -198,7 +198,7 @@ powershell -ExecutionPolicy Bypass -File install-plugin.ps1
 
 ### 4. CC5 起動 → 自動でブリッジ起動（手動操作不要）
 
-## 利用可能な MCP ツール (55個)
+## 利用可能な MCP ツール (56個)
 
 ### シーン管理
 | ツール | 説明 |
@@ -206,7 +206,8 @@ powershell -ExecutionPolicy Bypass -File install-plugin.ps1
 | check_cc5_connection | CC5 接続確認 |
 | list_avatars | シーン内アバター一覧 |
 | get_avatar_info | アバター詳細情報・モーフ値 |
-| create_avatar | デフォルトCC3+アバター作成 |
+| create_avatar | ニュートラルCC3+素体作成 (テクスチャ無し=マネキン。実顔は browse_content("character")+load_asset 推奨) |
+| delete_avatar | アバター削除 (名前指定 or 全削除。マネキン除去→実キャラ読込に使う) |
 | describe_character | 自然言語でキャラ外見を記述 |
 | get_scene_objects | シーン内全オブジェクト一覧 (アバター, プロップ, ライト, カメラ) |
 

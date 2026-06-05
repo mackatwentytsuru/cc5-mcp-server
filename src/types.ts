@@ -43,6 +43,10 @@ export interface CreateAvatarResult extends OperationResult {
   name?: string;
 }
 
+export interface DeleteAvatarResult extends OperationResult {
+  removed?: string[];
+}
+
 export interface CaptureResult extends OperationResult {
   path?: string;
   base64?: string;

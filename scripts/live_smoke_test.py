@@ -63,6 +63,7 @@ def is_resp(r):
 print("== Scene / Avatar ==")
 s, r = call("GET", "/health"); ok("check_cc5_connection", s == 200 and res(r).get("status") == "ok")
 s, r = call("POST", "/avatar/create"); ok("create_avatar", res(r).get("success"))
+s, r = call("POST", "/avatar/delete", {"name": "___nope___"}); ok("delete_avatar (clean not-found)", isinstance(res(r), dict) and res(r).get("success") is False)
 s, r = call("GET", "/avatars"); avs = res(r); ok("list_avatars", isinstance(avs, list) and bool(avs))
 s, r = call("GET", "/avatar/info"); ok("get_avatar_info", s == 200 and is_resp(r))
 s, r = call("GET", "/scene/objects"); ok("get_scene_objects", s == 200 and is_resp(r))

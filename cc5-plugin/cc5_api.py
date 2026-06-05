@@ -312,7 +312,14 @@ def _get_cc5_root() -> str:
 
 
 def create_default_avatar() -> dict[str, Any]:
-    """Load the CC5 neutral base avatar into the scene (additive, does not clear scene)."""
+    """Load the CC5 NEUTRAL base avatar (additive, does not clear scene).
+
+    NOTE: this neutral base has NO skin/eye textures, eyebrows, eyelashes or hair —
+    it renders like a pale, blank-eyed mannequin. For a real, textured human face,
+    prefer loading a character template instead: browse_content("character") returns
+    fully-textured avatars (e.g. CC4 Camila / CC4 Susan) that you load with load_asset.
+    Use delete_avatar first if you want to replace what's already in the scene.
+    """
     cc5_root = _get_cc5_root()
 
     # Use .ccAvatar (additive load — does not replace the scene)
@@ -329,6 +336,32 @@ def create_default_avatar() -> dict[str, Any]:
         return {"success": True, "name": name, "id": avatar_id}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+def delete_avatar(name: str = "") -> dict[str, Any]:
+    """Delete an avatar from the scene by name. If name is empty, deletes ALL avatars.
+
+    Useful to clear a neutral mannequin before loading a textured character template,
+    or to start the scene over. Uses RScene.RemoveObject.
+    """
+    avatars = RLPy.RScene.GetAvatars()
+    if not avatars:
+        return {"success": False, "error": "No avatars in scene"}
+    target = (name or "").strip()
+    removed: list[str] = []
+    try:
+        RLPy.RGlobal.BeginAction("Delete Avatar")
+        for avatar in list(avatars):
+            aname = avatar.GetName()
+            if not target or aname == target:
+                RLPy.RScene.RemoveObject(avatar)
+                removed.append(aname)
+    finally:
+        RLPy.RGlobal.EndAction()
+    _invalidate_caches()
+    if not removed:
+        return {"success": False, "error": f"Avatar not found: {target}"}
+    return {"success": True, "removed": removed}
 
 
 def load_asset(file_path: str) -> dict[str, Any]:
@@ -3216,6 +3249,7 @@ def _auto_patch_server() -> None:
         "set_morph_value":       lambda p: _self.set_morph_value(p["morph_id"], float(p["value"])),
         "set_multiple_morphs":   lambda p: _self.set_multiple_morphs(p["morphs"]),
         "create_default_avatar": lambda p: _self.create_default_avatar(),
+        "delete_avatar":         lambda p: _self.delete_avatar(p.get("name", "")),
         "load_asset":            lambda p: _self.load_asset(p["file_path"]),
         "export_fbx":            lambda p: _self.export_fbx(
             p["output_path"],
@@ -3306,6 +3340,7 @@ def _auto_patch_server() -> None:
             "/light/shadow":     "set_light_shadow",
             "/visual/ambient":   "set_ambient",
             "/visual/ibl":       "set_ibl",
+            "/avatar/delete":    "delete_avatar",
             "/expression/set":   "set_expression",
             "/expression/reset": "reset_expression",
             "/morphs/reset":     "reset_all_morphs",

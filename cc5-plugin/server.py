@@ -100,6 +100,7 @@ ACTION_MAP: dict[str, Any] = {
     "set_morph_value":       lambda p: cc5_api.set_morph_value(p["morph_id"], float(p["value"])),
     "set_multiple_morphs":   lambda p: cc5_api.set_multiple_morphs(p["morphs"]),
     "create_default_avatar": lambda p: cc5_api.create_default_avatar(),
+    "delete_avatar":         lambda p: cc5_api.delete_avatar(p.get("name", "")),
     "load_asset":            lambda p: cc5_api.load_asset(p["file_path"]),
     "export_fbx":            lambda p: cc5_api.export_fbx(
         p["output_path"],
@@ -184,6 +185,7 @@ POST_ROUTES: dict[str, str] = {
     "/morphs/set":       "set_multiple_morphs",
     "/morphs/reset":     "reset_all_morphs",
     "/avatar/create":    "create_default_avatar",
+    "/avatar/delete":    "delete_avatar",
     "/asset/load":       "load_asset",
     "/export/fbx":       "export_fbx",
     "/viewport/capture": "capture_viewport",

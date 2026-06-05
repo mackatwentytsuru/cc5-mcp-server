@@ -9,6 +9,7 @@ import type {
   AvatarInfo,
   OperationResult,
   CreateAvatarResult,
+  DeleteAvatarResult,
   CaptureResult,
   MorphSetRequest,
   CameraInfo,
@@ -168,6 +169,10 @@ export class CC5Bridge {
 
   async createDefaultAvatar(): Promise<CreateAvatarResult> {
     return this.request<CreateAvatarResult>("/avatar/create", "POST", {});
+  }
+
+  async deleteAvatar(name: string): Promise<DeleteAvatarResult> {
+    return this.request<DeleteAvatarResult>("/avatar/delete", "POST", { name });
   }
 
   async loadAsset(filePath: string): Promise<OperationResult> {

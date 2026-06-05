@@ -33,8 +33,17 @@ beforeEach(() => {
 // ── registration ──────────────────────────────────────────────────────────────
 
 describe("registerSceneTools – registration", () => {
-  it("registers exactly 6 tools", () => {
-    expect(server.tool).toHaveBeenCalledTimes(6);
+  it("registers exactly 7 tools", () => {
+    expect(server.tool).toHaveBeenCalledTimes(7);
+  });
+
+  it("registers delete_avatar", () => {
+    expect(server.tool).toHaveBeenCalledWith(
+      "delete_avatar",
+      expect.any(String),
+      expect.any(Object),
+      expect.any(Function)
+    );
   });
 
   it("registers list_avatars", () => {
@@ -249,7 +258,7 @@ describe("create_avatar handler", () => {
     bridge.createDefaultAvatar.mockResolvedValue(CREATE_SUCCESS);
     const handler = server.getRegisteredTool("create_avatar");
     const result = await handler({});
-    expect(result.content[0].text).toContain("Created avatar");
+    expect(result.content[0].text).toContain("Created neutral avatar");
     expect(result.content[0].text).toContain("Default Character");
   });
 
@@ -288,6 +297,39 @@ describe("create_avatar handler", () => {
     const handler = server.getRegisteredTool("create_avatar");
     const result = await handler({});
     expect(result.content[0].type).toBe("text");
+  });
+});
+
+// ── delete_avatar ─────────────────────────────────────────────────────────────
+
+describe("delete_avatar handler", () => {
+  it("reports the removed avatar names", async () => {
+    bridge.deleteAvatar.mockResolvedValue({ success: true, removed: ["Camila"] });
+    const handler = server.getRegisteredTool("delete_avatar");
+    const result = await handler({ name: "Camila" });
+    expect(result.content[0].text).toBe("Deleted avatar(s): Camila");
+  });
+
+  it("deletes all avatars when name is omitted (passes empty string)", async () => {
+    bridge.deleteAvatar.mockResolvedValue({ success: true, removed: ["A", "B"] });
+    const handler = server.getRegisteredTool("delete_avatar");
+    const result = await handler({});
+    expect(bridge.deleteAvatar).toHaveBeenCalledWith("");
+    expect(result.content[0].text).toBe("Deleted avatar(s): A, B");
+  });
+
+  it("returns failure message when avatar not found", async () => {
+    bridge.deleteAvatar.mockResolvedValue({ success: false, error: "Avatar not found: X" });
+    const handler = server.getRegisteredTool("delete_avatar");
+    const result = await handler({ name: "X" });
+    expect(result.content[0].text).toBe("Failed: Avatar not found: X");
+  });
+
+  it("returns bridge error text when bridge throws (does not propagate)", async () => {
+    bridge.deleteAvatar.mockRejectedValue(new Error("CC5 not running"));
+    const handler = server.getRegisteredTool("delete_avatar");
+    const result = await handler({ name: "Camila" });
+    expect(result.content[0].text).toContain("CC5 bridge error: CC5 not running");
   });
 });
 

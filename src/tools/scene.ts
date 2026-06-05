@@ -81,12 +81,26 @@ export function registerSceneTools(server: McpServer, bridge: CC5Bridge) {
 
   server.tool(
     "create_avatar",
-    "Create a new default avatar in the CC5 scene. Adds a CC3+ base avatar without clearing the existing scene.",
+    "Create a new NEUTRAL base avatar in the CC5 scene (additive). WARNING: this base has no skin/eye textures, eyebrows, eyelashes or hair — it renders like a pale, blank-eyed mannequin. For a real, textured human face, prefer browse_content('character') + load_asset to load a textured template (e.g. CC4 Camila / CC4 Susan). Use delete_avatar first to replace the current avatar.",
     {},
     async () => bridgeCall(
       () => bridge.createDefaultAvatar(),
       (result) => result.success
-        ? `Created avatar '${result.name ?? "Unknown"}'`
+        ? `Created neutral avatar '${result.name ?? "Unknown"}' (untextured — see description for a textured base)`
+        : `Failed: ${result.error}`,
+    )
+  );
+
+  server.tool(
+    "delete_avatar",
+    "Delete an avatar from the scene by name, or ALL avatars if name is omitted. Useful to clear a neutral mannequin before loading a textured character template, or to start the scene over.",
+    {
+      name: z.string().max(256).optional().describe("Avatar name to delete (from list_avatars). Omit to delete all avatars."),
+    },
+    async ({ name }) => bridgeCall(
+      () => bridge.deleteAvatar(name ?? ""),
+      (result) => result.success
+        ? `Deleted avatar(s): ${(result.removed ?? []).join(", ")}`
         : `Failed: ${result.error}`,
     )
   );
