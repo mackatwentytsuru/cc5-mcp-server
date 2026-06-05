@@ -97,6 +97,20 @@ export interface LightShadowResult extends OperationResult {
   darken_shadow_strength?: number;
 }
 
+export interface VisualSettings extends OperationResult {
+  ambient?: { r: number; g: number; b: number } | null;
+  ibl_enabled?: boolean | null;
+}
+
+export interface SetAmbientResult extends OperationResult {
+  ambient?: { r: number; g: number; b: number };
+}
+
+export interface SetIblResult extends OperationResult {
+  ibl_enabled?: boolean;
+  loaded_image?: string | null;
+}
+
 export interface ExpressionInfo {
   [group: string]: string[];
 }

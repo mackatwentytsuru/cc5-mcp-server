@@ -19,6 +19,9 @@ import type {
   LightMultiplierResult,
   LightActiveResult,
   LightShadowResult,
+  VisualSettings,
+  SetAmbientResult,
+  SetIblResult,
   ExpressionInfo,
   ExpressionItem,
   ExpressionSetResult,
@@ -305,6 +308,23 @@ export class CC5Bridge {
       light_name: lightName,
       cast_shadow: castShadow,
       darken_strength: darkenStrength,
+    });
+  }
+
+  // --- Environment / Visual Settings ---
+
+  async getVisualSettings(): Promise<VisualSettings> {
+    return this.request<VisualSettings>("/visual/settings");
+  }
+
+  async setAmbient(r: number, g: number, b: number): Promise<SetAmbientResult> {
+    return this.request<SetAmbientResult>("/visual/ambient", "POST", { r, g, b });
+  }
+
+  async setIbl(imagePath: string, enable: boolean): Promise<SetIblResult> {
+    return this.request<SetIblResult>("/visual/ibl", "POST", {
+      image_path: imagePath,
+      enable,
     });
   }
 

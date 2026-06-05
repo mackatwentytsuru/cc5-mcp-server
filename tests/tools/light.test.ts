@@ -26,8 +26,35 @@ beforeEach(() => {
 // ── tool registration ─────────────────────────────────────────────────────────
 
 describe("registerLightTools – registration", () => {
-  it("registers exactly 6 tools", () => {
-    expect(server.tool).toHaveBeenCalledTimes(6);
+  it("registers exactly 9 tools", () => {
+    expect(server.tool).toHaveBeenCalledTimes(9);
+  });
+
+  it("registers get_visual_settings", () => {
+    expect(server.tool).toHaveBeenCalledWith(
+      "get_visual_settings",
+      expect.any(String),
+      expect.any(Object),
+      expect.any(Function)
+    );
+  });
+
+  it("registers set_ambient", () => {
+    expect(server.tool).toHaveBeenCalledWith(
+      "set_ambient",
+      expect.any(String),
+      expect.any(Object),
+      expect.any(Function)
+    );
+  });
+
+  it("registers set_ibl", () => {
+    expect(server.tool).toHaveBeenCalledWith(
+      "set_ibl",
+      expect.any(String),
+      expect.any(Object),
+      expect.any(Function)
+    );
   });
 
   it("registers set_light_active", () => {
@@ -274,5 +301,95 @@ describe("set_light_shadow handler", () => {
     const handler = server.getRegisteredTool("set_light_shadow");
     const result = await handler({ light_name: "KeyLight", darken_strength: 0.2 });
     expect(result.content[0].text).toContain("CC5 bridge error: network error");
+  });
+});
+
+// ── get_visual_settings ───────────────────────────────────────────────────────
+
+describe("get_visual_settings handler", () => {
+  it("reports ambient color and IBL state", async () => {
+    bridge.getVisualSettings.mockResolvedValue({ success: true, ambient: { r: 0.1, g: 0.2, b: 0.3 }, ibl_enabled: true });
+    const handler = server.getRegisteredTool("get_visual_settings");
+    const result = await handler({});
+    expect(result.content[0].text).toContain("Ambient: RGB(0.100, 0.200, 0.300)");
+    expect(result.content[0].text).toContain("IBL: on");
+  });
+
+  it("returns failure message when unavailable", async () => {
+    bridge.getVisualSettings.mockResolvedValue({ success: false, error: "Visual settings not available" });
+    const handler = server.getRegisteredTool("get_visual_settings");
+    const result = await handler({});
+    expect(result.content[0].text).toBe("Failed: Visual settings not available");
+  });
+
+  it("returns bridge error text when bridge throws (does not propagate)", async () => {
+    bridge.getVisualSettings.mockRejectedValue(new Error("bridge down"));
+    const handler = server.getRegisteredTool("get_visual_settings");
+    const result = await handler({});
+    expect(result.content[0].text).toContain("CC5 bridge error: bridge down");
+  });
+});
+
+// ── set_ambient ───────────────────────────────────────────────────────────────
+
+describe("set_ambient handler", () => {
+  it("reports the applied ambient color", async () => {
+    bridge.setAmbient.mockResolvedValue({ success: true, ambient: { r: 0.5, g: 0.25, b: 0.1 } });
+    const handler = server.getRegisteredTool("set_ambient");
+    const result = await handler({ r: 0.5, g: 0.25, b: 0.1 });
+    expect(result.content[0].text).toContain("Ambient color set to RGB(0.500, 0.250, 0.100)");
+  });
+
+  it("calls bridge.setAmbient with the rgb values", async () => {
+    bridge.setAmbient.mockResolvedValue({ success: true, ambient: { r: 0, g: 0, b: 0 } });
+    const handler = server.getRegisteredTool("set_ambient");
+    await handler({ r: 0.2, g: 0.3, b: 0.4 });
+    expect(bridge.setAmbient).toHaveBeenCalledWith(0.2, 0.3, 0.4);
+  });
+
+  it("returns bridge error text when bridge throws (does not propagate)", async () => {
+    bridge.setAmbient.mockRejectedValue(new Error("bridge down"));
+    const handler = server.getRegisteredTool("set_ambient");
+    const result = await handler({ r: 0.5, g: 0.5, b: 0.5 });
+    expect(result.content[0].text).toContain("CC5 bridge error: bridge down");
+  });
+});
+
+// ── set_ibl ───────────────────────────────────────────────────────────────────
+
+describe("set_ibl handler", () => {
+  it("reports IBL enabled with loaded image", async () => {
+    bridge.setIbl.mockResolvedValue({ success: true, ibl_enabled: true, loaded_image: "C:/env/studio.hdr" });
+    const handler = server.getRegisteredTool("set_ibl");
+    const result = await handler({ image_path: "C:/env/studio.hdr", enable: true });
+    expect(result.content[0].text).toBe("IBL enabled (loaded C:/env/studio.hdr)");
+  });
+
+  it("reports IBL disabled (toggle only, no image)", async () => {
+    bridge.setIbl.mockResolvedValue({ success: true, ibl_enabled: false, loaded_image: null });
+    const handler = server.getRegisteredTool("set_ibl");
+    const result = await handler({ enable: false });
+    expect(result.content[0].text).toBe("IBL disabled");
+  });
+
+  it("passes empty string when image_path omitted", async () => {
+    bridge.setIbl.mockResolvedValue({ success: true, ibl_enabled: true });
+    const handler = server.getRegisteredTool("set_ibl");
+    await handler({ enable: true });
+    expect(bridge.setIbl).toHaveBeenCalledWith("", true);
+  });
+
+  it("returns failure message on bad image path", async () => {
+    bridge.setIbl.mockResolvedValue({ success: false, error: "IBL image not found: x.hdr" });
+    const handler = server.getRegisteredTool("set_ibl");
+    const result = await handler({ image_path: "x.hdr", enable: true });
+    expect(result.content[0].text).toBe("Failed: IBL image not found: x.hdr");
+  });
+
+  it("returns bridge error text when bridge throws (does not propagate)", async () => {
+    bridge.setIbl.mockRejectedValue(new Error("bridge down"));
+    const handler = server.getRegisteredTool("set_ibl");
+    const result = await handler({ enable: true });
+    expect(result.content[0].text).toContain("CC5 bridge error: bridge down");
   });
 });

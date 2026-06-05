@@ -1093,6 +1093,95 @@ def set_light_shadow(
     return {"success": True, "light": light_name, **applied}
 
 
+# --- Environment / Visual Settings (ambient + IBL/HDRI) ---
+
+_IBL_EXTENSIONS = {".hdr", ".exr", ".png", ".jpg", ".jpeg", ".hdri"}
+
+
+def get_visual_settings() -> dict[str, Any]:
+    """Get global environment lighting: ambient color (0-1) and IBL/HDRI state."""
+    if not hasattr(RLPy.RGlobal, "GetVisualSettingComponent"):
+        return {"success": False, "error": "Visual settings not available in this CC5 version"}
+    vs = RLPy.RGlobal.GetVisualSettingComponent()
+    if not vs:
+        return {"success": False, "error": "No visual setting component"}
+    result: dict[str, Any] = {"success": True}
+    try:
+        amb = vs.GetAmbientColor()
+        result["ambient"] = {"r": amb.Red() / 255.0, "g": amb.Green() / 255.0, "b": amb.Blue() / 255.0}
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] get_visual_settings ambient failed: {e}")
+        result["ambient"] = None
+    try:
+        result["ibl_enabled"] = bool(vs.IsIBLEnable())
+    except Exception:
+        result["ibl_enabled"] = None
+    return result
+
+
+def set_ambient(r: float, g: float, b: float) -> dict[str, Any]:
+    """Set the scene ambient (fill) light color. RGB are floats 0.0-1.0."""
+    if not hasattr(RLPy.RGlobal, "GetVisualSettingComponent"):
+        return {"success": False, "error": "Visual settings not available in this CC5 version"}
+    vs = RLPy.RGlobal.GetVisualSettingComponent()
+    if not vs:
+        return {"success": False, "error": "No visual setting component"}
+    r = max(0.0, min(1.0, float(r)))
+    g = max(0.0, min(1.0, float(g)))
+    b = max(0.0, min(1.0, float(b)))
+    try:
+        RLPy.RGlobal.BeginAction("Set Ambient Color")
+        vs.SetAmbientColor(RLPy.RRgb(r, g, b))
+    finally:
+        RLPy.RGlobal.EndAction()
+    try:
+        amb = vs.GetAmbientColor()
+        applied = {"r": amb.Red() / 255.0, "g": amb.Green() / 255.0, "b": amb.Blue() / 255.0}
+    except Exception:
+        applied = {"r": r, "g": g, "b": b}
+    return {"success": True, "ambient": applied}
+
+
+def set_ibl(image_path: str = "", enable: bool = True) -> dict[str, Any]:
+    """Enable/disable image-based lighting (IBL/HDRI), optionally loading an HDRI.
+
+    image_path: path to an .hdr/.exr/.png/.jpg environment image. If omitted, only
+    the enable flag is toggled (keeping any currently-loaded image).
+    """
+    if not hasattr(RLPy.RGlobal, "GetVisualSettingComponent"):
+        return {"success": False, "error": "Visual settings not available in this CC5 version"}
+    vs = RLPy.RGlobal.GetVisualSettingComponent()
+    if not vs:
+        return {"success": False, "error": "No visual setting component"}
+
+    loaded = None
+    if image_path:
+        path_error = _validate_path(image_path, _IBL_EXTENSIONS)
+        if path_error:
+            return {"success": False, "error": path_error}
+        if not os.path.isfile(image_path):
+            return {"success": False, "error": f"IBL image not found: {image_path}"}
+        try:
+            RLPy.RGlobal.BeginAction("Load IBL")
+            vs.LoadIBLImage(image_path)
+            loaded = image_path
+        except Exception as e:
+            RLPy.RGlobal.EndAction()
+            return {"success": False, "error": f"Failed to load IBL image: {e}"}
+        else:
+            RLPy.RGlobal.EndAction()
+
+    try:
+        vs.SetIBLEnable(bool(enable))
+    except Exception as e:
+        return {"success": False, "error": f"Failed to set IBL enable: {e}"}
+    try:
+        enabled = bool(vs.IsIBLEnable())
+    except Exception:
+        enabled = bool(enable)
+    return {"success": True, "ibl_enabled": enabled, "loaded_image": loaded}
+
+
 # --- Expression Control ---
 
 def get_expression_info() -> dict[str, Any]:
@@ -3156,6 +3245,9 @@ def _auto_patch_server() -> None:
             (bool(p["cast_shadow"]) if p.get("cast_shadow") is not None else None),
             (float(p["darken_strength"]) if p.get("darken_strength") is not None else None),
         ),
+        "get_visual_settings":   lambda p: _self.get_visual_settings(),
+        "set_ambient":           lambda p: _self.set_ambient(float(p["r"]), float(p["g"]), float(p["b"])),
+        "set_ibl":               lambda p: _self.set_ibl(p.get("image_path", ""), bool(p.get("enable", True))),
         "get_expression_info":   lambda p: _self.get_expression_info(),
         "set_expression":        lambda p: _self.set_expression(p["expressions"]),
         "reset_expression":      lambda p: _self.reset_expression(),
@@ -3212,6 +3304,8 @@ def _auto_patch_server() -> None:
             "/light/multiplier": "set_light_multiplier",
             "/light/active":     "set_light_active",
             "/light/shadow":     "set_light_shadow",
+            "/visual/ambient":   "set_ambient",
+            "/visual/ibl":       "set_ibl",
             "/expression/set":   "set_expression",
             "/expression/reset": "reset_expression",
             "/morphs/reset":     "reset_all_morphs",
@@ -3248,6 +3342,7 @@ def _auto_patch_server() -> None:
         srv.GET_ROUTES.update({
             "/camera/info":      "get_camera_info",
             "/lights":           "get_lights",
+            "/visual/settings":  "get_visual_settings",
             "/expressions":      "get_expression_info",
             "/material/info":    "get_material_info",
             # Tier 1: Content Management
@@ -3267,6 +3362,7 @@ def _auto_patch_server() -> None:
             "set_light_multiplier":    ["light_name", "multiplier"],
             "set_light_active":        ["light_name", "active"],
             "set_light_shadow":        ["light_name"],
+            "set_ambient":             ["r", "g", "b"],
             "set_expression":          ["expressions"],
             "get_diffuse_color":       ["mesh_name", "material_name"],
             "set_diffuse_color":       ["mesh_name", "material_name", "r", "g", "b"],

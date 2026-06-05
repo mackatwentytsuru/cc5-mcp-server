@@ -156,6 +156,16 @@ if expr_name:
 else:
     skip("set_expression (applied + skipped)", "no expression names"); skip("reset_expression", "no expression names")
 s, r = call("POST", "/subdivision", {"level": 0}); ok("set_subdivision_level", res(r).get("success"))
+# Environment / visual settings (ambient + IBL)
+s, r = call("GET", "/visual/settings"); vsg = res(r)
+ok("get_visual_settings", isinstance(vsg, dict) and vsg.get("success") and isinstance(vsg.get("ambient"), dict))
+amb0 = vsg.get("ambient") if isinstance(vsg, dict) else None
+s, r = call("POST", "/visual/ambient", {"r": 0.3, "g": 0.2, "b": 0.1}); ar = res(r)
+ok("set_ambient round-trip", ar.get("success") and abs(ar.get("ambient", {}).get("r", 0) - 0.3) < 0.02, ar)
+if amb0:
+    call("POST", "/visual/ambient", amb0)  # restore
+s, r = call("POST", "/visual/ibl", {"enable": True}); ok("set_ibl (enable toggle)", res(r).get("success") and res(r).get("ibl_enabled") is True, res(r))
+s, r = call("POST", "/visual/ibl", {"image_path": "C:/___nope___/missing.hdr", "enable": True}); ok("set_ibl (clean bad-path error)", isinstance(res(r), dict) and res(r).get("success") is False)
 
 print("== Content + asset load + item ops (real cloth) ==")
 s, r = call("GET", "/clothes"); ok("list_clothes", s == 200 and is_resp(r))

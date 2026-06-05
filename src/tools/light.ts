@@ -126,4 +126,53 @@ export function registerLightTools(server: McpServer, bridge: CC5Bridge) {
       },
     )
   );
+
+  server.tool(
+    "get_visual_settings",
+    "Get the scene's global environment lighting: ambient (fill) color and whether IBL/HDRI image-based lighting is enabled.",
+    {},
+    async () => bridgeCall(
+      () => bridge.getVisualSettings(),
+      (s) => {
+        if (!s.success) return `Failed: ${s.error}`;
+        const parts: string[] = [];
+        if (s.ambient) parts.push(`Ambient: RGB(${s.ambient.r.toFixed(3)}, ${s.ambient.g.toFixed(3)}, ${s.ambient.b.toFixed(3)})`);
+        if (s.ibl_enabled !== null && s.ibl_enabled !== undefined) parts.push(`IBL: ${s.ibl_enabled ? "on" : "off"}`);
+        return parts.length ? parts.join("\n") : "No visual settings available.";
+      },
+    )
+  );
+
+  server.tool(
+    "set_ambient",
+    "Set the scene ambient (fill) light color — the soft global light that fills shadows. RGB are floats 0.0-1.0. Lower = deeper shadows, higher = flatter/brighter fill.",
+    {
+      r: z.number().min(0).max(1).describe("Red (0.0-1.0)"),
+      g: z.number().min(0).max(1).describe("Green (0.0-1.0)"),
+      b: z.number().min(0).max(1).describe("Blue (0.0-1.0)"),
+    },
+    async ({ r, g, b }) => bridgeCall(
+      () => bridge.setAmbient(r, g, b),
+      (result) => result.success
+        ? `Ambient color set to RGB(${result.ambient?.r.toFixed(3) ?? r}, ${result.ambient?.g.toFixed(3) ?? g}, ${result.ambient?.b.toFixed(3) ?? b})`
+        : `Failed: ${result.error}`,
+    )
+  );
+
+  server.tool(
+    "set_ibl",
+    "Enable or disable image-based lighting (IBL/HDRI environment), optionally loading an HDRI image (.hdr/.exr/.png/.jpg). IBL establishes overall mood/fill from an environment map. Omit image_path to just toggle the current IBL on/off.",
+    {
+      image_path: z.string().max(1024).optional().describe("Path to an HDRI/environment image (.hdr/.exr/.png/.jpg); optional"),
+      enable: z.boolean().default(true).describe("Enable (true) or disable (false) IBL"),
+    },
+    async ({ image_path, enable }) => bridgeCall(
+      () => bridge.setIbl(image_path ?? "", enable),
+      (result) => {
+        if (!result.success) return `Failed: ${result.error}`;
+        const img = result.loaded_image ? ` (loaded ${result.loaded_image})` : "";
+        return `IBL ${result.ibl_enabled ? "enabled" : "disabled"}${img}`;
+      },
+    )
+  );
 }
