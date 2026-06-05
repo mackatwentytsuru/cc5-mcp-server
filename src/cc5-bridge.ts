@@ -17,6 +17,8 @@ import type {
   LightColorResult,
   LightDetailInfo,
   LightMultiplierResult,
+  LightActiveResult,
+  LightShadowResult,
   ExpressionInfo,
   ResetMorphsResult,
   MaterialInfo,
@@ -276,6 +278,28 @@ export class CC5Bridge {
     return this.request<LightMultiplierResult>("/light/multiplier", "POST", {
       light_name: lightName,
       multiplier,
+    });
+  }
+
+  async setLightActive(
+    lightName: string,
+    active: boolean
+  ): Promise<LightActiveResult> {
+    return this.request<LightActiveResult>("/light/active", "POST", {
+      light_name: lightName,
+      active,
+    });
+  }
+
+  async setLightShadow(
+    lightName: string,
+    castShadow: boolean | null,
+    darkenStrength: number | null
+  ): Promise<LightShadowResult> {
+    return this.request<LightShadowResult>("/light/shadow", "POST", {
+      light_name: lightName,
+      cast_shadow: castShadow,
+      darken_strength: darkenStrength,
     });
   }
 

@@ -26,8 +26,26 @@ beforeEach(() => {
 // ── tool registration ─────────────────────────────────────────────────────────
 
 describe("registerLightTools – registration", () => {
-  it("registers exactly 4 tools", () => {
-    expect(server.tool).toHaveBeenCalledTimes(4);
+  it("registers exactly 6 tools", () => {
+    expect(server.tool).toHaveBeenCalledTimes(6);
+  });
+
+  it("registers set_light_active", () => {
+    expect(server.tool).toHaveBeenCalledWith(
+      "set_light_active",
+      expect.any(String),
+      expect.any(Object),
+      expect.any(Function)
+    );
+  });
+
+  it("registers set_light_shadow", () => {
+    expect(server.tool).toHaveBeenCalledWith(
+      "set_light_shadow",
+      expect.any(String),
+      expect.any(Object),
+      expect.any(Function)
+    );
   });
 
   it("registers get_lights", () => {
@@ -178,5 +196,83 @@ describe("set_light_color handler", () => {
     const result = await handler({ light_name: "KeyLight", r: 1.0, g: 0.0, b: 0.0 });
     expect(result.content[0].text).toContain("CC5 bridge error: network error");
     expect(result.content[0].text).toContain("Is CC5 running");
+  });
+});
+
+// ── set_light_active ──────────────────────────────────────────────────────────
+
+describe("set_light_active handler", () => {
+  it("reports the light turned on", async () => {
+    bridge.setLightActive.mockResolvedValue({ success: true, light: "KeyLight", active: true });
+    const handler = server.getRegisteredTool("set_light_active");
+    const result = await handler({ light_name: "KeyLight", active: true });
+    expect(result.content[0].text).toBe("Light 'KeyLight' turned on");
+  });
+
+  it("reports the light turned off", async () => {
+    bridge.setLightActive.mockResolvedValue({ success: true, light: "FillLight", active: false });
+    const handler = server.getRegisteredTool("set_light_active");
+    const result = await handler({ light_name: "FillLight", active: false });
+    expect(result.content[0].text).toBe("Light 'FillLight' turned off");
+  });
+
+  it("returns failure message when light is not found", async () => {
+    bridge.setLightActive.mockResolvedValue({ success: false, error: "Light not found: Nope" });
+    const handler = server.getRegisteredTool("set_light_active");
+    const result = await handler({ light_name: "Nope", active: true });
+    expect(result.content[0].text).toBe("Failed: Light not found: Nope");
+  });
+
+  it("calls bridge.setLightActive with the correct arguments", async () => {
+    bridge.setLightActive.mockResolvedValue({ success: true, light: "BackLight", active: false });
+    const handler = server.getRegisteredTool("set_light_active");
+    await handler({ light_name: "BackLight", active: false });
+    expect(bridge.setLightActive).toHaveBeenCalledWith("BackLight", false);
+  });
+
+  it("returns bridge error text when bridge throws (does not propagate)", async () => {
+    bridge.setLightActive.mockRejectedValue(new Error("bridge down"));
+    const handler = server.getRegisteredTool("set_light_active");
+    const result = await handler({ light_name: "KeyLight", active: true });
+    expect(result.content[0].text).toContain("CC5 bridge error: bridge down");
+  });
+});
+
+// ── set_light_shadow ──────────────────────────────────────────────────────────
+
+describe("set_light_shadow handler", () => {
+  it("reports cast-shadow toggle", async () => {
+    bridge.setLightShadow.mockResolvedValue({ success: true, light: "KeyLight", cast_shadow: false });
+    const handler = server.getRegisteredTool("set_light_shadow");
+    const result = await handler({ light_name: "KeyLight", cast_shadow: false });
+    expect(result.content[0].text).toBe("Light 'KeyLight' shadow updated: cast shadow off");
+  });
+
+  it("reports darkness change", async () => {
+    bridge.setLightShadow.mockResolvedValue({ success: true, light: "KeyLight", darken_shadow_strength: 0.4 });
+    const handler = server.getRegisteredTool("set_light_shadow");
+    const result = await handler({ light_name: "KeyLight", darken_strength: 0.4 });
+    expect(result.content[0].text).toBe("Light 'KeyLight' shadow updated: darkness 0.4");
+  });
+
+  it("passes undefined args through as null to the bridge", async () => {
+    bridge.setLightShadow.mockResolvedValue({ success: true, light: "KeyLight", cast_shadow: true });
+    const handler = server.getRegisteredTool("set_light_shadow");
+    await handler({ light_name: "KeyLight", cast_shadow: true });
+    expect(bridge.setLightShadow).toHaveBeenCalledWith("KeyLight", true, null);
+  });
+
+  it("returns failure message on bridge-side validation error", async () => {
+    bridge.setLightShadow.mockResolvedValue({ success: false, error: "Provide cast_shadow and/or darken_strength" });
+    const handler = server.getRegisteredTool("set_light_shadow");
+    const result = await handler({ light_name: "KeyLight" });
+    expect(result.content[0].text).toBe("Failed: Provide cast_shadow and/or darken_strength");
+  });
+
+  it("returns bridge error text when bridge throws (does not propagate)", async () => {
+    bridge.setLightShadow.mockRejectedValue(new Error("network error"));
+    const handler = server.getRegisteredTool("set_light_shadow");
+    const result = await handler({ light_name: "KeyLight", darken_strength: 0.2 });
+    expect(result.content[0].text).toContain("CC5 bridge error: network error");
   });
 });

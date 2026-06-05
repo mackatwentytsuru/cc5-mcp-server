@@ -112,8 +112,19 @@ if lname:
     s, r = call("POST", "/light/info", {"light_name": lname}); c = res(r).get("color", {}) if isinstance(res(r), dict) else {}
     ok("set_light_color round-trip", abs(c.get("r", 0) - 1.0) < 0.05 and c.get("g", 1) < 0.05, c)
     s, r = call("POST", "/light/multiplier", {"light_name": lname, "multiplier": 1.0}); ok("set_light_multiplier", res(r).get("success") is not False and is_resp(r))
+    # on/off toggle round-trip (lighting-guide): off then read-back, then restore on
+    call("POST", "/light/active", {"light_name": lname, "active": False})
+    s, r = call("POST", "/light/info", {"light_name": lname}); off_state = res(r).get("active") if isinstance(res(r), dict) else None
+    s, r = call("POST", "/light/active", {"light_name": lname, "active": True}); ok("set_light_active round-trip", res(r).get("success") and off_state is False, res(r))
+    # shadow: set darkness + cast, read back, then restore
+    call("POST", "/light/shadow", {"light_name": lname, "cast_shadow": True, "darken_strength": 0.3})
+    s, r = call("POST", "/light/info", {"light_name": lname}); ds = res(r).get("darken_shadow_strength") if isinstance(res(r), dict) else None
+    ok("set_light_shadow darken round-trip", isinstance(ds, (int, float)) and abs(ds - 0.3) < 0.02, ds)
+    call("POST", "/light/shadow", {"light_name": lname, "darken_strength": 0.0})  # restore
+    s, r = call("POST", "/light/shadow", {"light_name": lname}); ok("set_light_shadow (clean no-arg error)", isinstance(res(r), dict) and res(r).get("success") is False)
 else:
-    for n in ["get_light_info", "set_light_color round-trip", "set_light_multiplier"]:
+    for n in ["get_light_info", "set_light_color round-trip", "set_light_multiplier",
+              "set_light_active round-trip", "set_light_shadow darken round-trip", "set_light_shadow (clean no-arg error)"]:
         skip(n, "no light")
 s, r = call("GET", "/camera/info"); ok("get_camera_info", s == 200 and is_resp(r))
 s, r = call("POST", "/camera/focal", {"focal_length": 50}); ok("set_camera_focal_length (responds)", is_resp(r))

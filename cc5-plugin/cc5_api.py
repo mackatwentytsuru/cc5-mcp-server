@@ -995,6 +995,27 @@ def get_light_info(light_name: str) -> dict[str, Any]:
     except Exception as e:
         print(f"[CC5 MCP Bridge] get_light_info GetMultiplier failed: {e}")
         result["multiplier"] = None
+    # Lighting-guide additions: on/off + shadow shaping state (all best-effort)
+    try:
+        result["active"] = bool(light.GetActive())
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] get_light_info GetActive failed: {e}")
+        result["active"] = None
+    try:
+        result["cast_shadow"] = bool(light.IsCastShadow())
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] get_light_info IsCastShadow failed: {e}")
+        result["cast_shadow"] = None
+    try:
+        result["darken_shadow_strength"] = float(light.GetDarkenShadowStrength())
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] get_light_info GetDarkenShadowStrength failed: {e}")
+        result["darken_shadow_strength"] = None
+    try:
+        result["range"] = float(light.GetRange())
+    except Exception:
+        # Directional lights have no range — not an error worth logging loudly
+        result["range"] = None
     return result
 
 
@@ -1013,6 +1034,63 @@ def set_light_multiplier(light_name: str, multiplier: float) -> dict[str, Any]:
     finally:
         RLPy.RGlobal.EndAction()
     return {"success": True, "light": light_name, "multiplier": multiplier}
+
+
+def set_light_active(light_name: str, active: bool) -> dict[str, Any]:
+    """Turn a light on or off by name (lighting-guide: toggle lights to shape a scene).
+
+    Uses the keyable SetActive(time, bool); reads back GetActive() to confirm.
+    """
+    light, _ = _find_light(light_name)
+    if not light:
+        return {"success": False, "error": f"Light not found: {light_name}"}
+    active = bool(active)
+    try:
+        RLPy.RGlobal.BeginAction("Set Light Active")
+        light.SetActive(RLPy.RGlobal.GetTime(), active)
+        RLPy.RGlobal.ObjectModified(light, RLPy.EObjectModifiedType_Attribute)
+    finally:
+        RLPy.RGlobal.EndAction()
+    try:
+        confirmed = bool(light.GetActive())
+    except Exception:
+        confirmed = active
+    return {"success": True, "light": light_name, "active": confirmed}
+
+
+def set_light_shadow(
+    light_name: str,
+    cast_shadow: bool | None = None,
+    darken_strength: float | None = None,
+) -> dict[str, Any]:
+    """Control a light's shadow casting and darkness (lighting-guide: soften/tune shadows).
+
+    - cast_shadow: enable/disable shadow casting — SetCastShadow(bool), 1-arg.
+    - darken_strength: 0.0-1.0 shadow darkness — SetDarkenShadowStrength(time, float), keyable.
+
+    At least one of the two must be provided. Both are applied if given.
+    """
+    if cast_shadow is None and darken_strength is None:
+        return {"success": False, "error": "Provide cast_shadow and/or darken_strength"}
+    if darken_strength is not None and not (0.0 <= darken_strength <= 1.0):
+        return {"success": False, "error": "darken_strength must be 0.0-1.0"}
+    light, _ = _find_light(light_name)
+    if not light:
+        return {"success": False, "error": f"Light not found: {light_name}"}
+
+    applied: dict[str, Any] = {}
+    try:
+        RLPy.RGlobal.BeginAction("Set Light Shadow")
+        if cast_shadow is not None:
+            light.SetCastShadow(bool(cast_shadow))
+            applied["cast_shadow"] = bool(cast_shadow)
+        if darken_strength is not None:
+            light.SetDarkenShadowStrength(RLPy.RGlobal.GetTime(), float(darken_strength))
+            applied["darken_shadow_strength"] = float(darken_strength)
+        RLPy.RGlobal.ObjectModified(light, RLPy.EObjectModifiedType_Attribute)
+    finally:
+        RLPy.RGlobal.EndAction()
+    return {"success": True, "light": light_name, **applied}
 
 
 # --- Expression Control ---
@@ -2846,6 +2924,12 @@ def _auto_patch_server() -> None:
         "set_light_color":       lambda p: _self.set_light_color(p["light_name"], float(p["r"]), float(p["g"]), float(p["b"])),
         "get_light_info":        lambda p: _self.get_light_info(p["light_name"]),
         "set_light_multiplier":  lambda p: _self.set_light_multiplier(p["light_name"], float(p["multiplier"])),
+        "set_light_active":      lambda p: _self.set_light_active(p["light_name"], bool(p["active"])),
+        "set_light_shadow":      lambda p: _self.set_light_shadow(
+            p["light_name"],
+            (bool(p["cast_shadow"]) if p.get("cast_shadow") is not None else None),
+            (float(p["darken_strength"]) if p.get("darken_strength") is not None else None),
+        ),
         "get_expression_info":   lambda p: _self.get_expression_info(),
         "reset_all_morphs":      lambda p: _self.reset_all_morphs(p.get("avatar_name", "")),
         "get_material_info":     lambda p: _self.get_material_info(p.get("avatar_name", "")),
@@ -2896,6 +2980,8 @@ def _auto_patch_server() -> None:
             "/light/color":      "set_light_color",
             "/light/info":       "get_light_info",
             "/light/multiplier": "set_light_multiplier",
+            "/light/active":     "set_light_active",
+            "/light/shadow":     "set_light_shadow",
             "/morphs/reset":     "reset_all_morphs",
             "/morphs/search":    "search_morphs",
             "/material/info":    "get_material_info",
@@ -2945,6 +3031,8 @@ def _auto_patch_server() -> None:
             "set_light_color":         ["light_name", "r", "g", "b"],
             "get_light_info":          ["light_name"],
             "set_light_multiplier":    ["light_name", "multiplier"],
+            "set_light_active":        ["light_name", "active"],
+            "set_light_shadow":        ["light_name"],
             "get_diffuse_color":       ["mesh_name", "material_name"],
             "set_diffuse_color":       ["mesh_name", "material_name", "r", "g", "b"],
             "get_material_properties": ["mesh_name", "material_name"],

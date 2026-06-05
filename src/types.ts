@@ -74,12 +74,27 @@ export interface LightDetailInfo {
   type: string;
   color: { r: number; g: number; b: number } | null;
   multiplier: number | null;
+  active?: boolean | null;
+  cast_shadow?: boolean | null;
+  darken_shadow_strength?: number | null;
+  range?: number | null;
   error?: string;
 }
 
 export interface LightMultiplierResult extends OperationResult {
   light?: string;
   multiplier?: number;
+}
+
+export interface LightActiveResult extends OperationResult {
+  light?: string;
+  active?: boolean;
+}
+
+export interface LightShadowResult extends OperationResult {
+  light?: string;
+  cast_shadow?: boolean;
+  darken_shadow_strength?: number;
 }
 
 export interface ExpressionInfo {

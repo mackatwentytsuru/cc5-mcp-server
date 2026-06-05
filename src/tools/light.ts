@@ -56,6 +56,18 @@ export function registerLightTools(server: McpServer, bridge: CC5Bridge) {
         if (info.multiplier !== null && info.multiplier !== undefined) {
           parts.push(`Multiplier: ${info.multiplier}`);
         }
+        if (info.active !== null && info.active !== undefined) {
+          parts.push(`Active: ${info.active ? "on" : "off"}`);
+        }
+        if (info.cast_shadow !== null && info.cast_shadow !== undefined) {
+          parts.push(`Cast shadow: ${info.cast_shadow ? "yes" : "no"}`);
+        }
+        if (info.darken_shadow_strength !== null && info.darken_shadow_strength !== undefined) {
+          parts.push(`Shadow darkness: ${info.darken_shadow_strength.toFixed(3)}`);
+        }
+        if (info.range !== null && info.range !== undefined) {
+          parts.push(`Range: ${info.range}`);
+        }
         return parts.join("\n");
       },
     )
@@ -73,6 +85,45 @@ export function registerLightTools(server: McpServer, bridge: CC5Bridge) {
       (result) => result.success
         ? `Light '${result.light ?? light_name}' multiplier set to ${result.multiplier ?? multiplier}`
         : `Failed: ${result.error}`,
+    )
+  );
+
+  server.tool(
+    "set_light_active",
+    "Turn a light on or off by name. Use this to shape a scene by toggling key/fill/rim lights (CC5 lighting workflow). Use get_lights first to find available light names.",
+    {
+      light_name: z.string().max(256).describe("Name of the light to toggle"),
+      active: z.boolean().describe("true = on, false = off"),
+    },
+    async ({ light_name, active }) => bridgeCall(
+      () => bridge.setLightActive(light_name, active),
+      (result) => result.success
+        ? `Light '${result.light ?? light_name}' turned ${(result.active ?? active) ? "on" : "off"}`
+        : `Failed: ${result.error}`,
+    )
+  );
+
+  server.tool(
+    "set_light_shadow",
+    "Control a light's shadows: toggle shadow casting and/or set shadow darkness (0.0-1.0; lower = softer/lighter shadows). Provide at least one of cast_shadow / darken_strength. Use get_lights first to find available light names.",
+    {
+      light_name: z.string().max(256).describe("Name of the light to modify"),
+      cast_shadow: z.boolean().optional().describe("Enable/disable shadow casting"),
+      darken_strength: z.number().min(0).max(1).optional().describe("Shadow darkness 0.0-1.0 (lower = softer)"),
+    },
+    async ({ light_name, cast_shadow, darken_strength }) => bridgeCall(
+      () => bridge.setLightShadow(
+        light_name,
+        cast_shadow === undefined ? null : cast_shadow,
+        darken_strength === undefined ? null : darken_strength,
+      ),
+      (result) => {
+        if (!result.success) return `Failed: ${result.error}`;
+        const bits: string[] = [];
+        if (result.cast_shadow !== undefined) bits.push(`cast shadow ${result.cast_shadow ? "on" : "off"}`);
+        if (result.darken_shadow_strength !== undefined) bits.push(`darkness ${result.darken_shadow_strength}`);
+        return `Light '${result.light ?? light_name}' shadow updated${bits.length ? `: ${bits.join(", ")}` : ""}`;
+      },
     )
   );
 }

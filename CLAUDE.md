@@ -198,7 +198,7 @@ powershell -ExecutionPolicy Bypass -File install-plugin.ps1
 
 ### 4. CC5 起動 → 自動でブリッジ起動（手動操作不要）
 
-## 利用可能な MCP ツール (35個)
+## 利用可能な MCP ツール (48個)
 
 ### シーン管理
 | ツール | 説明 |
@@ -234,8 +234,13 @@ powershell -ExecutionPolicy Bypass -File install-plugin.ps1
 |--------|------|
 | get_camera_info | カメラ位置・焦点距離取得 |
 | set_camera_focal_length | カメラ焦点距離設定 |
+| frame_camera | プリセット視点 (face/front/home/all 等) にカメラを移動 |
 | get_lights | シーン内ライト一覧 (重複排除済み) |
+| get_light_info | ライト詳細 (色/強度/オンオフ/影キャスト/影濃度/レンジ) |
 | set_light_color | ライトRGBカラー変更 |
+| set_light_multiplier | ライト強度 (multiplier) 設定 |
+| set_light_active | ライトのオン/オフ切替 (ライティング調整) |
+| set_light_shadow | 影キャストON/OFF + 影の濃さ (darken 0-1) 設定 |
 | get_expression_info | 表情グループ・スライダー名取得 |
 
 ### マテリアル・色

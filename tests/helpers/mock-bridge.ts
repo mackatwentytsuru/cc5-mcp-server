@@ -54,6 +54,8 @@ export function createMockBridge(): MockBridge {
     setLightColor: vi.fn<[string, number, number, number], Promise<LightColorResult>>(),
     getLightInfo: vi.fn<[string], Promise<LightDetailInfo>>(),
     setLightMultiplier: vi.fn<[string, number], Promise<LightMultiplierResult>>(),
+    setLightActive: vi.fn<[string, boolean], Promise<{ success: boolean; light?: string; active?: boolean; error?: string }>>(),
+    setLightShadow: vi.fn<[string, boolean | null, number | null], Promise<{ success: boolean; light?: string; cast_shadow?: boolean; darken_shadow_strength?: number; error?: string }>>(),
     getExpressionInfo: vi.fn<[], Promise<ExpressionInfo>>(),
     resetAllMorphs: vi.fn<[string?], Promise<ResetMorphsResult>>(),
     searchMorphs: vi.fn<[string, string?], Promise<Array<{ id: string; display_name: string; category: string }>>>(),
