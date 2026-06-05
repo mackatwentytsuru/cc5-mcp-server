@@ -20,6 +20,9 @@ import type {
   LightActiveResult,
   LightShadowResult,
   ExpressionInfo,
+  ExpressionItem,
+  ExpressionSetResult,
+  ExpressionResetResult,
   ResetMorphsResult,
   MaterialInfo,
   DiffuseColor,
@@ -307,6 +310,18 @@ export class CC5Bridge {
 
   async getExpressionInfo(): Promise<ExpressionInfo> {
     return this.request<ExpressionInfo>("/expressions");
+  }
+
+  async setExpression(
+    expressions: ExpressionItem[]
+  ): Promise<ExpressionSetResult> {
+    return this.request<ExpressionSetResult>("/expression/set", "POST", {
+      expressions,
+    });
+  }
+
+  async resetExpression(): Promise<ExpressionResetResult> {
+    return this.request<ExpressionResetResult>("/expression/reset", "POST", {});
   }
 
   // --- Reset Morphs ---

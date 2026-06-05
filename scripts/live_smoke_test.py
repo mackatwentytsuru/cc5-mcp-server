@@ -130,7 +130,19 @@ s, r = call("GET", "/camera/info"); ok("get_camera_info", s == 200 and is_resp(r
 s, r = call("POST", "/camera/focal", {"focal_length": 50}); ok("set_camera_focal_length (responds)", is_resp(r))
 s, r = call("POST", "/camera/frame", {"view": "face"}); ok("frame_camera face", res(r).get("success"), res(r))
 call("POST", "/camera/frame", {"view": "home"})  # reset to full-body view
-s, r = call("GET", "/expressions"); ok("get_expression_info (groups)", isinstance(res(r), dict) and len(res(r)) > 0)
+s, r = call("GET", "/expressions"); exprs = res(r); ok("get_expression_info (groups)", isinstance(exprs, dict) and len(exprs) > 0)
+# pick a real expression slider name to set, then reset
+expr_name = None
+if isinstance(exprs, dict):
+    for g, names in exprs.items():
+        if isinstance(names, list) and names:
+            expr_name = names[0]; break
+if expr_name:
+    s, r = call("POST", "/expression/set", {"expressions": [{"name": expr_name, "weight": 0.7}, {"name": "___bogus___", "weight": 1.0}]}); er = res(r)
+    ok("set_expression (applied + skipped)", er.get("success") and len(er.get("applied", [])) == 1 and "___bogus___" in er.get("skipped", []), er)
+    s, r = call("POST", "/expression/reset", {}); ok("reset_expression", res(r).get("success") and res(r).get("reset_count", 0) > 0, res(r))
+else:
+    skip("set_expression (applied + skipped)", "no expression names"); skip("reset_expression", "no expression names")
 s, r = call("POST", "/subdivision", {"level": 0}); ok("set_subdivision_level", res(r).get("success"))
 
 print("== Content + asset load + item ops (real cloth) ==")

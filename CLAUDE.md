@@ -198,7 +198,7 @@ powershell -ExecutionPolicy Bypass -File install-plugin.ps1
 
 ### 4. CC5 起動 → 自動でブリッジ起動（手動操作不要）
 
-## 利用可能な MCP ツール (48個)
+## 利用可能な MCP ツール (50個)
 
 ### シーン管理
 | ツール | 説明 |
@@ -242,6 +242,8 @@ powershell -ExecutionPolicy Bypass -File install-plugin.ps1
 | set_light_active | ライトのオン/オフ切替 (ライティング調整) |
 | set_light_shadow | 影キャストON/OFF + 影の濃さ (darken 0-1) 設定 |
 | get_expression_info | 表情グループ・スライダー名取得 |
+| set_expression | 表情スライダーを名前で設定 (weight 0-1, 複数可) |
+| reset_expression | 全表情スライダーを 0 (ニュートラル) にリセット |
 
 ### マテリアル・色
 | ツール | 説明 |

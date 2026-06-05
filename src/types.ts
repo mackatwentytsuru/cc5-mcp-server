@@ -101,6 +101,20 @@ export interface ExpressionInfo {
   [group: string]: string[];
 }
 
+export interface ExpressionItem {
+  name: string;
+  weight: number;
+}
+
+export interface ExpressionSetResult extends OperationResult {
+  applied?: ExpressionItem[];
+  skipped?: (string | null)[];
+}
+
+export interface ExpressionResetResult extends OperationResult {
+  reset_count?: number;
+}
+
 export interface ResetMorphsResult extends OperationResult {
   reset_count?: number;
 }

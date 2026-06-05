@@ -1119,6 +1119,110 @@ def get_expression_info() -> dict[str, Any]:
     return result
 
 
+def _collect_expression_names(face_comp) -> set[str]:
+    """Build the set of all valid expression slider names for the avatar's face."""
+    valid: set[str] = set()
+    for group in face_comp.GetExpressionGroups():
+        names = face_comp.GetExpressionNames(group)
+        for n in (names or []):
+            valid.add(n)
+    return valid
+
+
+def set_expression(expressions: list[dict[str, Any]]) -> dict[str, Any]:
+    """Set one or more facial expression sliders by name (weights 0.0-1.0).
+
+    expressions: [{"name": "Brow_Raise_Inner_L", "weight": 0.8}, ...]
+    Names are validated against the avatar's expression set (use get_expression_info
+    to discover them). Unknown names are skipped and reported, not silently dropped.
+    Expressions are keyed via AddExpressionKeys(time, names, weights, interval=0).
+    """
+    if not isinstance(expressions, list) or not expressions:
+        return {"success": False, "error": "expressions must be a non-empty list of {name, weight}"}
+    avatar = get_first_avatar()
+    if not avatar:
+        return {"success": False, "error": "No avatar"}
+    face_comp = avatar.GetFaceComponent()
+    if not face_comp:
+        return {"success": False, "error": "No face component"}
+
+    try:
+        valid = _collect_expression_names(face_comp)
+    except Exception as e:
+        return {"success": False, "error": f"Failed to read expression names: {e}"}
+
+    names: list[str] = []
+    weights: list[float] = []
+    skipped: list[str] = []
+    for entry in expressions:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name")
+        if name not in valid:
+            skipped.append(name)
+            continue
+        try:
+            weight = max(0.0, min(1.0, float(entry.get("weight", 0.0))))
+        except (TypeError, ValueError):
+            skipped.append(name)
+            continue
+        names.append(name)
+        weights.append(weight)
+
+    if not names:
+        return {"success": False, "error": "No valid expression names", "skipped": skipped}
+
+    time = RLPy.RGlobal.GetTime()
+    try:
+        RLPy.RGlobal.BeginAction("Set Expression")
+        face_comp.BeginKeyEditing()
+        try:
+            face_comp.AddExpressionKeys(time, names, weights, RLPy.RTime_FromValue(0))
+        finally:
+            face_comp.EndKeyEditing()
+        RLPy.RGlobal.ObjectModified(avatar, RLPy.EObjectModifiedType_Transform)
+    finally:
+        RLPy.RGlobal.EndAction()
+
+    try:
+        applied_weights = list(face_comp.GetExpressionWeights(time, names))
+    except Exception:
+        applied_weights = weights
+    applied = [{"name": n, "weight": w} for n, w in zip(names, applied_weights)]
+    return {"success": True, "applied": applied, "skipped": skipped}
+
+
+def reset_expression() -> dict[str, Any]:
+    """Reset all facial expression sliders to 0 (neutral face)."""
+    avatar = get_first_avatar()
+    if not avatar:
+        return {"success": False, "error": "No avatar"}
+    face_comp = avatar.GetFaceComponent()
+    if not face_comp:
+        return {"success": False, "error": "No face component"}
+
+    try:
+        names = list(_collect_expression_names(face_comp))
+    except Exception as e:
+        return {"success": False, "error": f"Failed to read expression names: {e}"}
+    if not names:
+        return {"success": True, "reset_count": 0}
+
+    weights = [0.0] * len(names)
+    time = RLPy.RGlobal.GetTime()
+    try:
+        RLPy.RGlobal.BeginAction("Reset Expression")
+        face_comp.BeginKeyEditing()
+        try:
+            face_comp.AddExpressionKeys(time, names, weights, RLPy.RTime_FromValue(0))
+        finally:
+            face_comp.EndKeyEditing()
+        RLPy.RGlobal.ObjectModified(avatar, RLPy.EObjectModifiedType_Transform)
+    finally:
+        RLPy.RGlobal.EndAction()
+    return {"success": True, "reset_count": len(names)}
+
+
 # --- Material / Texture Control ---
 
 def get_material_info(avatar_name: str = "") -> dict[str, Any]:
@@ -2931,6 +3035,8 @@ def _auto_patch_server() -> None:
             (float(p["darken_strength"]) if p.get("darken_strength") is not None else None),
         ),
         "get_expression_info":   lambda p: _self.get_expression_info(),
+        "set_expression":        lambda p: _self.set_expression(p["expressions"]),
+        "reset_expression":      lambda p: _self.reset_expression(),
         "reset_all_morphs":      lambda p: _self.reset_all_morphs(p.get("avatar_name", "")),
         "get_material_info":     lambda p: _self.get_material_info(p.get("avatar_name", "")),
         "get_diffuse_color":     lambda p: _self.get_diffuse_color(p["mesh_name"], p["material_name"]),
@@ -2982,6 +3088,8 @@ def _auto_patch_server() -> None:
             "/light/multiplier": "set_light_multiplier",
             "/light/active":     "set_light_active",
             "/light/shadow":     "set_light_shadow",
+            "/expression/set":   "set_expression",
+            "/expression/reset": "reset_expression",
             "/morphs/reset":     "reset_all_morphs",
             "/morphs/search":    "search_morphs",
             "/material/info":    "get_material_info",
@@ -3033,6 +3141,7 @@ def _auto_patch_server() -> None:
             "set_light_multiplier":    ["light_name", "multiplier"],
             "set_light_active":        ["light_name", "active"],
             "set_light_shadow":        ["light_name"],
+            "set_expression":          ["expressions"],
             "get_diffuse_color":       ["mesh_name", "material_name"],
             "set_diffuse_color":       ["mesh_name", "material_name", "r", "g", "b"],
             "get_material_properties": ["mesh_name", "material_name"],
