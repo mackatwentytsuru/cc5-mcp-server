@@ -1691,6 +1691,16 @@ def browse_content(folder_type: str = "cloth_upper") -> list[str]:
         "accessory_body": "EContentRootFolder_AccessoryOthers",
         # 'cloth' is an alias for the full-body clothing folder.
         "cloth": "EContentRootFolder_FullBody",
+        # Animation / scene content — all loadable via load_asset (.cc*/.i*).
+        # pose/motion may be empty on a base install (no pose packs) but resolve
+        # correctly and will list files once content is installed.
+        "pose": "EContentRootFolder_Pose",
+        "motion": "EContentRootFolder_Motion",
+        "expression": "EContentRootFolder_Expression",
+        "props": "EContentRootFolder_Props",
+        "light": "EContentRootFolder_Light",
+        "camera": "EContentRootFolder_Camera",
+        "character": "EContentRootFolder_Character",
     }
     folder_map: dict[str, Any] = {}
     for key, attr_name in enum_candidates.items():

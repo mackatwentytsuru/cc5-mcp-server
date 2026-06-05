@@ -163,6 +163,11 @@ s, r = call("GET", "/hair"); ok("list_hair", s == 200 and is_resp(r))
 s, r = call("GET", "/accessories"); ok("list_accessories", s == 200 and is_resp(r))
 s, r = call("POST", "/content/browse", {"folder_type": "shoes"}); cb = res(r)
 ok("browse_content (.ccShoes)", isinstance(cb, list) and cb and str(cb[0]).lower().endswith(".ccshoes"), f"n={len(cb) if isinstance(cb, list) else cb}")
+# scene/animation content categories (pose/motion may be empty on a base install — accept a list either way)
+s, r = call("POST", "/content/browse", {"folder_type": "light"}); lb = res(r)
+ok("browse_content light", isinstance(lb, list), f"n={len(lb) if isinstance(lb, list) else lb}")
+s, r = call("POST", "/content/browse", {"folder_type": "pose"}); pb = res(r)
+ok("browse_content pose (list, may be empty)", isinstance(pb, list))
 shoe = cb[0] if isinstance(cb, list) and cb and str(cb[0]).lower().endswith(".ccshoes") else None
 if shoe:
     s, r = call("POST", "/asset/load", {"file_path": shoe}, timeout=120); ok("load_asset (.ccShoes)", res(r).get("success"))

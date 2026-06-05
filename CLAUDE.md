@@ -227,7 +227,7 @@ powershell -ExecutionPolicy Bypass -File install-plugin.ps1
 | list_hair | アバター上の髪型一覧 |
 | list_accessories | アバター上のアクセサリー一覧 |
 | remove_scene_item | 衣服/髪/アクセサリーを名前で削除 |
-| browse_content | CC5コンテンツフォルダを参照 (cloth_upper, shoes 等) |
+| browse_content | CC5コンテンツフォルダを参照 (衣服/靴/アクセサリー + pose/motion/expression/props/light/camera/character) |
 
 ### カメラ・ライト・表情
 | ツール | 説明 |

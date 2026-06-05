@@ -72,10 +72,13 @@ export function registerContentTools(server: McpServer, bridge: CC5Bridge) {
 
   server.tool(
     "browse_content",
-    "Browse available CC5 content files by category. Returns file paths that can be loaded with load_asset. Categories: cloth_upper, cloth_lower, shoes, accessory_head, accessory_body.",
+    "Browse available CC5 content files by category. Returns file paths that can be loaded with load_asset. Wearables: cloth_upper, cloth_lower, cloth, shoes, accessory_head, accessory_body. Scene/animation: pose, motion, expression, props, light, camera, character (pose/motion may be empty on a base install without content packs).",
     {
-      folder_type: z.enum(["cloth_upper", "cloth_lower", "shoes", "accessory_head", "accessory_body"]).default("cloth_upper")
-        .describe("Content category: cloth_upper, cloth_lower, shoes, accessory_head, accessory_body (accessory_head/accessory_body resolve to the CC5 AccessoryOthers folder)"),
+      folder_type: z.enum([
+        "cloth_upper", "cloth_lower", "cloth", "shoes", "accessory_head", "accessory_body",
+        "pose", "motion", "expression", "props", "light", "camera", "character",
+      ]).default("cloth_upper")
+        .describe("Content category. Wearables: cloth_upper/cloth_lower/cloth/shoes/accessory_head/accessory_body. Scene & animation: pose/motion/expression/props/light/camera/character. Load a returned path with load_asset."),
     },
     async ({ folder_type }) => bridgeCall(
       () => bridge.browseContent(folder_type),
