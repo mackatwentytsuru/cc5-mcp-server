@@ -132,4 +132,41 @@ export function registerMaterialTools(server: McpServer, bridge: CC5Bridge) {
         : `Failed: ${result.error}`,
     )
   );
+
+  server.tool(
+    "get_shader_parameters",
+    "Get the Digital Human Shader parameters for a material (skin roughness scales, SSS radius/falloff/IOR, micronormal strength, specular, etc.). Each value is a list of floats. Use get_material_info first for valid mesh/material names, then set_shader_parameter to change one.",
+    {
+      mesh_name: z.string().max(256).describe("Mesh name (from get_material_info)"),
+      material_name: z.string().max(256).describe("Material name (from get_material_info)"),
+    },
+    async ({ mesh_name, material_name }) => bridgeCall(
+      () => bridge.getShaderParameters(mesh_name, material_name),
+      (result) => {
+        if (!result.success) return `Failed: ${result.error}`;
+        const params = result.parameters ?? {};
+        const names = Object.keys(params);
+        if (names.length === 0) return `${result.material ?? material_name}: no shader parameters (shader: ${result.shader ?? "unknown"}).`;
+        const lines = names.map(n => `  - ${n} = [${params[n].map(v => v.toFixed(3)).join(", ")}]`);
+        return `Shader '${result.shader ?? "?"}' on ${result.mesh ?? mesh_name}/${result.material ?? material_name} (${names.length} params):\n${lines.join("\n")}`;
+      },
+    )
+  );
+
+  server.tool(
+    "set_shader_parameter",
+    "Set one Digital Human Shader parameter on a material. Examples: 'Micro Roughness Scale' (skin shininess), 'SSS Radius'/'SSS Falloff' (subsurface scatter), 'MicroNormal Strength' (pore detail), '_Specular'. Discover names + current values with get_shader_parameters; the value list length must match the parameter.",
+    {
+      mesh_name: z.string().max(256).describe("Mesh name (from get_material_info)"),
+      material_name: z.string().max(256).describe("Material name (from get_material_info)"),
+      parameter_name: z.string().max(128).describe("Shader parameter name (from get_shader_parameters)"),
+      values: z.array(z.number()).min(1).max(16).describe("Float value(s); length must match the parameter"),
+    },
+    async ({ mesh_name, material_name, parameter_name, values }) => bridgeCall(
+      () => bridge.setShaderParameter(mesh_name, material_name, parameter_name, values),
+      (result) => result.success
+        ? `${result.mesh ?? mesh_name}/${result.material ?? material_name} '${result.parameter ?? parameter_name}' set to [${(result.values ?? values).join(", ")}]`
+        : `Failed: ${result.error}`,
+    )
+  );
 }

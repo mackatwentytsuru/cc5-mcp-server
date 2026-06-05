@@ -198,7 +198,7 @@ powershell -ExecutionPolicy Bypass -File install-plugin.ps1
 
 ### 4. CC5 起動 → 自動でブリッジ起動（手動操作不要）
 
-## 利用可能な MCP ツール (50個)
+## 利用可能な MCP ツール (52個)
 
 ### シーン管理
 | ツール | 説明 |
@@ -249,6 +249,8 @@ powershell -ExecutionPolicy Bypass -File install-plugin.ps1
 | ツール | 説明 |
 |--------|------|
 | get_material_info | メッシュ・マテリアル名一覧 |
+| get_shader_parameters | Digital Human Shader パラメータ取得 (肌ラフネス/SSS/MicroNormal 等) |
+| set_shader_parameter | Digital Human Shader パラメータ設定 (名前+値リスト、検証つき) |
 | get_diffuse_color | ディフューズカラー取得 |
 | set_diffuse_color | ディフューズカラー設定 (肌色等) |
 | set_eye_color | 目の色設定 (便利ショートカット) |

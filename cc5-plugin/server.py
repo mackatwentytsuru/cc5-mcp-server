@@ -71,6 +71,8 @@ REQUIRED_PARAMS: dict[str, list[str]] = {
     "set_material_opacity":    ["mesh_name", "material_name", "opacity"],
     "set_material_glossiness": ["mesh_name", "material_name", "glossiness"],
     "set_material_specular":   ["mesh_name", "material_name", "specular"],
+    "get_shader_parameters":   ["mesh_name", "material_name"],
+    "set_shader_parameter":    ["mesh_name", "material_name", "parameter_name", "values"],
     # Tier 1: Content Management
     "remove_scene_item":    ["item_name"],
     # Tier 3: Convenience Color Shortcuts
@@ -137,6 +139,8 @@ ACTION_MAP: dict[str, Any] = {
     "set_material_opacity":  lambda p: cc5_api.set_material_opacity(p["mesh_name"], p["material_name"], float(p["opacity"])),
     "set_material_glossiness": lambda p: cc5_api.set_material_glossiness(p["mesh_name"], p["material_name"], float(p["glossiness"])),
     "set_material_specular": lambda p: cc5_api.set_material_specular(p["mesh_name"], p["material_name"], float(p["specular"])),
+    "get_shader_parameters": lambda p: cc5_api.get_shader_parameters(p["mesh_name"], p["material_name"]),
+    "set_shader_parameter": lambda p: cc5_api.set_shader_parameter(p["mesh_name"], p["material_name"], p["parameter_name"], list(p["values"])),
     # Tier 1: Content Management
     "list_clothes":          lambda p: cc5_api.list_clothes(),
     "list_hair":             lambda p: cc5_api.list_hair(),
@@ -198,6 +202,8 @@ POST_ROUTES: dict[str, str] = {
     "/material/opacity":    "set_material_opacity",
     "/material/glossiness": "set_material_glossiness",
     "/material/specular":   "set_material_specular",
+    "/material/shader/get": "get_shader_parameters",
+    "/material/shader/set": "set_shader_parameter",
     # Tier 1: Content Management
     "/item/remove":      "remove_scene_item",
     "/content/browse":   "browse_content",

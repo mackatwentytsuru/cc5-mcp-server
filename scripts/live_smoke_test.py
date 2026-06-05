@@ -93,8 +93,20 @@ if mesh:
     s, r = call("POST", "/material/opacity", {"mesh_name": mesh, "material_name": mat, "opacity": 100}); ok("set_material_opacity", res(r).get("success"))
     s, r = call("POST", "/material/glossiness", {"mesh_name": mesh, "material_name": mat, "glossiness": 20}); ok("set_material_glossiness", res(r).get("success"))
     s, r = call("POST", "/material/specular", {"mesh_name": mesh, "material_name": mat, "specular": 50}); ok("set_material_specular", res(r).get("success"))
+    # PBR shader params (Digital Human Shader: roughness/SSS) — only present on skin materials
+    s, r = call("POST", "/material/shader/get", {"mesh_name": mesh, "material_name": mat}); sp = res(r)
+    ok("get_shader_parameters", isinstance(sp, dict) and sp.get("success") and isinstance(sp.get("parameters"), dict))
+    pnames = list(sp.get("parameters", {}).keys()) if isinstance(sp, dict) else []
+    if pnames:
+        pn = pnames[0]; orig = sp["parameters"][pn]
+        s, r = call("POST", "/material/shader/set", {"mesh_name": mesh, "material_name": mat, "parameter_name": pn, "values": orig})
+        ok("set_shader_parameter round-trip", res(r).get("success") and res(r).get("parameter") == pn, res(r))
+        s, r = call("POST", "/material/shader/set", {"mesh_name": mesh, "material_name": mat, "parameter_name": "___nope___", "values": [1.0]})
+        ok("set_shader_parameter (clean unknown-param error)", isinstance(res(r), dict) and res(r).get("success") is False)
+    else:
+        skip("set_shader_parameter round-trip", "no shader params"); skip("set_shader_parameter (clean unknown-param error)", "no shader params")
 else:
-    for n in ["get_diffuse_color", "get_material_properties", "set_diffuse_color", "set_material_opacity", "set_material_glossiness", "set_material_specular"]:
+    for n in ["get_diffuse_color", "get_material_properties", "set_diffuse_color", "set_material_opacity", "set_material_glossiness", "set_material_specular", "get_shader_parameters", "set_shader_parameter round-trip", "set_shader_parameter (clean unknown-param error)"]:
         skip(n, "no mesh")
 s, r = call("POST", "/color/eye", {"r": .3, "g": .2, "b": .1}); ok("set_eye_color", res(r).get("success") is not False and is_resp(r))
 # set_lip_color correctly errors on the CC3+ base (no dedicated lip material — would tint the whole head).

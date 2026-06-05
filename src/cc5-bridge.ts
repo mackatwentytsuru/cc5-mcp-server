@@ -29,6 +29,8 @@ import type {
   SetDiffuseColorResult,
   MaterialProperties,
   SetMaterialPropertyResult,
+  ShaderParameters,
+  SetShaderParameterResult,
   ClothingItem,
   HairItem,
   AccessoryItem,
@@ -406,6 +408,30 @@ export class CC5Bridge {
       mesh_name: meshName,
       material_name: materialName,
       specular,
+    });
+  }
+
+  async getShaderParameters(
+    meshName: string,
+    materialName: string
+  ): Promise<ShaderParameters> {
+    return this.request<ShaderParameters>("/material/shader/get", "POST", {
+      mesh_name: meshName,
+      material_name: materialName,
+    });
+  }
+
+  async setShaderParameter(
+    meshName: string,
+    materialName: string,
+    parameterName: string,
+    values: number[]
+  ): Promise<SetShaderParameterResult> {
+    return this.request<SetShaderParameterResult>("/material/shader/set", "POST", {
+      mesh_name: meshName,
+      material_name: materialName,
+      parameter_name: parameterName,
+      values,
     });
   }
 

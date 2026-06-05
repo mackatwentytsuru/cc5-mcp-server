@@ -28,6 +28,8 @@ import type {
   SetDiffuseColorResult,
   MaterialProperties,
   SetMaterialPropertyResult,
+  ShaderParameters,
+  SetShaderParameterResult,
 } from "../../src/types.js";
 
 export type MockBridge = {
@@ -71,6 +73,8 @@ export function createMockBridge(): MockBridge {
     setMaterialOpacity: vi.fn<[string, string, number], Promise<SetMaterialPropertyResult>>(),
     setMaterialGlossiness: vi.fn<[string, string, number], Promise<SetMaterialPropertyResult>>(),
     setMaterialSpecular: vi.fn<[string, string, number], Promise<SetMaterialPropertyResult>>(),
+    getShaderParameters: vi.fn<[string, string], Promise<ShaderParameters>>(),
+    setShaderParameter: vi.fn<[string, string, string, number[]], Promise<SetShaderParameterResult>>(),
   };
 }
 

@@ -1465,6 +1465,118 @@ def set_material_specular(mesh_name: str, material_name: str, specular: float) -
         return {"success": False, "error": str(e)}
 
 
+# --- PBR Shader Parameters (Digital Human Shader: roughness, SSS, micronormal) ---
+
+def get_shader_parameters(mesh_name: str, material_name: str) -> dict[str, Any]:
+    """Get the shader name and all numeric shader parameters for a material.
+
+    Exposes the Digital Human Shader controls (skin roughness scales, SSS radius/
+    falloff/IOR, micronormal strength, specular, etc.). Each value is a list of
+    floats (most are length 1). Use set_shader_parameter to change one.
+    """
+    error = _validate_material_names(mesh_name, material_name)
+    if error:
+        return {"success": False, "error": error}
+    avatar = get_first_avatar()
+    if not avatar:
+        return {"success": False, "error": "No avatar in scene"}
+    mat_comp, error = _get_valid_mesh_material(avatar, mesh_name, material_name)
+    if error:
+        return {"success": False, "error": error}
+    if not hasattr(mat_comp, "GetShaderParameterNames"):
+        return {"success": False, "error": "Shader parameter API not available in this CC5 build"}
+
+    try:
+        shader = mat_comp.GetShader(mesh_name, material_name) if hasattr(mat_comp, "GetShader") else None
+        names = mat_comp.GetShaderParameterNames(mesh_name, material_name)
+        params: dict[str, list[float]] = {}
+        for name in (names or []):
+            try:
+                value = mat_comp.GetShaderParameter(mesh_name, material_name, name)
+                params[name] = [float(v) for v in value]
+            except Exception:
+                # skip non-numeric / unreadable params rather than failing the whole call
+                continue
+        return {
+            "success": True,
+            "mesh": mesh_name,
+            "material": material_name,
+            "shader": shader,
+            "parameters": params,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def set_shader_parameter(
+    mesh_name: str, material_name: str, parameter_name: str, values: list[float]
+) -> dict[str, Any]:
+    """Set a single Digital Human Shader parameter (e.g. 'Micro Roughness Scale',
+    'SSS Radius', '_Specular') to a list of float values.
+
+    The parameter name is validated against the material's actual shader parameters
+    (use get_shader_parameters to discover them), and the value count must match the
+    parameter's existing length — both guard against passing bad data to the SWIG layer.
+    """
+    error = _validate_material_names(mesh_name, material_name)
+    if error:
+        return {"success": False, "error": error}
+    if not parameter_name or not isinstance(parameter_name, str):
+        return {"success": False, "error": "parameter_name is required"}
+    if not isinstance(values, list) or not values:
+        return {"success": False, "error": "values must be a non-empty list of numbers"}
+    try:
+        values = [float(v) for v in values]
+    except (TypeError, ValueError):
+        return {"success": False, "error": "values must all be numbers"}
+
+    avatar = get_first_avatar()
+    if not avatar:
+        return {"success": False, "error": "No avatar in scene"}
+    mat_comp, error = _get_valid_mesh_material(avatar, mesh_name, material_name)
+    if error:
+        return {"success": False, "error": error}
+    if not hasattr(mat_comp, "SetShaderParameter"):
+        return {"success": False, "error": "Shader parameter API not available in this CC5 build"}
+
+    try:
+        valid_names = list(mat_comp.GetShaderParameterNames(mesh_name, material_name) or [])
+    except Exception as e:
+        return {"success": False, "error": f"Failed to read shader parameters: {e}"}
+    if parameter_name not in valid_names:
+        return {"success": False, "error": f"Unknown shader parameter: {parameter_name}"}
+
+    # Length must match the existing parameter (passing the wrong arity can crash SWIG)
+    try:
+        current = list(mat_comp.GetShaderParameter(mesh_name, material_name, parameter_name))
+    except Exception as e:
+        return {"success": False, "error": f"Failed to read current value: {e}"}
+    if len(values) != len(current):
+        return {
+            "success": False,
+            "error": f"'{parameter_name}' expects {len(current)} value(s), got {len(values)}",
+        }
+
+    try:
+        RLPy.RGlobal.BeginAction("Set Shader Parameter")
+        mat_comp.SetShaderParameter(mesh_name, material_name, parameter_name, values)
+        RLPy.RGlobal.ObjectModified(avatar, _EOMTYPE_MATERIAL)
+    finally:
+        RLPy.RGlobal.EndAction()
+
+    try:
+        applied = [float(v) for v in mat_comp.GetShaderParameter(mesh_name, material_name, parameter_name)]
+    except Exception:
+        applied = values
+    return {
+        "success": True,
+        "mesh": mesh_name,
+        "material": material_name,
+        "parameter": parameter_name,
+        "values": applied,
+    }
+
+
 # --- Content Management (Clothes, Hair, Accessories) ---
 
 def list_clothes() -> list[dict[str, Any]]:
@@ -3045,6 +3157,8 @@ def _auto_patch_server() -> None:
         "set_material_opacity":  lambda p: _self.set_material_opacity(p["mesh_name"], p["material_name"], float(p["opacity"])),
         "set_material_glossiness": lambda p: _self.set_material_glossiness(p["mesh_name"], p["material_name"], float(p["glossiness"])),
         "set_material_specular": lambda p: _self.set_material_specular(p["mesh_name"], p["material_name"], float(p["specular"])),
+        "get_shader_parameters": lambda p: _self.get_shader_parameters(p["mesh_name"], p["material_name"]),
+        "set_shader_parameter": lambda p: _self.set_shader_parameter(p["mesh_name"], p["material_name"], p["parameter_name"], list(p["values"])),
         # Tier 1: Content Management
         "list_clothes":          lambda p: _self.list_clothes(),
         "list_hair":             lambda p: _self.list_hair(),
@@ -3099,6 +3213,8 @@ def _auto_patch_server() -> None:
             "/material/opacity":    "set_material_opacity",
             "/material/glossiness": "set_material_glossiness",
             "/material/specular":   "set_material_specular",
+            "/material/shader/get": "get_shader_parameters",
+            "/material/shader/set": "set_shader_parameter",
             # Tier 1: Content Management
             "/item/remove":      "remove_scene_item",
             "/content/browse":   "browse_content",
@@ -3148,6 +3264,8 @@ def _auto_patch_server() -> None:
             "set_material_opacity":    ["mesh_name", "material_name", "opacity"],
             "set_material_glossiness": ["mesh_name", "material_name", "glossiness"],
             "set_material_specular":   ["mesh_name", "material_name", "specular"],
+            "get_shader_parameters":   ["mesh_name", "material_name"],
+            "set_shader_parameter":    ["mesh_name", "material_name", "parameter_name", "values"],
             # Tier 1: Content Management
             "remove_scene_item":       ["item_name"],
             # Tier 3: Convenience Color Shortcuts

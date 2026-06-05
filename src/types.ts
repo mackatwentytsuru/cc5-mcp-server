@@ -153,6 +153,20 @@ export interface SetMaterialPropertyResult extends OperationResult {
   specular?: number;
 }
 
+export interface ShaderParameters extends OperationResult {
+  mesh?: string;
+  material?: string;
+  shader?: string | null;
+  parameters?: Record<string, number[]>;
+}
+
+export interface SetShaderParameterResult extends OperationResult {
+  mesh?: string;
+  material?: string;
+  parameter?: string;
+  values?: number[];
+}
+
 // --- Content Management (Tier 1) ---
 
 export interface ClothingItem {

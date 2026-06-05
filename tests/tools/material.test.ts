@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { registerMaterialTools } from "../../src/tools/material.js";
 import { createMockBridge, SUCCESS, FAILURE } from "../helpers/mock-bridge.js";
 import type { MockBridge } from "../helpers/mock-bridge.js";
-import type { MaterialInfo, DiffuseColor, SetDiffuseColorResult } from "../../src/types.js";
+import type { MaterialInfo, DiffuseColor, SetDiffuseColorResult, ShaderParameters, SetShaderParameterResult } from "../../src/types.js";
 
 import { createMockServer } from "../helpers/mock-server.js";
 
@@ -27,8 +27,26 @@ beforeEach(() => {
 // ── tool registration ─────────────────────────────────────────────────────────
 
 describe("registerMaterialTools – registration", () => {
-  it("registers exactly 7 tools", () => {
-    expect(server.tool).toHaveBeenCalledTimes(7);
+  it("registers exactly 9 tools", () => {
+    expect(server.tool).toHaveBeenCalledTimes(9);
+  });
+
+  it("registers get_shader_parameters", () => {
+    expect(server.tool).toHaveBeenCalledWith(
+      "get_shader_parameters",
+      expect.any(String),
+      expect.any(Object),
+      expect.any(Function)
+    );
+  });
+
+  it("registers set_shader_parameter", () => {
+    expect(server.tool).toHaveBeenCalledWith(
+      "set_shader_parameter",
+      expect.any(String),
+      expect.any(Object),
+      expect.any(Function)
+    );
   });
 
   it("registers get_material_info", () => {
@@ -288,5 +306,106 @@ describe("set_diffuse_color handler", () => {
       b: 0.5,
     });
     expect(result.content[0].type).toBe("text");
+  });
+});
+
+// ── get_shader_parameters ─────────────────────────────────────────────────────
+
+describe("get_shader_parameters handler", () => {
+  it("lists shader name and parameters on success", async () => {
+    const r: ShaderParameters = {
+      success: true,
+      mesh: "CC_Base_Body",
+      material: "Std_Skin_Head",
+      shader: "Digital_Human Head",
+      parameters: { "Micro Roughness Scale": [0.05], "SSS Radius": [1.5] },
+    };
+    bridge.getShaderParameters.mockResolvedValue(r);
+    const handler = server.getRegisteredTool("get_shader_parameters");
+    const result = await handler({ mesh_name: "CC_Base_Body", material_name: "Std_Skin_Head" });
+    expect(result.content[0].text).toContain("Digital_Human Head");
+    expect(result.content[0].text).toContain("Micro Roughness Scale = [0.050]");
+    expect(result.content[0].text).toContain("SSS Radius = [1.500]");
+  });
+
+  it("reports when there are no shader parameters", async () => {
+    const r: ShaderParameters = { success: true, material: "Std_Tongue", shader: "Pbr", parameters: {} };
+    bridge.getShaderParameters.mockResolvedValue(r);
+    const handler = server.getRegisteredTool("get_shader_parameters");
+    const result = await handler({ mesh_name: "CC_Base_Body", material_name: "Std_Tongue" });
+    expect(result.content[0].text).toContain("no shader parameters");
+  });
+
+  it("returns failure message when material not found", async () => {
+    bridge.getShaderParameters.mockResolvedValue({ success: false, error: "Material not found: X" });
+    const handler = server.getRegisteredTool("get_shader_parameters");
+    const result = await handler({ mesh_name: "M", material_name: "X" });
+    expect(result.content[0].text).toBe("Failed: Material not found: X");
+  });
+
+  it("returns bridge error text when bridge throws (does not propagate)", async () => {
+    bridge.getShaderParameters.mockRejectedValue(new Error("bridge down"));
+    const handler = server.getRegisteredTool("get_shader_parameters");
+    const result = await handler({ mesh_name: "M", material_name: "Mat" });
+    expect(result.content[0].text).toContain("CC5 bridge error: bridge down");
+  });
+});
+
+// ── set_shader_parameter ──────────────────────────────────────────────────────
+
+describe("set_shader_parameter handler", () => {
+  it("reports the applied value on success", async () => {
+    const r: SetShaderParameterResult = {
+      success: true,
+      mesh: "CC_Base_Body",
+      material: "Std_Skin_Head",
+      parameter: "Micro Roughness Scale",
+      values: [0.3],
+    };
+    bridge.setShaderParameter.mockResolvedValue(r);
+    const handler = server.getRegisteredTool("set_shader_parameter");
+    const result = await handler({
+      mesh_name: "CC_Base_Body",
+      material_name: "Std_Skin_Head",
+      parameter_name: "Micro Roughness Scale",
+      values: [0.3],
+    });
+    expect(result.content[0].text).toContain("'Micro Roughness Scale' set to [0.3]");
+  });
+
+  it("returns failure on unknown parameter / arity mismatch", async () => {
+    bridge.setShaderParameter.mockResolvedValue({ success: false, error: "Unknown shader parameter: Bogus" });
+    const handler = server.getRegisteredTool("set_shader_parameter");
+    const result = await handler({
+      mesh_name: "CC_Base_Body",
+      material_name: "Std_Skin_Head",
+      parameter_name: "Bogus",
+      values: [1],
+    });
+    expect(result.content[0].text).toBe("Failed: Unknown shader parameter: Bogus");
+  });
+
+  it("calls bridge.setShaderParameter with correct arguments", async () => {
+    bridge.setShaderParameter.mockResolvedValue({ success: true, values: [1.5] });
+    const handler = server.getRegisteredTool("set_shader_parameter");
+    await handler({
+      mesh_name: "CC_Base_Body",
+      material_name: "Std_Skin_Head",
+      parameter_name: "SSS Radius",
+      values: [1.5],
+    });
+    expect(bridge.setShaderParameter).toHaveBeenCalledWith("CC_Base_Body", "Std_Skin_Head", "SSS Radius", [1.5]);
+  });
+
+  it("returns bridge error text when bridge throws (does not propagate)", async () => {
+    bridge.setShaderParameter.mockRejectedValue(new Error("bridge down"));
+    const handler = server.getRegisteredTool("set_shader_parameter");
+    const result = await handler({
+      mesh_name: "M",
+      material_name: "Mat",
+      parameter_name: "SSS Radius",
+      values: [1.5],
+    });
+    expect(result.content[0].text).toContain("CC5 bridge error: bridge down");
   });
 });
