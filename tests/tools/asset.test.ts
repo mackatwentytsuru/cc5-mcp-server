@@ -196,6 +196,61 @@ describe("export_fbx handler – success cases", () => {
   });
 });
 
+// ── export_fbx – CC5 dialog options pass-through ─────────────────────────────
+
+describe("export_fbx handler – dialog options forwarding", () => {
+  it("forwards the recommended Unreal options to the bridge", async () => {
+    bridge.exportFbx.mockResolvedValue(SUCCESS);
+    const handler = server.getRegisteredTool("export_fbx");
+    await handler({
+      output_path: "C:/out/char.fbx",
+      target_tool: "UE5",
+      export_motion: true,
+      embed_textures: true,
+      fps: 30,
+      sub_d_level: 0,
+    });
+    expect(bridge.exportFbx).toHaveBeenCalledWith("C:/out/char.fbx", 0, {
+      target_tool: "UE5",
+      export_motion: true,
+      embed_textures: true,
+      fps: 30,
+      sub_d_level: 0,
+    });
+  });
+
+  it("forwards motion_range, texture_size and convert_image_format", async () => {
+    bridge.exportFbx.mockResolvedValue(SUCCESS);
+    const handler = server.getRegisteredTool("export_fbx");
+    await handler({
+      output_path: "C:/out/char.fbx",
+      motion_range: [0, 100],
+      texture_size: 2048,
+      convert_image_format: true,
+    });
+    expect(bridge.exportFbx).toHaveBeenCalledWith("C:/out/char.fbx", 0, {
+      motion_range: [0, 100],
+      texture_size: 2048,
+      convert_image_format: true,
+    });
+  });
+
+  it("accepts a bare filename and forwards it unchanged (default dir resolved server-side)", async () => {
+    bridge.exportFbx.mockResolvedValue(SUCCESS);
+    const handler = server.getRegisteredTool("export_fbx");
+    const result = await handler({ output_path: "character.fbx", embed_textures: true });
+    expect(bridge.exportFbx).toHaveBeenCalledWith("character.fbx", 0, { embed_textures: true });
+    expect(result.content[0].text).toContain("FBX exported to: character.fbx");
+  });
+
+  it("omits unset optional params from the forwarded extra object", async () => {
+    bridge.exportFbx.mockResolvedValue(SUCCESS);
+    const handler = server.getRegisteredTool("export_fbx");
+    await handler({ output_path: "C:/out/char.fbx", export_motion: false });
+    expect(bridge.exportFbx).toHaveBeenCalledWith("C:/out/char.fbx", 0, { export_motion: false });
+  });
+});
+
 // ── export_fbx – extension validation ────────────────────────────────────────
 
 describe("export_fbx handler – extension validation", () => {

@@ -86,6 +86,27 @@ HD データそのものの**生成**は CC5 の UI 操作 `Modify > Subdivide` 
 
 > **5.07 未満の注意:** CC5 5.07 より前のビルドでは、SubD キャッシュ／プラグインモジュールの再構築（rebuild）が必要になるケースがある。可能なら 5.07 以降へ更新する。
 
+### export_fbx の詳細
+
+`export_fbx` は CC5「Export FBX (InstaLOD)」ダイアログを `RLPy.RExportFbxSetting` で再現する。
+全パラメータは任意（`output_path` のみ必須）で、既存の挙動と完全な後方互換を保つ。
+
+| パラメータ | ダイアログ項目 | 説明 |
+|-----------|--------------|------|
+| `output_path` | 出力先 | ディレクトリ無しのファイル名（例 `character.fbx`）は `D:\CC5Export` 配下に解決される（`CC5_EXPORT_DIR` で変更可）。絶対パスはそのまま使用。 |
+| `target_tool` | Target Tool Preset | `"UE5"`/`"Unreal"` で Unreal 向けフラグ（Y-up, UE bone axis）を適用。 |
+| `export_motion` | FBX Options | `true` = "Mesh and Motion"（既定）、`false` = "Mesh" のみ。`EnableExportMotion` を使用。 |
+| `sub_d_level` | HD Character Subdivision Level | 0/1/2。`SetExportLevel`（シーンを変更しない）で適用。2-arg フォールバック時のみ `set_subdivision_level` を使用。 |
+| `embed_textures` | Texture Settings: Embed Textures | `EExportFbxOptions_EmbedTexture` を付与。 |
+| `convert_image_format` | Texture Settings: Convert Image Format | `EExportFbxOptions_ConvertTifToPNG` を付与。 |
+| `texture_size` | Texture Settings: Max Texture Size | `SetTextureSize`（0 = 元サイズ）。 |
+| `fps` | Include Motion: Frame Rate | `RLPy.RFps.Fps{n}`（例 30）にマップ。未対応値は note を付けてスキップ。 |
+| `motion_range` | Include Motion: 範囲 | `[start, end]` を `SetExportMotionRange` に渡す。省略時は既定の "All"。 |
+
+**推奨 Unreal (UE5 Skeleton) 呼び出し:** `target_tool="UE5"`, `export_motion=true`, `sub_d_level=0`, `embed_textures=true`, `fps=30`（`motion_range` は省略 = All）。InstaLOD は常に OFF。
+
+返り値は実際に適用された値のみを正直に報告する（`export_level`, `export_motion`, `fps`, `motion_range`, `texture_size`, `embed_textures` 等）。`RExportFbxSetting` が利用できない 2-arg フォールバック時は、適用できなかったオプションを `notes` に WARNING として記録する。
+
 ### CC5 再起動の完全手順（Claude が自動実行）
 
 ```bash
@@ -270,9 +291,14 @@ powershell -ExecutionPolicy Bypass -File install-plugin.ps1
 | ツール | 説明 |
 |--------|------|
 | load_asset | アセット読込 (.iAvatar, .ccAvatar, .ccm 等) |
-| export_fbx | FBX エクスポート |
+| export_fbx | FBX エクスポート（CC5「Export FBX」ダイアログを再現）。詳細は下記「export_fbx の詳細」を参照。|
 | set_subdivision_level | HD 細分化レベル |
 | capture_viewport | ビューポートスクリーンショット (画像をLLMに返却) |
+
+### ActorMIXER PRO
+| ツール | 説明 |
+|--------|------|
+| create_actor_mixer | ネイティブ「Create Mixer Assets」ダイアログを駆動して .ccMixerPreset を生成。`confirm_create` が安全ゲート (false=フィールド設定後キャンセルするドライラン / true=Create クリック)。ActorMIXER PRO プラグインが必要 |
 
 ### 編集
 | ツール | 説明 |
@@ -283,7 +309,7 @@ powershell -ExecutionPolicy Bypass -File install-plugin.ps1
 ## 開発メモ
 
 - ビルド: `npm run build`
-- テスト: `npm test` (314件) / `npm run test:coverage` (80%+)
+- テスト: `npm test` (449件) / `npm run test:coverage`
 - ホットリロード: `curl http://127.0.0.1:5101/reload` (cc5_api.py の変更を即反映)
 - API ディスカバリ: `curl http://127.0.0.1:5101/api`
 - CC5 再起動: `taskkill` → `CharacterCreator.exe &` → ブリッジ自動起動

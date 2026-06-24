@@ -61,13 +61,13 @@ export function registerAssetTools(server: McpServer, bridge: CC5Bridge) {
 
   server.tool(
     "export_fbx",
-    "Export the current avatar as an FBX file with optional Mesh-to-MetaHuman friendly settings. Use this after completing character adjustments to save the result for game engines (UE5/Unity) or 3D applications.",
+    "Export the current avatar as an FBX file, mirroring the CC5 'Export FBX' dialog (target tool preset, mesh+motion, subdivision, embed textures, frame rate). A bare filename (no directory) exports into D:\\CC5Export (override via the CC5_EXPORT_DIR env var). Recommended Unreal call: target_tool='UE5', export_motion=true, embed_textures=true, fps=30, sub_d_level=0.",
     {
-      output_path: z.string().describe("Absolute path for the exported FBX file (e.g., 'C:/Export/character.fbx')"),
+      output_path: z.string().describe("Path for the exported FBX file. A bare filename (e.g. 'character.fbx') exports into D:\\CC5Export; an absolute path (e.g. 'C:/Export/character.fbx') is used as-is."),
       target_tool: z.enum(["UE5", "Default", "Maya", "Unity", "Unreal"]).optional()
-        .describe("Target tool preset. 'UE5'/'Unreal' applies Unreal-friendly flags (Y-up, UE bone axis)."),
+        .describe("Target Tool Preset. 'UE5'/'Unreal' applies Unreal-friendly flags (Y-up, UE bone axis)."),
       sub_d_level: z.number().int().min(0).max(2).optional()
-        .describe("HD subdivision level applied before export (0/1/2). Higher = smoother mesh."),
+        .describe("HD Character Subdivision Level (0/1/2). Applied via SetExportLevel (no scene mutation). Higher = smoother mesh."),
       include_current_pose: z.boolean().optional()
         .describe("If true, keep current pose (do NOT force T-pose on motion first frame)."),
       delete_hidden_faces: z.boolean().optional()
@@ -78,6 +78,18 @@ export function registerAssetTools(server: McpServer, bridge: CC5Bridge) {
         .describe("If true, removes eyelash mesh (EExportFbxOptions_RemoveEyelash). Recommended for MetaHuman."),
       remove_tearline_occlusion: z.boolean().optional()
         .describe("If true, removes tear line + occlusion mesh (EExportFbxOptions_RemoveTearLineAndOcclusion). Recommended for MetaHuman."),
+      embed_textures: z.boolean().optional()
+        .describe("Texture Settings 'Embed Textures': bundle textures into the FBX. Recommended for Unreal."),
+      export_motion: z.boolean().optional()
+        .describe("FBX Options: true = 'Mesh and Motion' (default), false = 'Mesh' (mesh only)."),
+      fps: z.number().int().positive().optional()
+        .describe("Include Motion 'Frame Rate' (e.g. 30). Maps to RLPy.RFps.Fps{n}; unsupported values are skipped with a note."),
+      motion_range: z.tuple([z.number().int(), z.number().int()]).optional()
+        .describe("Include Motion frame range [start, end]. Omit for 'All' (the dialog default)."),
+      convert_image_format: z.boolean().optional()
+        .describe("Texture Settings 'Convert Image Format' (TIF -> PNG)."),
+      texture_size: z.number().int().min(0).optional()
+        .describe("Texture Settings 'Max Texture Size' in pixels (0 = original)."),
       options: z.number().int().optional()
         .describe("Raw EExportFbxOptions bitmask (advanced; usually leave 0)."),
     },

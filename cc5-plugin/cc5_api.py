@@ -28,6 +28,10 @@ MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB
 
 MAX_MORPH_ID_LENGTH = 256
 
+# Default export directory for FBX exports given a bare filename (no directory
+# component). Overridable via the CC5_EXPORT_DIR environment variable.
+CC5_EXPORT_DIR = os.environ.get("CC5_EXPORT_DIR", r"D:\CC5Export")
+
 # UR-25: prefer EObjectModifiedType_Material for material/color changes.
 # Falls back to _Attribute if _Material is not in this build.
 _EOMTYPE_MATERIAL = (
@@ -400,20 +404,35 @@ def export_fbx(
     use_smooth_mesh: bool = False,
     remove_eyelash: bool = False,
     remove_tearline_occlusion: bool = False,
+    embed_textures: bool = False,
+    export_motion: bool = True,
+    fps: int | None = None,
+    motion_range: list | None = None,
+    convert_image_format: bool = False,
+    texture_size: int | None = None,
 ) -> dict[str, Any]:
-    """Export the current avatar as FBX with optional Mesh-to-MetaHuman friendly settings.
+    """Export the current avatar as FBX, mirroring the CC5 "Export FBX" dialog.
 
     Args:
-        output_path: Absolute .fbx destination
+        output_path: .fbx destination. A bare filename (no directory component)
+            is resolved under CC5_EXPORT_DIR (default ``D:\\CC5Export``).
         options_flags: Raw EExportFbxOptions bitmask. If 0, defaults are computed from named flags.
         target_tool: "UE5" | "Default" | "Maya" | "Unity" — sets sensible base flag preset
-        sub_d_level: 0|1|2, calls set_subdivision_level before export
+        sub_d_level: 0|1|2. HD Character Subdivision Level. Applied via
+            RExportFbxSetting.SetExportLevel (no scene mutation). Falls back to
+            set_subdivision_level only on the flag-less 2-arg export path.
         include_current_pose: Keep the current pose (do NOT force T-pose on first motion frame)
         delete_hidden_faces: Add EExportFbxOptions_RemoveHiddenMesh
         use_smooth_mesh: Enable RExportFbxSetting.EnableBakeSubdivision (CC5 UI "Use Smooth Mesh")
                          — falls back to setting sub_d_level=1 if RExportFbxSetting variant fails.
         remove_eyelash: Add EExportFbxOptions_RemoveEyelash
         remove_tearline_occlusion: Add EExportFbxOptions_RemoveTearLineAndOcclusion
+        embed_textures: "Embed Textures" — add EExportFbxOptions_EmbedTexture.
+        export_motion: "Mesh and Motion" when True, "Mesh" (mesh only) when False.
+        fps: "Frame Rate" for included motion (e.g. 30). Mapped to RLPy.RFps.Fps{n}.
+        motion_range: [start, end] frame range. None/"all" leaves the dialog default ("All").
+        convert_image_format: "Convert Image Format" — add EExportFbxOptions_ConvertTifToPNG.
+        texture_size: "Max Texture Size" in pixels (0 = original).
     """
     # Defense-in-depth path validation
     _decoded_out = urllib.parse.unquote(output_path)
@@ -421,6 +440,14 @@ def export_fbx(
         return {"success": False, "error": "Path contains null byte"}
     if ".." in output_path or ".." in _decoded_out:
         return {"success": False, "error": "Path traversal ('..') is not allowed"}
+
+    notes: list[str] = []
+
+    # Resolve a bare filename (no directory component) under CC5_EXPORT_DIR.
+    if os.path.dirname(output_path) == "":
+        output_path = os.path.join(CC5_EXPORT_DIR, output_path)
+        notes.append(f"bare filename resolved under CC5_EXPORT_DIR ({CC5_EXPORT_DIR})")
+
     resolved = os.path.realpath(output_path)
     if not resolved.lower().endswith(".fbx"):
         return {"success": False, "error": "Output path must end with .fbx"}
@@ -429,24 +456,10 @@ def export_fbx(
     if not avatar:
         return {"success": False, "error": "No avatar in scene"}
 
-    notes: list[str] = []
-
-    # --- Apply subdivision level first if requested (snapshot for rollback) ---
+    # Subdivision is applied via RExportFbxSetting.SetExportLevel inside the
+    # setting-object block below (no scene mutation). The set_subdivision_level
+    # snapshot/rollback dance is only used on the flag-less 2-arg fallback path.
     _orig_subd = None
-    if sub_d_level is not None:
-        try:
-            if hasattr(avatar, "GetSubdivMeshLevel"):
-                _orig_subd = int(avatar.GetSubdivMeshLevel())
-        except Exception:
-            _orig_subd = None
-        try:
-            sub_result = set_subdivision_level(int(sub_d_level))
-            if not sub_result.get("success", False):
-                notes.append(f"set_subdivision_level failed: {sub_result.get('error')}")
-            else:
-                notes.append(f"sub_d_level={sub_d_level} applied")
-        except Exception as e:
-            notes.append(f"set_subdivision_level exception: {e}")
 
     # --- Build option flags ---
     _MISSING_FLAG = object()
@@ -501,6 +514,20 @@ def export_fbx(
     if remove_tearline_occlusion:
         flags |= _safe_flag("EExportFbxOptions_RemoveTearLineAndOcclusion")
 
+    # Texture Settings (CC5 dialog)
+    if embed_textures:
+        flags |= _safe_flag("EExportFbxOptions_EmbedTexture")  # "Embed Textures"
+    if convert_image_format:
+        flags |= _safe_flag("EExportFbxOptions_ConvertTifToPNG")  # "Convert Image Format"
+
+    # Honest-reporting trackers for the RExportFbxSetting-only options. Each is
+    # set to the actually-applied value only after its setter succeeds.
+    applied_export_level: int | None = None
+    applied_export_motion: bool | None = None
+    applied_fps: int | None = None
+    applied_motion_range: list | None = None
+    applied_texture_size: int | None = None
+
     try:
         dir_path = os.path.dirname(output_path)
         if dir_path:
@@ -531,6 +558,56 @@ def export_fbx(
                 if use_smooth_mesh and hasattr(setting, "EnableBakeSubdivision"):
                     setting.EnableBakeSubdivision(True)
                     notes.append("use_smooth_mesh: EnableBakeSubdivision(True) on RExportFbxSetting")
+
+                # HD Character Subdivision Level — SetExportLevel does NOT mutate
+                # the scene (unlike set_subdivision_level).
+                if sub_d_level is not None:
+                    try:
+                        setting.SetExportLevel(int(sub_d_level))
+                        applied_export_level = int(sub_d_level)
+                        notes.append(f"SetExportLevel({int(sub_d_level)}) applied")
+                    except Exception as e:
+                        notes.append(f"WARNING: SetExportLevel failed: {e}")
+
+                # FBX Options: "Mesh and Motion" (True) vs "Mesh" only (False).
+                try:
+                    setting.EnableExportMotion(bool(export_motion))
+                    applied_export_motion = bool(export_motion)
+                except Exception as e:
+                    notes.append(f"WARNING: EnableExportMotion failed: {e}")
+
+                # Include Motion — Frame Rate. RFps values are attributes (RLPy.RFps.Fps30).
+                if fps is not None:
+                    fps_attr = getattr(RLPy.RFps, f"Fps{int(fps)}", None) if hasattr(RLPy, "RFps") else None
+                    if fps_attr is None:
+                        notes.append(f"WARNING: RLPy.RFps.Fps{int(fps)} not found, fps skipped")
+                    else:
+                        try:
+                            setting.SetExportMotionFps(fps_attr)
+                            applied_fps = int(fps)
+                        except Exception as e:
+                            notes.append(f"WARNING: SetExportMotionFps failed: {e}")
+
+                # Include Motion — frame range. None/"all" leaves the default ("All").
+                if motion_range is not None:
+                    if isinstance(motion_range, (list, tuple)) and len(motion_range) == 2:
+                        try:
+                            start_f, end_f = int(motion_range[0]), int(motion_range[1])
+                            setting.SetExportMotionRange(RLPy.RRangePair(start_f, end_f))
+                            applied_motion_range = [start_f, end_f]
+                        except Exception as e:
+                            notes.append(f"WARNING: SetExportMotionRange failed: {e}")
+                    else:
+                        notes.append("WARNING: motion_range must be [start, end]; left default (All)")
+
+                # Texture Settings — "Max Texture Size" (0 = original).
+                if texture_size is not None:
+                    try:
+                        setting.SetTextureSize(int(texture_size))
+                        applied_texture_size = int(texture_size)
+                    except Exception as e:
+                        notes.append(f"WARNING: SetTextureSize failed: {e}")
+
                 RLPy.RFileIO.ExportFbxFile(avatar, output_path, setting)
                 used_setting_object = True
             except Exception as e:
@@ -542,6 +619,27 @@ def export_fbx(
                     "WARNING: option flags (target-tool preset / axis / etc.) were NOT "
                     "applied — used the flag-less 2-arg ExportFbxFile fallback."
                 )
+            if export_motion is False:
+                notes.append("WARNING: export_motion=False NOT applied (RExportFbxSetting unavailable)")
+            if fps is not None or motion_range is not None or texture_size is not None or embed_textures or convert_image_format:
+                notes.append("WARNING: motion/texture options NOT applied (RExportFbxSetting unavailable)")
+            # 2-arg fallback can only honor subdivision via the scene-mutating
+            # set_subdivision_level (snapshot for rollback on failure).
+            if sub_d_level is not None:
+                try:
+                    if hasattr(avatar, "GetSubdivMeshLevel"):
+                        _orig_subd = int(avatar.GetSubdivMeshLevel())
+                except Exception:
+                    _orig_subd = None
+                try:
+                    sub_result = set_subdivision_level(int(sub_d_level))
+                    if sub_result.get("success", False):
+                        applied_export_level = int(sub_d_level)
+                        notes.append(f"sub_d_level={sub_d_level} applied via set_subdivision_level (2-arg fallback)")
+                    else:
+                        notes.append(f"set_subdivision_level failed: {sub_result.get('error')}")
+                except Exception as e:
+                    notes.append(f"set_subdivision_level exception: {e}")
             if use_smooth_mesh:
                 notes.append("use_smooth_mesh: CC5 UI exclusive — emulated via sub_d_level/flags (RExportFbxSetting unavailable or failed)")
                 # Best effort: ensure subdivision is on
@@ -560,8 +658,8 @@ def export_fbx(
             # 2-arg fallback — avoids passing bare int as 3rd arg
             RLPy.RFileIO.ExportFbxFile(avatar, output_path)
 
-        # Honest reporting: echo flags only when actually applied.
-        return {
+        # Honest reporting: echo flags/options only when actually applied.
+        result: dict[str, Any] = {
             "success": True,
             "path": output_path,
             "flags_applied": used_setting_object,
@@ -571,6 +669,21 @@ def export_fbx(
             "notes": notes,
             "target_tool": target_tool or "default",
         }
+        if applied_export_level is not None:
+            result["export_level"] = applied_export_level
+        if applied_export_motion is not None:
+            result["export_motion"] = applied_export_motion
+        if applied_fps is not None:
+            result["fps"] = applied_fps
+        if applied_motion_range is not None:
+            result["motion_range"] = applied_motion_range
+        if applied_texture_size is not None:
+            result["texture_size"] = applied_texture_size
+        if embed_textures and used_setting_object:
+            result["embed_textures"] = True
+        if convert_image_format and used_setting_object:
+            result["convert_image_format"] = True
+        return result
     except Exception as e:
         # Roll back the subdivision change if we made one and the export failed.
         if _orig_subd is not None:
@@ -3231,6 +3344,558 @@ def get_export_status() -> dict[str, Any]:
     return state
 
 
+# =====================================================================
+# ActorMIXER PRO: Create Mixer Assets (.ccMixerPreset generation)
+# =====================================================================
+#
+# Drives CC5's native ActorMIXER PRO "Create Mixer Assets" dialog in-process
+# via PySide2 + shiboken2. The dialog uses modal exec loops, so EVERY trigger
+# (menu action, message box dismiss, Create/Cancel click) is scheduled through
+# QTimer.singleShot — calling .trigger()/.click() synchronously would block the
+# bridge thread inside the modal loop and deadlock the HTTP server.
+#
+# Flow (all async, polled across multiple bridge calls is NOT needed — this
+# single call schedules the whole chain and returns immediately after Create/
+# Cancel is scheduled):
+#   1. Snapshot the ActorMIXER/Character presets dir (for diffing new files).
+#   2. Locate QAction objectName 'qtCreateMixerSliderAction' by walking the
+#      menu bar; schedule act.trigger() via singleShot.
+#   3. A trial-content QMessageBox (OK) may appear first — dismiss it via
+#      singleShot OK click.
+#   4. Poll (via singleShot chain) for the 'CreateMixerSliderDlg' dialog in
+#      QApplication.allWidgets(); once found, set fields.
+#   5. Click Create (qtCreatePushButton) if confirm_create, else Cancel
+#      (qtCancelPushButton) for a dry-run.
+#   6. _invalidate_caches() only on a real successful create.
+
+# Default head-part checkboxes (all checked by default in the native dialog).
+_MIXER_HEAD_PART_CHECKBOXES = {
+    "eyes":       "qtEyeCheckBox",
+    "forehead":   "qtBrowCheckBox",
+    "chin":       "qtChinCheckBox",
+    "mouth":      "qtMouthCheckBox",
+    "ears":       "qtEarCheckBox",
+    "nose":       "qtNoseCheckBox",
+    "head_shape": "qtHeadAdjustCheckBox",
+}
+
+# Body checkboxes (unchecked by default).
+_MIXER_BODY_CHECKBOXES = {
+    "body":  "qtUserBodyAdjustCheckBox",
+    "torso": "qtTorsoCheckBox",
+}
+
+# Save Presets group ('Save Presets' groupbox children).
+_MIXER_SAVE_PRESET_CHECKBOXES = {
+    "character":  "qtFullBodyPresetCheckBox",
+    "head":       "qtHeadPresetCheckBox",
+    "head_parts": "qtHeadPartsPresetCheckBox",
+    "body":       "qtBodyPresetCheckBox",
+    "body_parts": "qtBodyPartsPresetCheckBox",
+}
+
+# Defaults for the head_parts option object (native dialog: all checked).
+_MIXER_HEAD_PART_DEFAULTS = {k: True for k in _MIXER_HEAD_PART_CHECKBOXES}
+# Body parts default OFF.
+_MIXER_BODY_PART_DEFAULTS = {k: False for k in _MIXER_BODY_CHECKBOXES}
+# Save Presets: enabled with character/head/head_parts/body on, body_parts off.
+_MIXER_SAVE_PRESET_DEFAULTS = {
+    "enabled": True, "character": True, "head": True,
+    "head_parts": True, "body": True, "body_parts": False,
+}
+
+# Shared state for the async dialog driver (single in-flight create at a time).
+_MIXER_STATE: dict[str, Any] = {
+    "phase": "idle",          # idle | scheduled | dialog_open | created | cancelled | error
+    "morph_name": "",
+    "created": False,
+    "dry_run": True,
+    "presets_dir": "",
+    "presets_before": [],
+    "new_presets": [],
+    "error": "",
+    "notes": [],
+}
+
+
+def _mixer_is_trial_content() -> bool:
+    """Return True if the open avatar contains TRIAL content.
+
+    The ActorMIXER plugin REFUSES to generate mixer presets from trial content:
+    it shows the trial QMessageBox and then ABORTS — CreateMixerSliderDlg never
+    appears, so we must detect this up front instead of polling until timeout.
+    hasattr-guarded because IsTrialContentMode may not exist in every CC5 build.
+    """
+    try:
+        if hasattr(RLPy, "RGlobal") and hasattr(RLPy.RGlobal, "IsTrialContentMode"):
+            return bool(RLPy.RGlobal.IsTrialContentMode())
+    except Exception:
+        pass
+    return False
+
+
+def _mixer_presets_dir() -> str:
+    """Resolve the directory where new mixer presets (.ccMixerPreset) land.
+
+    Prefers RApplication.GetCustomContentFolder(EContentRootFolder_Character)
+    so we can diff the user's content folder for newly created assets. Falls
+    back to <CC5 root>/.../ActorMIXER if the API path is unavailable.
+    """
+    for attr_name in ("EContentRootFolder_Character", "EContentRootFolder_FullBody"):
+        if not hasattr(RLPy, attr_name):
+            continue
+        enum = getattr(RLPy, attr_name)
+        for getter in ("GetCustomContentFolder", "GetDefaultContentFolder"):
+            if hasattr(RLPy, "RApplication") and hasattr(RLPy.RApplication, getter):
+                try:
+                    folder = getattr(RLPy.RApplication, getter)(enum)
+                    if folder and os.path.isdir(folder):
+                        return folder
+                except Exception:
+                    pass
+    # Fallback: best-effort directory under CC5 root.
+    return os.path.join(_get_cc5_root(), "Custom", "ActorMIXER")
+
+
+def _mixer_snapshot_presets(presets_dir: str) -> list[str]:
+    """List existing .ccMixerPreset files under presets_dir (recursive)."""
+    found: list[str] = []
+    if not presets_dir or not os.path.isdir(presets_dir):
+        return found
+    try:
+        for root, _dirs, files in os.walk(presets_dir):
+            for fname in files:
+                if fname.lower().endswith(".ccmixerpreset"):
+                    found.append(os.path.join(root, fname))
+    except Exception:
+        pass
+    return found
+
+
+def _mixer_find_main_window() -> Any:
+    """Wrap CC5's main window as a QMainWindow via shiboken2, or None."""
+    try:
+        import shiboken2
+        from PySide2 import QtWidgets
+    except Exception:
+        return None
+    try:
+        ptr = RLPy.RUi.GetMainWindow()
+        if not ptr:
+            return None
+        return shiboken2.wrapInstance(int(ptr), QtWidgets.QMainWindow)
+    except Exception:
+        return None
+
+
+def _mixer_find_action(main_win: Any) -> Any:
+    """Walk the menu bar to find QAction objectName 'qtCreateMixerSliderAction'."""
+    if main_win is None or not hasattr(main_win, "menuBar"):
+        return None
+    menubar = main_win.menuBar()
+    if menubar is None:
+        return None
+
+    def _walk(menu: Any, depth: int = 0) -> Any:
+        if menu is None or depth > 6:
+            return None
+        try:
+            for act in menu.actions():
+                try:
+                    obj = act.objectName() if hasattr(act, "objectName") else ""
+                except Exception:
+                    obj = ""
+                if obj == "qtCreateMixerSliderAction":
+                    return act
+                sub = act.menu()
+                if sub is not None:
+                    hit = _walk(sub, depth + 1)
+                    if hit is not None:
+                        return hit
+        except Exception:
+            pass
+        return None
+
+    return _walk(menubar)
+
+
+def _mixer_find_dialog() -> Any:
+    """Find the visible 'CreateMixerSliderDlg' dialog, or None."""
+    try:
+        from PySide2.QtWidgets import QApplication
+    except Exception:
+        return None
+    app = QApplication.instance()
+    if app is None:
+        return None
+    for w in app.allWidgets():
+        try:
+            if w.objectName() == "CreateMixerSliderDlg" and w.isVisible():
+                return w
+        except Exception:
+            continue
+    return None
+
+
+def _mixer_dismiss_trial_msgbox() -> None:
+    """Dismiss a trial-content QMessageBox (click OK) if one is showing."""
+    try:
+        from PySide2.QtWidgets import QApplication, QMessageBox, QPushButton, QDialogButtonBox
+        from PySide2.QtCore import QTimer
+    except Exception:
+        return
+    app = QApplication.instance()
+    if app is None:
+        return
+    for w in app.allWidgets():
+        try:
+            if isinstance(w, QMessageBox) and w.isVisible():
+                ok_btn = w.button(QMessageBox.Ok)
+                if ok_btn is None:
+                    bb = w.findChild(QDialogButtonBox)
+                    if bb is not None:
+                        ok_btn = bb.button(QDialogButtonBox.Ok)
+                if ok_btn is None:
+                    ok_btn = w.findChild(QPushButton)
+                if ok_btn is not None:
+                    QTimer.singleShot(0, ok_btn.click)
+                return
+        except Exception:
+            continue
+
+
+def _mixer_set_checkbox(dialog: Any, object_name: str, desired: bool, notes: list[str]) -> None:
+    """Set a QCheckBox in the dialog to `desired` (click only if state differs)."""
+    try:
+        from PySide2.QtWidgets import QCheckBox
+    except Exception:
+        return
+    chk = dialog.findChild(QCheckBox, object_name)
+    if chk is None:
+        notes.append(f"checkbox not found: {object_name}")
+        return
+    try:
+        if bool(chk.isChecked()) != bool(desired):
+            chk.setChecked(bool(desired))
+        notes.append(f"{object_name}={desired}")
+    except Exception as e:
+        notes.append(f"{object_name} set failed: {e}")
+
+
+def _mixer_apply_fields(dialog: Any, opts: dict[str, Any], notes: list[str]) -> None:
+    """Set all line-edit and checkbox fields on the CreateMixerSliderDlg."""
+    try:
+        from PySide2.QtWidgets import QLineEdit
+    except Exception:
+        notes.append("PySide2 QLineEdit unavailable; fields not applied")
+        return
+
+    morph_name = opts.get("morph_name") or ""
+    if morph_name:
+        name_edit = dialog.findChild(QLineEdit, "qtSliderNameLineEdit")
+        if name_edit is not None:
+            name_edit.setText(str(morph_name))
+            notes.append(f"name={morph_name}")
+
+    slider_path = opts.get("slider_path") or ""
+    if slider_path:
+        path_edit = dialog.findChild(QLineEdit, "qtSliderPathLineEdit")
+        if path_edit is not None:
+            path_edit.setText(str(slider_path))
+            notes.append(f"path={slider_path}")
+
+    _mixer_set_checkbox(
+        dialog, "qtUseUnderPartFolderCheckBox",
+        bool(opts.get("use_parts_folder", False)), notes,
+    )
+
+    head_parts = dict(_MIXER_HEAD_PART_DEFAULTS)
+    head_parts.update(opts.get("head_parts") or {})
+    for key, object_name in _MIXER_HEAD_PART_CHECKBOXES.items():
+        _mixer_set_checkbox(dialog, object_name, bool(head_parts.get(key, True)), notes)
+
+    body_parts = dict(_MIXER_BODY_PART_DEFAULTS)
+    body_parts.update(opts.get("body_parts") or {})
+    for key, object_name in _MIXER_BODY_CHECKBOXES.items():
+        _mixer_set_checkbox(dialog, object_name, bool(body_parts.get(key, False)), notes)
+
+    save_presets = dict(_MIXER_SAVE_PRESET_DEFAULTS)
+    save_presets.update(opts.get("save_presets") or {})
+    _mixer_set_groupbox(dialog, "qtSavePresetGroupBox", bool(save_presets.get("enabled", True)), notes)
+    for key, object_name in _MIXER_SAVE_PRESET_CHECKBOXES.items():
+        _mixer_set_checkbox(dialog, object_name, bool(save_presets.get(key, False)), notes)
+
+    # Save Avatar Presets (whole group) — default disabled.
+    save_avatar = dict(opts.get("save_avatar_presets") or {})
+    _mixer_set_groupbox(
+        dialog, "qtSaveAvatarPresetGroupBox",
+        bool(save_avatar.get("enabled", False)), notes,
+    )
+
+
+def _mixer_set_groupbox(dialog: Any, object_name: str, desired: bool, notes: list[str]) -> None:
+    """Set a checkable QGroupBox to `desired` if it is checkable."""
+    try:
+        from PySide2.QtWidgets import QGroupBox
+    except Exception:
+        return
+    gb = dialog.findChild(QGroupBox, object_name)
+    if gb is None:
+        notes.append(f"groupbox not found: {object_name}")
+        return
+    try:
+        if gb.isCheckable() and bool(gb.isChecked()) != bool(desired):
+            gb.setChecked(bool(desired))
+        notes.append(f"{object_name}={desired}")
+    except Exception as e:
+        notes.append(f"{object_name} set failed: {e}")
+
+
+def create_actor_mixer(params: dict[str, Any]) -> dict[str, Any]:
+    """Drive the ActorMIXER PRO 'Create Mixer Assets' dialog to generate mixer
+    presets (.ccMixerPreset) from the currently open avatar.
+
+    confirm_create is a safety gate:
+      - False (default): set every field, then CANCEL the dialog (dry-run; no
+        files written). Lets callers preview exactly what would be created.
+      - True: set fields then click Create once.
+
+    Because the dialog runs a modal exec loop, the whole chain (menu trigger,
+    trial-msgbox dismiss, field config, Create/Cancel) is scheduled via
+    QTimer.singleShot and this function returns immediately after scheduling.
+
+    Returns: {success, morph_name, created, dry_run, new_presets, presets_dir, error?}
+    """
+    try:
+        from PySide2.QtCore import QTimer
+        from PySide2.QtWidgets import QApplication
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"PySide2 unavailable ({e}); ActorMIXER automation requires the CC5 Qt UI",
+            "created": False,
+            "dry_run": True,
+            "new_presets": [],
+            "presets_dir": "",
+        }
+
+    if params is None:
+        params = {}
+
+    # Single in-flight job: refuse a new request while a prior chain is still
+    # polling for / configuring the dialog (otherwise the still-pending _finish
+    # closure would write stale snapshots into the shared _MIXER_STATE).
+    _IN_FLIGHT = ("scheduled", "dialog_open")
+    if _MIXER_STATE.get("phase") in _IN_FLIGHT:
+        return {
+            "success": False,
+            "error": f"Create Mixer Assets already in-flight (phase={_MIXER_STATE.get('phase')}); "
+                     f"poll GET /actor_mixer/status and retry once idle/created/cancelled.",
+            "created": False,
+            "dry_run": True,
+            "new_presets": [],
+            "presets_dir": _MIXER_STATE.get("presets_dir", ""),
+        }
+
+    # Trial-content precondition: the ActorMIXER plugin shows the trial message
+    # box and ABORTS (CreateMixerSliderDlg never appears) when the avatar holds
+    # trial content. Detect and fail fast — do NOT open or schedule anything,
+    # otherwise the dialog-poll chain would hang until its ~4s timeout.
+    if _mixer_is_trial_content():
+        return {
+            "success": False,
+            "error": (
+                "Cannot create ActorMIXER assets: the current avatar contains "
+                "TRIAL content (IsTrialContentMode is true). The plugin refuses "
+                "to generate mixer presets from trial content. Replace the trial "
+                "asset(s) with owned/purchased equivalents, or load a non-trial "
+                "avatar, then retry."
+            ),
+            "trial_content": True,
+            "created": False,
+            "dry_run": True,
+            "new_presets": [],
+            "presets_dir": "",
+        }
+
+    confirm_create = bool(params.get("confirm_create", False))
+    dry_run = not confirm_create
+
+    # Default morph_name to the open avatar's name.
+    morph_name = (params.get("morph_name") or "").strip()
+    avatar = get_first_avatar()
+    if not morph_name and avatar is not None:
+        try:
+            morph_name = avatar.GetName()
+        except Exception:
+            morph_name = ""
+
+    presets_dir = _mixer_presets_dir()
+    presets_before = _mixer_snapshot_presets(presets_dir)
+
+    opts = {
+        "morph_name": morph_name,
+        "slider_path": params.get("slider_path") or "",
+        "use_parts_folder": bool(params.get("use_parts_folder", False)),
+        "head_parts": params.get("head_parts") or {},
+        "body_parts": params.get("body_parts") or {},
+        "save_presets": params.get("save_presets") or {},
+        "save_avatar_presets": params.get("save_avatar_presets") or {},
+    }
+
+    main_win = _mixer_find_main_window()
+    if main_win is None:
+        return {
+            "success": False,
+            "error": "Could not resolve CC5 main window (RUi.GetMainWindow / shiboken2)",
+            "morph_name": morph_name,
+            "created": False,
+            "dry_run": dry_run,
+            "new_presets": [],
+            "presets_dir": presets_dir,
+        }
+
+    action = _mixer_find_action(main_win)
+    if action is None:
+        return {
+            "success": False,
+            "error": "Could not find 'qtCreateMixerSliderAction' (ActorMIXER PRO required)",
+            "morph_name": morph_name,
+            "created": False,
+            "dry_run": dry_run,
+            "new_presets": [],
+            "presets_dir": presets_dir,
+        }
+
+    notes: list[str] = []
+    _MIXER_STATE.update({
+        "phase": "scheduled",
+        "morph_name": morph_name,
+        "created": False,
+        "dry_run": dry_run,
+        "presets_dir": presets_dir,
+        "presets_before": presets_before,
+        "new_presets": [],
+        "error": "",
+        "notes": notes,
+    })
+
+    # Schedule the async chain. Each step re-arms the next via singleShot so the
+    # bridge thread never blocks inside the modal exec loop.
+    def _on_dialog_ready(attempt: int = 0) -> None:
+        # First, clear any trial-content message box that pre-empts the dialog.
+        _mixer_dismiss_trial_msgbox()
+        dialog = _mixer_find_dialog()
+        if dialog is None:
+            if attempt >= 40:  # ~4s budget at 100ms steps
+                _MIXER_STATE["phase"] = "error"
+                _MIXER_STATE["error"] = "CreateMixerSliderDlg never appeared"
+                return
+            QTimer.singleShot(100, lambda: _on_dialog_ready(attempt + 1))
+            return
+
+        _MIXER_STATE["phase"] = "dialog_open"
+        try:
+            _mixer_apply_fields(dialog, opts, notes)
+        except Exception as e:
+            notes.append(f"apply_fields error: {e}")
+
+        # Defer the final action so field edits settle in the event loop.
+        QTimer.singleShot(50, lambda: _finish(dialog))
+
+    def _post_create() -> None:
+        # Runs ~2.5s after Create is clicked, giving CC5 time to flush the
+        # .ccMixerPreset file(s) to disk before we diff. Only NOW is it safe to
+        # diff and invalidate caches (the inline diff inside _finish would race
+        # the still-pending file write and report an empty new_presets list).
+        try:
+            after = _mixer_snapshot_presets(presets_dir)
+            before_set = set(presets_before)
+            _MIXER_STATE["new_presets"] = [p for p in after if p not in before_set]
+            _invalidate_caches()
+        except Exception as e:
+            notes.append(f"post_create diff error: {e}")
+
+    def _finish(dialog: Any) -> None:
+        try:
+            from PySide2.QtWidgets import QPushButton
+        except Exception as e:
+            _MIXER_STATE["phase"] = "error"
+            _MIXER_STATE["error"] = f"PySide2 QPushButton unavailable: {e}"
+            return
+        try:
+            if confirm_create:
+                btn = dialog.findChild(QPushButton, "qtCreatePushButton")
+                if btn is None:
+                    _MIXER_STATE["phase"] = "error"
+                    _MIXER_STATE["error"] = "qtCreatePushButton not found"
+                    return
+                btn.click()
+                _MIXER_STATE["phase"] = "created"
+                _MIXER_STATE["created"] = True
+                _MIXER_STATE["new_presets"] = []
+                # Defer the presets diff + cache invalidation: the file is not
+                # on disk yet when btn.click() returns (async CC5 work).
+                QTimer.singleShot(2500, _post_create)
+            else:
+                btn = dialog.findChild(QPushButton, "qtCancelPushButton")
+                if btn is not None:
+                    btn.click()
+                else:
+                    dialog.reject()
+                _MIXER_STATE["phase"] = "cancelled"
+        except Exception as e:
+            _MIXER_STATE["phase"] = "error"
+            _MIXER_STATE["error"] = str(e)
+
+    QTimer.singleShot(0, action.trigger)
+    QTimer.singleShot(300, _on_dialog_ready)
+
+    return {
+        "success": True,
+        "morph_name": morph_name,
+        "created": False,          # async — created flips true in _finish; poll get_mixer_status
+        "dry_run": dry_run,
+        "new_presets": [],
+        "presets_dir": presets_dir,
+        "scheduled": True,
+        "notes": list(notes),      # snapshot copy — callbacks keep mutating _MIXER_STATE["notes"]
+        "poll_endpoint": "/actor_mixer/status",
+    }
+
+
+def get_mixer_status() -> dict[str, Any]:
+    """Return the current state of the async Create Mixer Assets job.
+
+    On a completed create, re-diff the presets dir from disk so a poll picks up
+    files CC5 wrote after _finish returned. Short-circuit once new_presets is
+    populated to avoid re-walking the filesystem on every subsequent poll.
+    """
+    state = dict(_MIXER_STATE)
+    if (
+        state.get("phase") == "created"
+        and state.get("presets_dir")
+        and not state.get("new_presets")
+    ):
+        after = _mixer_snapshot_presets(state["presets_dir"])
+        before_set = set(state.get("presets_before") or [])
+        state["new_presets"] = [p for p in after if p not in before_set]
+    return {
+        "success": state.get("phase") != "error",
+        "phase": state.get("phase", "idle"),
+        "morph_name": state.get("morph_name", ""),
+        "created": bool(state.get("created", False)),
+        "dry_run": bool(state.get("dry_run", True)),
+        "new_presets": state.get("new_presets", []),
+        "presets_dir": state.get("presets_dir", ""),
+        # Surface trial mode up front so callers can check before attempting a
+        # create that the plugin would refuse (see _mixer_is_trial_content).
+        "trial_content": _mixer_is_trial_content(),
+        "error": state.get("error", ""),
+        "notes": list(state.get("notes", [])),
+    }
+
+
 # --- Auto-patch server ACTION_MAP on reload ---
 
 def _auto_patch_server() -> None:
@@ -3261,6 +3926,12 @@ def _auto_patch_server() -> None:
             use_smooth_mesh=bool(p.get("use_smooth_mesh", False)),
             remove_eyelash=bool(p.get("remove_eyelash", False)),
             remove_tearline_occlusion=bool(p.get("remove_tearline_occlusion", False)),
+            embed_textures=bool(p.get("embed_textures", False)),
+            export_motion=bool(p.get("export_motion", True)),
+            fps=(int(p["fps"]) if p.get("fps") is not None else None),
+            motion_range=p.get("motion_range"),
+            convert_image_format=bool(p.get("convert_image_format", False)),
+            texture_size=(int(p["texture_size"]) if p.get("texture_size") is not None else None),
         ),
         "capture_viewport":      lambda p: _self.capture_viewport(p.get("output_path", ""), int(p.get("width", 1280)), int(p.get("height", 720))),
         "set_subdivision_level": lambda p: _self.set_subdivision_level(int(p["level"])),
@@ -3324,6 +3995,9 @@ def _auto_patch_server() -> None:
         ),
         "silent_finalize": lambda p: _self.silent_finalize(),
         "get_export_status": lambda p: _self.get_export_status(),
+        # ActorMIXER PRO: Create Mixer Assets
+        "create_actor_mixer": lambda p: _self.create_actor_mixer(p),
+        "get_mixer_status":   lambda p: _self.get_mixer_status(),
     })
 
     # Also patch routes so new endpoints work after reload
@@ -3372,6 +4046,8 @@ def _auto_patch_server() -> None:
             "/export/head_mh/silent/trigger_dialog":  "silent_trigger_dialog",
             "/export/head_mh/silent/configure_click": "silent_configure_and_click",
             "/export/head_mh/silent/finalize":        "silent_finalize",
+            # ActorMIXER PRO: Create Mixer Assets
+            "/actor_mixer/create":                    "create_actor_mixer",
         })
     if hasattr(srv, "GET_ROUTES"):
         srv.GET_ROUTES.update({
@@ -3388,6 +4064,8 @@ def _auto_patch_server() -> None:
             "/scene/objects":    "get_scene_objects",
             # Silent export polling
             "/export/head_mh/status": "get_export_status",
+            # ActorMIXER PRO: Create Mixer Assets polling
+            "/actor_mixer/status": "get_mixer_status",
         })
     if hasattr(srv, "REQUIRED_PARAMS"):
         srv.REQUIRED_PARAMS.update({
@@ -3419,6 +4097,8 @@ def _auto_patch_server() -> None:
             # Mesh-to-MetaHuman pipeline helpers
             "export_head_metahuman":   ["output_dir", "character_name"],
             "silent_install_filter": ["output_dir", "character_name"],
+            # ActorMIXER PRO: Create Mixer Assets (safety gate)
+            "create_actor_mixer":      ["confirm_create"],
         })
 
     print("[CC5 MCP Bridge] Auto-patched ACTION_MAP + routes")

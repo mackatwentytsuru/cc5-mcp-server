@@ -51,7 +51,8 @@ The MCP server provides 44 tools across 14 modules for controlling CC5:
 | `remove_scene_item` | Remove clothing, hair, or accessories by name |
 | `browse_content` | Browse CC5 content folders (clothes, shoes, etc.) |
 | `load_asset` | Load a CC5 asset file (.iAvatar, .ccm, .iClothes, etc.) |
-| `export_fbx` | Export the current avatar as an FBX file |
+| `export_fbx` | Export the current avatar as an FBX file. Mirrors the CC5 "Export FBX" dialog: `target_tool` preset, `export_motion` ("Mesh and Motion"), `sub_d_level` (HD subdivision), `embed_textures`, `fps`, `motion_range`, `convert_image_format`, `texture_size`. A bare filename exports into `D:\CC5Export` (override via `CC5_EXPORT_DIR`). |
+| `create_actor_mixer` | Generate ActorMIXER PRO mixer assets (.ccMixerPreset) from the open avatar. `confirm_create` gates a dry-run (false, CANCELs) vs real creation (true). Requires the ActorMIXER PRO plugin. |
 
 #### Materials & Colors
 | Tool | Description |
@@ -193,6 +194,21 @@ Claude will call `adjust_multiple_morphs` with an array of morph adjustments for
 
 Claude will call `export_fbx` with the specified output path.
 
+The tool reproduces the CC5 "Export FBX (InstaLOD)" dialog. The recommended Unreal (UE5 Skeleton) call is:
+
+```jsonc
+{
+  "output_path": "character.fbx",   // bare filename -> D:\CC5Export\character.fbx
+  "target_tool": "UE5",             // Target Tool Preset: Unreal (UE5 Skeleton)
+  "export_motion": true,            // FBX Options: Mesh and Motion
+  "sub_d_level": 0,                  // HD Character Subdivision Level: SubD 0
+  "embed_textures": true,           // Texture Settings: Embed Textures = ON
+  "fps": 30                          // Include Motion: Frame Rate = 30 (Current Animation = All)
+}
+```
+
+Passing a bare filename (no directory component) exports into `D:\CC5Export` by default — override the folder with the `CC5_EXPORT_DIR` environment variable. Absolute paths are used as-is. Omitting `motion_range` keeps the dialog default "All".
+
 ## Configuration
 
 | Environment Variable | Default | Description |
@@ -204,6 +220,7 @@ Claude will call `export_fbx` with the specified output path.
 | `CC5_RELOAD_SECRET` | *(empty)* | Auth token for the `/reload` endpoint. If set, requests must include `X-Reload-Token` header |
 | `CC5_REQUEST_TIMEOUT_MS` | `30000` | HTTP request timeout in milliseconds (MCP server side) |
 | `CC5_ROOT` | `C:\Program Files\Reallusion\Character Creator 5` | CC5 installation path (used for default avatar loading) |
+| `CC5_EXPORT_DIR` | `D:\CC5Export` | Default output folder for `export_fbx` when given a bare filename (no directory). Read by the bridge plugin. |
 
 ## Development
 

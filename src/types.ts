@@ -237,14 +237,42 @@ export interface ExportFbxOptions {
   use_smooth_mesh?: boolean;
   remove_eyelash?: boolean;
   remove_tearline_occlusion?: boolean;
+  /** "Embed Textures" — bundle textures into the FBX. */
+  embed_textures?: boolean;
+  /** FBX Options: true = "Mesh and Motion" (default), false = "Mesh" only. */
+  export_motion?: boolean;
+  /** Include Motion frame rate (e.g. 30). Maps to RLPy.RFps.Fps{n}. */
+  fps?: number;
+  /** Include Motion frame range [start, end]. Omit for "All". */
+  motion_range?: [number, number];
+  /** "Convert Image Format" (TIF -> PNG). */
+  convert_image_format?: boolean;
+  /** "Max Texture Size" in pixels (0 = original). */
+  texture_size?: number;
 }
 
 export interface ExportFbxResult extends OperationResult {
   path?: string;
   flags?: number;
   flags2?: number;
+  flags3?: number;
+  flags_applied?: boolean;
   notes?: string[];
   target_tool?: string;
+  /** HD Character Subdivision Level actually applied (SetExportLevel). */
+  export_level?: number;
+  /** Whether motion was included ("Mesh and Motion"). */
+  export_motion?: boolean;
+  /** Motion frame rate actually applied. */
+  fps?: number;
+  /** Motion frame range actually applied. */
+  motion_range?: [number, number];
+  /** Max texture size actually applied. */
+  texture_size?: number;
+  /** Whether textures were embedded. */
+  embed_textures?: boolean;
+  /** Whether image format conversion was applied. */
+  convert_image_format?: boolean;
 }
 
 export interface BakeSkinResult extends OperationResult {
@@ -263,4 +291,66 @@ export interface ExportHeadMetaHumanResult extends OperationResult {
   character_name?: string;
   gender?: string;
   notes?: string[];
+}
+
+// --- ActorMIXER PRO: Create Mixer Assets ---
+
+/** Head-part checkboxes on the Create Mixer Assets dialog (default: all true). */
+export interface MixerHeadParts {
+  eyes?: boolean;
+  forehead?: boolean;
+  chin?: boolean;
+  mouth?: boolean;
+  ears?: boolean;
+  nose?: boolean;
+  head_shape?: boolean;
+}
+
+/** Body-part checkboxes (default: all false). */
+export interface MixerBodyParts {
+  body?: boolean;
+  torso?: boolean;
+}
+
+/**
+ * 'Save Presets' groupbox + children. `enabled` toggles the groupbox itself.
+ * Default: enabled with character/head/head_parts/body on, body_parts off.
+ */
+export interface MixerSavePresets {
+  enabled?: boolean;
+  character?: boolean;
+  head?: boolean;
+  head_parts?: boolean;
+  body?: boolean;
+  body_parts?: boolean;
+}
+
+/** 'Save Avatar Presets' groupbox (default: disabled). */
+export interface MixerSaveAvatarPresets {
+  enabled?: boolean;
+}
+
+export interface CreateActorMixerOptions {
+  morph_name?: string;
+  slider_path?: string;
+  use_parts_folder?: boolean;
+  head_parts?: MixerHeadParts;
+  body_parts?: MixerBodyParts;
+  save_presets?: MixerSavePresets;
+  save_avatar_presets?: MixerSaveAvatarPresets;
+  /** Safety gate. false (default) => set fields then CANCEL (dry-run). true => click Create once. */
+  confirm_create?: boolean;
+}
+
+export interface CreateActorMixerResult extends OperationResult {
+  morph_name?: string;
+  created?: boolean;
+  dry_run?: boolean;
+  new_presets?: string[];
+  presets_dir?: string;
+  scheduled?: boolean;
+  notes?: string[];
+  poll_endpoint?: string;
+  /** True when the open avatar holds trial content; ActorMIXER refuses to run. */
+  trial_content?: boolean;
 }

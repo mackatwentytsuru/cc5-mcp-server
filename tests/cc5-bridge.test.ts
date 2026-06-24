@@ -16,6 +16,7 @@ import type {
   MaterialInfo,
   DiffuseColor,
   SetDiffuseColorResult,
+  CreateActorMixerResult,
 } from "../src/types.js";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -444,6 +445,63 @@ describe("CC5Bridge.exportFbx", () => {
     expect(vi.mocked(fetch)).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ body: JSON.stringify({ output_path: "C:/out.fbx", options: 3 }) })
+    );
+  });
+
+  it("forwards CC5 dialog options (mesh+motion, embed textures, fps, subd) to the body", async () => {
+    mockFetch<OperationResult>({ result: { success: true } });
+    await bridge.exportFbx("C:/out.fbx", 0, {
+      target_tool: "UE5",
+      export_motion: true,
+      embed_textures: true,
+      fps: 30,
+      sub_d_level: 0,
+    });
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        body: JSON.stringify({
+          output_path: "C:/out.fbx",
+          options: 0,
+          target_tool: "UE5",
+          sub_d_level: 0,
+          embed_textures: true,
+          export_motion: true,
+          fps: 30,
+        }),
+      })
+    );
+  });
+
+  it("forwards motion_range, texture_size, and convert_image_format", async () => {
+    mockFetch<OperationResult>({ result: { success: true } });
+    await bridge.exportFbx("C:/out.fbx", 0, {
+      motion_range: [0, 100],
+      texture_size: 2048,
+      convert_image_format: true,
+    });
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        body: JSON.stringify({
+          output_path: "C:/out.fbx",
+          options: 0,
+          motion_range: [0, 100],
+          convert_image_format: true,
+          texture_size: 2048,
+        }),
+      })
+    );
+  });
+
+  it("omits unset optional params from the body", async () => {
+    mockFetch<OperationResult>({ result: { success: true } });
+    await bridge.exportFbx("C:/out.fbx", 0, { export_motion: false });
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        body: JSON.stringify({ output_path: "C:/out.fbx", options: 0, export_motion: false }),
+      })
     );
   });
 
@@ -918,5 +976,106 @@ describe("CC5Bridge.setDiffuseColor", () => {
   it("throws on network failure", async () => {
     mockFetchError("ECONNREFUSED");
     await expect(bridge.setDiffuseColor("M", "N", 0, 0, 0)).rejects.toThrow("ECONNREFUSED");
+  });
+});
+
+// ── createActorMixer ──────────────────────────────────────────────────────────
+
+describe("CC5Bridge.createActorMixer", () => {
+  const dryRun: CreateActorMixerResult = {
+    success: true,
+    morph_name: "Camila",
+    created: false,
+    dry_run: true,
+    new_presets: [],
+    presets_dir: "C:/Custom/ActorMIXER",
+    scheduled: true,
+  };
+
+  it("sends POST /actor_mixer/create with confirm_create always present", async () => {
+    mockFetch<CreateActorMixerResult>({ result: dryRun });
+    await bridge.createActorMixer({ confirm_create: false });
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      "http://localhost:5101/actor_mixer/create",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ confirm_create: false }),
+      })
+    );
+  });
+
+  it("includes only provided optional fields in the body", async () => {
+    mockFetch<CreateActorMixerResult>({ result: dryRun });
+    await bridge.createActorMixer({
+      confirm_create: true,
+      morph_name: "Hero",
+      use_parts_folder: true,
+      head_parts: { eyes: false },
+    });
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        body: JSON.stringify({
+          confirm_create: true,
+          morph_name: "Hero",
+          use_parts_folder: true,
+          head_parts: { eyes: false },
+        }),
+      })
+    );
+  });
+
+  it("returns the dry-run result on success", async () => {
+    mockFetch<CreateActorMixerResult>({ result: dryRun });
+    const result = await bridge.createActorMixer({ confirm_create: false });
+    expect(result.success).toBe(true);
+    expect(result.dry_run).toBe(true);
+    expect(result.presets_dir).toBe("C:/Custom/ActorMIXER");
+  });
+
+  it("returns created result with new_presets on confirmed create", async () => {
+    mockFetch<CreateActorMixerResult>({
+      result: {
+        success: true,
+        morph_name: "Camila",
+        created: true,
+        dry_run: false,
+        new_presets: ["C:/Custom/ActorMIXER/Camila.ccMixerPreset"],
+        presets_dir: "C:/Custom/ActorMIXER",
+      },
+    });
+    const result = await bridge.createActorMixer({ confirm_create: true });
+    expect(result.created).toBe(true);
+    expect(result.new_presets).toEqual(["C:/Custom/ActorMIXER/Camila.ccMixerPreset"]);
+  });
+
+  it("returns failure when ActorMIXER PRO is unavailable", async () => {
+    mockFetch<CreateActorMixerResult>({
+      result: { success: false, error: "ActorMIXER PRO required" },
+    });
+    const result = await bridge.createActorMixer({ confirm_create: false });
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("ActorMIXER PRO required");
+  });
+
+  it("passes through the trial_content flag from the bridge", async () => {
+    mockFetch<CreateActorMixerResult>({
+      result: { success: false, error: "trial content", trial_content: true },
+    });
+    const result = await bridge.createActorMixer({ confirm_create: true });
+    expect(result.success).toBe(false);
+    expect(result.trial_content).toBe(true);
+  });
+
+  it("throws on HTTP error", async () => {
+    mockFetchHttpError(500, "server error");
+    await expect(bridge.createActorMixer({ confirm_create: false })).rejects.toThrow(
+      "CC5 bridge error (500)"
+    );
+  });
+
+  it("throws on network failure", async () => {
+    mockFetchError("ECONNREFUSED");
+    await expect(bridge.createActorMixer({ confirm_create: true })).rejects.toThrow("ECONNREFUSED");
   });
 });

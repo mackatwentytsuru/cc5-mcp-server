@@ -87,6 +87,8 @@ REQUIRED_PARAMS: dict[str, list[str]] = {
     # Mesh-to-MetaHuman pipeline helpers
     "export_head_metahuman":   ["output_dir", "character_name"],
     "silent_install_filter":   ["output_dir", "character_name"],
+    # ActorMIXER PRO: Create Mixer Assets (safety gate)
+    "create_actor_mixer":      ["confirm_create"],
 }
 
 # --- Dynamic dispatch tables (can be hot-patched at runtime) ---
@@ -112,6 +114,12 @@ ACTION_MAP: dict[str, Any] = {
         use_smooth_mesh=bool(p.get("use_smooth_mesh", False)),
         remove_eyelash=bool(p.get("remove_eyelash", False)),
         remove_tearline_occlusion=bool(p.get("remove_tearline_occlusion", False)),
+        embed_textures=bool(p.get("embed_textures", False)),
+        export_motion=bool(p.get("export_motion", True)),
+        fps=(int(p["fps"]) if p.get("fps") is not None else None),
+        motion_range=p.get("motion_range"),
+        convert_image_format=bool(p.get("convert_image_format", False)),
+        texture_size=(int(p["texture_size"]) if p.get("texture_size") is not None else None),
     ),
     "capture_viewport":      lambda p: cc5_api.capture_viewport(p.get("output_path", ""), int(p.get("width", 1280)), int(p.get("height", 720))),
     "set_subdivision_level": lambda p: cc5_api.set_subdivision_level(int(p["level"])),
@@ -175,6 +183,9 @@ ACTION_MAP: dict[str, Any] = {
     ),
     "silent_finalize": lambda p: cc5_api.silent_finalize(),
     "get_export_status": lambda p: cc5_api.get_export_status(),
+    # ActorMIXER PRO: Create Mixer Assets
+    "create_actor_mixer": lambda p: cc5_api.create_actor_mixer(p),
+    "get_mixer_status":   lambda p: cc5_api.get_mixer_status(),
 }
 
 # POST path -> action name
@@ -230,6 +241,8 @@ POST_ROUTES: dict[str, str] = {
     "/export/head_mh/silent/trigger_dialog":  "silent_trigger_dialog",
     "/export/head_mh/silent/configure_click": "silent_configure_and_click",
     "/export/head_mh/silent/finalize":        "silent_finalize",
+    # ActorMIXER PRO: Create Mixer Assets
+    "/actor_mixer/create":                    "create_actor_mixer",
 }
 
 # GET path -> action name (None = handle inline)
@@ -253,6 +266,8 @@ GET_ROUTES: dict[str, str | None] = {
     "/scene/objects":  "get_scene_objects",
     # Silent export polling
     "/export/head_mh/status": "get_export_status",
+    # ActorMIXER PRO: Create Mixer Assets polling
+    "/actor_mixer/status": "get_mixer_status",
 }
 
 

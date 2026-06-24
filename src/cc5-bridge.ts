@@ -46,6 +46,8 @@ import type {
   ExportFbxResult,
   BakeSkinResult,
   ExportHeadMetaHumanResult,
+  CreateActorMixerOptions,
+  CreateActorMixerResult,
 } from "./types.js";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:5101";
@@ -197,6 +199,12 @@ export class CC5Bridge {
     if (extra.use_smooth_mesh !== undefined) body.use_smooth_mesh = extra.use_smooth_mesh;
     if (extra.remove_eyelash !== undefined) body.remove_eyelash = extra.remove_eyelash;
     if (extra.remove_tearline_occlusion !== undefined) body.remove_tearline_occlusion = extra.remove_tearline_occlusion;
+    if (extra.embed_textures !== undefined) body.embed_textures = extra.embed_textures;
+    if (extra.export_motion !== undefined) body.export_motion = extra.export_motion;
+    if (extra.fps !== undefined) body.fps = extra.fps;
+    if (extra.motion_range !== undefined) body.motion_range = extra.motion_range;
+    if (extra.convert_image_format !== undefined) body.convert_image_format = extra.convert_image_format;
+    if (extra.texture_size !== undefined) body.texture_size = extra.texture_size;
     return this.request<ExportFbxResult>("/export/fbx", "POST", body);
   }
 
@@ -519,5 +527,21 @@ export class CC5Bridge {
 
   async execPython(code: string): Promise<{ success: boolean; output?: string; result?: string; error?: string }> {
     return this.request<{ success: boolean; output?: string; result?: string; error?: string }>("/exec/python", "POST", { code });
+  }
+
+  // --- ActorMIXER PRO: Create Mixer Assets ---
+
+  async createActorMixer(opts: CreateActorMixerOptions): Promise<CreateActorMixerResult> {
+    const body: Record<string, unknown> = {
+      confirm_create: opts.confirm_create ?? false,
+    };
+    if (opts.morph_name !== undefined) body.morph_name = opts.morph_name;
+    if (opts.slider_path !== undefined) body.slider_path = opts.slider_path;
+    if (opts.use_parts_folder !== undefined) body.use_parts_folder = opts.use_parts_folder;
+    if (opts.head_parts !== undefined) body.head_parts = opts.head_parts;
+    if (opts.body_parts !== undefined) body.body_parts = opts.body_parts;
+    if (opts.save_presets !== undefined) body.save_presets = opts.save_presets;
+    if (opts.save_avatar_presets !== undefined) body.save_avatar_presets = opts.save_avatar_presets;
+    return this.request<CreateActorMixerResult>("/actor_mixer/create", "POST", body);
   }
 }

@@ -34,6 +34,8 @@ import type {
   SetMaterialPropertyResult,
   ShaderParameters,
   SetShaderParameterResult,
+  CreateActorMixerOptions,
+  CreateActorMixerResult,
 } from "../../src/types.js";
 
 export type MockBridge = {
@@ -52,7 +54,7 @@ export function createMockBridge(): MockBridge {
     createDefaultAvatar: vi.fn<[], Promise<CreateAvatarResult>>(),
     deleteAvatar: vi.fn<[string], Promise<DeleteAvatarResult>>(),
     loadAsset: vi.fn<[string], Promise<OperationResult>>(),
-    exportFbx: vi.fn<[string, number?], Promise<OperationResult>>(),
+    exportFbx: vi.fn<[string, number?, Record<string, unknown>?], Promise<OperationResult>>(),
     captureViewport: vi.fn<[string?], Promise<CaptureResult>>(),
     setSubdivisionLevel: vi.fn<[number], Promise<OperationResult>>(),
     undo: vi.fn<[], Promise<OperationResult>>(),
@@ -83,6 +85,7 @@ export function createMockBridge(): MockBridge {
     setMaterialSpecular: vi.fn<[string, string, number], Promise<SetMaterialPropertyResult>>(),
     getShaderParameters: vi.fn<[string, string], Promise<ShaderParameters>>(),
     setShaderParameter: vi.fn<[string, string, string, number[]], Promise<SetShaderParameterResult>>(),
+    createActorMixer: vi.fn<[CreateActorMixerOptions], Promise<CreateActorMixerResult>>(),
   };
 }
 
