@@ -142,6 +142,12 @@ ACTION_MAP: dict[str, Any] = {
     "set_ambient":           lambda p: cc5_api.set_ambient(float(p["r"]), float(p["g"]), float(p["b"])),
     "set_ibl":               lambda p: cc5_api.set_ibl(p.get("image_path", ""), bool(p.get("enable", True))),
     "get_expression_info":   lambda p: cc5_api.get_expression_info(),
+    "get_facial_profile":    lambda p: cc5_api.get_facial_profile(),
+    "convert_facial_profile": lambda p: cc5_api.convert_facial_profile(
+        p.get("target_profile_path", ""),
+        bool(p.get("dry_run", True)),
+        p.get("backup_current_to", ""),
+    ),
     "set_expression":        lambda p: cc5_api.set_expression(p["expressions"]),
     "reset_expression":      lambda p: cc5_api.reset_expression(),
     "reset_all_morphs":      lambda p: cc5_api.reset_all_morphs(p.get("avatar_name", "")),
@@ -214,6 +220,7 @@ POST_ROUTES: dict[str, str] = {
     "/visual/ibl":       "set_ibl",
     "/expression/set":   "set_expression",
     "/expression/reset": "reset_expression",
+    "/facial/profile/convert": "convert_facial_profile",
     "/material/info":    "get_material_info",
     "/material/color/get": "get_diffuse_color",
     "/material/color/set": "set_diffuse_color",
@@ -257,6 +264,7 @@ GET_ROUTES: dict[str, str | None] = {
     "/lights":         "get_lights",
     "/visual/settings": "get_visual_settings",
     "/expressions":    "get_expression_info",
+    "/facial/profile": "get_facial_profile",
     "/material/info":  "get_material_info",
     # Tier 1: Content Management
     "/clothes":        "list_clothes",

@@ -133,6 +133,45 @@ export interface ExpressionResetResult extends OperationResult {
   reset_count?: number;
 }
 
+/** Result of get_facial_profile — the current avatar's expression profile. */
+export interface FacialProfileInfo extends OperationResult {
+  avatar?: string;
+  /** RLPy EFacialProfile enum int (0=None,1=CC5MetaHuman,2=CC4Extended,3=CC4Standard,4=Traditional). */
+  profile_type_id?: number;
+  /** Authoritative profile type label from GetProfileType(). */
+  profile_type?: string;
+  /** Expression-set UID string from GetExpressionSetUid(), e.g. "CC5 MetaHuman". */
+  expression_set_uid?: string;
+  category_slider_counts?: Record<string, number>;
+  total_sliders?: number;
+  category_count?: number;
+  /** Heuristic ExPlus/HD/MetaHuman/Traditional class from UID + slider count. */
+  heuristic_class?: string;
+  arkit_capable?: boolean;
+}
+
+/** Small before/after profile summary embedded in ConvertFacialProfileResult. */
+export interface FacialProfileSummary {
+  profile_type?: string;
+  expression_set_uid?: string;
+  total_sliders?: number;
+}
+
+/** Result of convert_facial_profile (LoadProfile-based swap; dry_run by default). */
+export interface ConvertFacialProfileResult extends OperationResult {
+  dry_run?: boolean;
+  applied?: boolean;
+  current_profile?: FacialProfileSummary;
+  before?: FacialProfileSummary;
+  after?: FacialProfileSummary;
+  target_profile_path?: string;
+  target_path_valid?: boolean;
+  path_error?: string | null;
+  backup_current_to?: string;
+  backup_saved_to?: string | null;
+  notes?: string[];
+}
+
 export interface ResetMorphsResult extends OperationResult {
   reset_count?: number;
 }
