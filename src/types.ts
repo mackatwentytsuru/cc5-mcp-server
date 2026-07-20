@@ -2,6 +2,18 @@
  * Type definitions for CC5 MCP Server.
  */
 
+/** /health payload. `main_thread_blocked` is true when a modal dialog (or any main-thread
+ *  block) is stopping CC5 from draining the RLPy command queue. */
+export interface CC5Health {
+  status: string;
+  service: string;
+  version?: string;
+  main_thread_blocked: boolean;
+  ms_since_main_thread_tick: number | null;
+  queue_depth: number;
+  hint?: string;
+}
+
 export interface CC5Avatar {
   name: string;
   id: string;

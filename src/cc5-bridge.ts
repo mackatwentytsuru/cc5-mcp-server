@@ -3,6 +3,7 @@
  */
 
 import type {
+  CC5Health,
   CC5Avatar,
   CC5Response,
   MorphCatalog,
@@ -128,6 +129,23 @@ export class CC5Bridge {
     } catch (err) {
       console.error("[CC5 Bridge] healthCheck failed:", err);
       return false;
+    }
+  }
+
+  /**
+   * Full health, including whether CC5's main thread is actually running.
+   *
+   * The bridge's HTTP server lives on its own thread, so /health answers even when
+   * CC5 is frozen behind a modal dialog. In that state every queued RLPy call hangs
+   * until the dialog is dismissed. `main_thread_blocked` is what distinguishes
+   * "reachable" from "able to do work" -- always check it before reporting success.
+   */
+  async healthDetail(): Promise<CC5Health | null> {
+    try {
+      return await this.request<CC5Health>("/health");
+    } catch (err) {
+      console.error("[CC5 Bridge] healthDetail failed:", err);
+      return null;
     }
   }
 

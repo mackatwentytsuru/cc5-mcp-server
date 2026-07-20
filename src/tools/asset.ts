@@ -84,7 +84,10 @@ export function registerAssetTools(server: McpServer, bridge: CC5Bridge) {
         .describe("FBX Options: true = 'Mesh and Motion' (default), false = 'Mesh' (mesh only)."),
       fps: z.number().int().positive().optional()
         .describe("Include Motion 'Frame Rate' (e.g. 30). Maps to RLPy.RFps.Fps{n}; unsupported values are skipped with a note."),
-      motion_range: z.tuple([z.number().int(), z.number().int()]).optional()
+      // NOTE: z.tuple() は JSON Schema でタプル形式 items(スキーマの配列)を生成するが、
+      // z.ai (GLM Coding Plan) のバリデータはこれを 400[1210] で拒否する。
+      // z.array().length(2) なら意味は同じ([start, end]の2要素)で Anthropic/z.ai 両対応。
+      motion_range: z.array(z.number().int()).length(2).optional()
         .describe("Include Motion frame range [start, end]. Omit for 'All' (the dialog default)."),
       convert_image_format: z.boolean().optional()
         .describe("Texture Settings 'Convert Image Format' (TIF -> PNG)."),

@@ -136,6 +136,98 @@ def _invalidate_caches() -> None:
     _render_image_broken = False
 
 
+def headshot_from_photo(
+    photo_path: str,
+    body_type: str = "Neutral",
+    baby: bool = False,
+) -> dict[str, Any]:
+    """Create a Headshot 3 character using Reallusion's bundled RLPy2 pattern.
+
+    The file guard runs before any Headshot API call. Silent mode is restored to
+    its previous value even when generation raises, and scene-dependent caches
+    are invalidated after every attempted generation because the avatar may have
+    been replaced before an exception was reported.
+    """
+    import time
+
+    if not isinstance(photo_path, str) or not photo_path.strip():
+        return {"ok": False, "error": "photo_path must be a non-empty string"}
+    resolved_photo = os.path.realpath(photo_path)
+    if not os.path.isfile(resolved_photo):
+        return {"ok": False, "error": f"photo not found: {resolved_photo}"}
+
+    # Verified by introspecting RLPy2.EHSBodyType on CC5 v5.11.1823:
+    #   Male=0 Female=1 Baby=2 Kid=3 Neutral=4 Current=5
+    # RLPy (v1) numbers these differently (Neutral=3, no Kid), so never pass raw
+    # ints between the two APIs -- always resolve by attribute name as below.
+    # "Current" is excluded deliberately: it reuses the avatar already in the
+    # scene, which is not what a photo-to-head call should do.
+    allowed_body_types = {"Male", "Female", "Baby", "Kid", "Neutral"}
+    if body_type not in allowed_body_types:
+        return {
+            "ok": False,
+            "error": f"unsupported body_type: {body_type}",
+            "allowed": sorted(allowed_body_types),
+        }
+    if not isinstance(baby, bool):
+        return {
+            "ok": False,
+            "error": "baby must be a bool",
+        }
+
+    import RLPy2
+
+    face_feature_preset = RLPy2.RArrayListWString()
+    skin_list = RLPy2.RArrayListWString(3, "None")
+    skin_list[0] = "Soft Skin"
+    mask_list = RLPy2.RArrayListWString(4, "None")
+    mask_list[0] = "No Mask"
+    body_type_value = getattr(RLPy2.EHSBodyType, body_type)
+
+    previous_silent = None
+    silent_changed = False
+    started = time.perf_counter()
+    try:
+        if hasattr(RLPy, "RGlobal_GetSilentMode") and hasattr(RLPy, "RGlobal_SetSilentMode"):
+            previous_silent = bool(RLPy.RGlobal_GetSilentMode())
+            RLPy.RGlobal_SetSilentMode(True)
+            silent_changed = True
+        hs_interface = RLPy2.Headshot3.GetInterface()
+        ret = hs_interface.CenerateCharacter(
+            resolved_photo,
+            body_type_value,
+            baby,
+            face_feature_preset,
+            skin_list,
+            mask_list,
+        )
+        elapsed = time.perf_counter() - started
+        return {
+            "ok": True,
+            "ret": repr(ret),
+            "elapsed_seconds": round(elapsed, 3),
+            "body_type": body_type,
+            "baby": baby,
+            "avatar_count": len(RLPy.RScene.GetAvatars()),
+        }
+    except Exception as exc:
+        elapsed = time.perf_counter() - started
+        return {
+            "ok": False,
+            "error": repr(exc),
+            "elapsed_seconds": round(elapsed, 3),
+            "body_type": body_type,
+            "baby": baby,
+        }
+    finally:
+        _invalidate_caches()
+        if silent_changed:
+            try:
+                RLPy.RGlobal_SetSilentMode(previous_silent)
+            except Exception:
+                pass
+
+
 def get_morph_catalog() -> dict[str, list[dict[str, str]]]:
     """Enumerate all available shaping morph IDs, grouped by category (cached per avatar ID)."""
     avatar = get_first_avatar()
