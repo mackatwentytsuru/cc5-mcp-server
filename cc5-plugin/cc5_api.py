@@ -4038,14 +4038,9 @@ def _auto_patch_server() -> None:
             "/color/skin":       "set_skin_color",
             # Tier 4: Visibility & Scene
             "/item/visible":     "set_item_visible",
-            "/exec/python":      "exec_python",
             # Mesh-to-MetaHuman pipeline helpers
             "/skin/bake":        "bake_skin_textures",
             "/export/head_mh":   "export_head_metahuman",
-            "/export/head_mh/silent/install_filter":  "silent_install_filter",
-            "/export/head_mh/silent/trigger_dialog":  "silent_trigger_dialog",
-            "/export/head_mh/silent/configure_click": "silent_configure_and_click",
-            "/export/head_mh/silent/finalize":        "silent_finalize",
             # ActorMIXER PRO: Create Mixer Assets
             "/actor_mixer/create":                    "create_actor_mixer",
         })

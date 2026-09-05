@@ -525,10 +525,6 @@ export class CC5Bridge {
     return this.request<SceneObject[]>("/scene/objects");
   }
 
-  async execPython(code: string): Promise<{ success: boolean; output?: string; result?: string; error?: string }> {
-    return this.request<{ success: boolean; output?: string; result?: string; error?: string }>("/exec/python", "POST", { code });
-  }
-
   // --- ActorMIXER PRO: Create Mixer Assets ---
 
   async createActorMixer(opts: CreateActorMixerOptions): Promise<CreateActorMixerResult> {
