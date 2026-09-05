@@ -216,7 +216,6 @@ Passing a bare filename (no directory component) exports into `D:\CC5Export` by 
 | `CC5_BRIDGE_URL` | `http://127.0.0.1:5101` | Full URL of the CC5 bridge HTTP server |
 | `CC5_BRIDGE_PORT` | `5101` | Port for the bridge server (set in `cc5-plugin/main.py`) |
 | `CC5_DEV_MODE` | `1` | Enable hot-reload (`/reload` endpoint) and dev surfaces (0 = production, 1 = development) |
-| `CC5_ALLOW_EXEC` | *(unset)* | Enable `/exec/python` and `/exec/rlpy` endpoints (only active when set, regardless of DEV_MODE) |
 | `CC5_RELOAD_SECRET` | *(empty)* | Auth token for the `/reload` endpoint. If set, requests must include `X-Reload-Token` header |
 | `CC5_REQUEST_TIMEOUT_MS` | `30000` | HTTP request timeout in milliseconds (MCP server side) |
 | `CC5_ROOT` | `C:\Program Files\Reallusion\Character Creator 5` | CC5 installation path (used for default avatar loading) |
@@ -275,7 +274,6 @@ cc5-mcp-server/
 │   │   ├── visibility.ts   # Show/hide items (2 tools)
 │   │   ├── edit.ts         # Undo/redo (2 tools)
 │   │   ├── expression.ts   # Expression info (1 tool)
-│   │   ├── scripting.ts    # Python/RLPy execution (1 tool)
 │   │   └── metahuman.ts    # MetaHuman export (2 tools)
 │   └── resources/
 │       └── morphs.ts       # Morph catalog & avatar state resources

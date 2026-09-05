@@ -208,7 +208,7 @@ s, r = call("POST", "/skin/bake", {}, timeout=120); ok("bake_skin_textures (resp
 s, r = call("GET", "/export/head_mh/status"); ok("export_head_mh status", s == 200 and is_resp(r))
 s, r = call("POST", "/undo"); ok("undo", res(r).get("success") is not False and is_resp(r))
 s, r = call("POST", "/redo"); ok("redo", res(r).get("success") is not False and is_resp(r))
-s, r = call("POST", "/exec/python", {"code": "result=6*7"}); ok("exec_python", res(r).get("success") and str(res(r).get("result")) == "42")
+s, r = call("POST", "/exec/python", {"code": "result=6*7"}); ok("exec/python removed (404)", s == 404)
 
 print(f"\n==== {len(P)} PASS / {len(F)} FAIL / {len(S)} SKIP ====")
 if F:
