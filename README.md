@@ -18,9 +18,9 @@ The MCP server communicates with Claude via **stdio** transport and forwards com
 
 ## Features
 
-### MCP Tools (57)
+### MCP Tools (59)
 
-The MCP server provides 57 tools (registered in 15 modules under `src/tools/`) for controlling CC5. This list matches the code: there is one `server.tool(` call per tool in `src/tools/*.ts` (57 in total, all with unique names).
+The MCP server provides 59 tools (registered in 16 modules under `src/tools/`) for controlling CC5. This list matches the code: there is one `server.tool(` call per tool in `src/tools/*.ts` (59 in total, all with unique names).
 
 #### Scene & Avatar Management (8)
 | Tool | Description |
@@ -45,12 +45,14 @@ The MCP server provides 57 tools (registered in 15 modules under `src/tools/`) f
 | `apply_body_preset` | Apply a body type preset (athletic, muscular, slim, heavy, average) |
 | `describe_character` | Natural language description of current character appearance |
 
-#### Facial Expressions (3)
+#### Facial Expressions & Profiles (5)
 | Tool | Description |
 |------|-------------|
 | `get_expression_info` | Get available expression groups and sliders |
 | `set_expression` | Set one or more expression sliders by name (weights 0.0-1.0) |
 | `reset_expression` | Reset all expression sliders to neutral |
+| `get_facial_profile` | Detect the current avatar's facial (expression) profile — authoritative RLPy profile type (CC5MetaHuman/CC4Extended/CC4Standard/Traditional), expression-set UID, per-category slider counts, and a heuristic ExPlus/HD/MetaHuman/Traditional class + ARKit capability. Read-only. |
+| `convert_facial_profile` | Swap the active facial profile by loading a target `.ccFacialProfile` asset (`RIFacialProfileComponent.LoadProfile`). RLPy has no direct profile-type / one-click-ExPlus-upgrade API, so a pre-built target profile file is required. `dry_run` defaults to **true** (inspect + validate only). Intended as a temporary switch before export → convert back to a backup to restore. |
 
 #### Content & Assets (9)
 | Tool | Description |
@@ -264,6 +266,8 @@ npm run test:coverage # With coverage report
 npm run test:py      # Bridge plugin security tests (Python 3.10+, no CC5 needed)
 ```
 
+Current suite: 513 Vitest tests in 16 files, plus 36 Python security tests.
+
 ### Hot-Reload the Python Plugin
 
 The bridge supports hot-reloading `cc5_api.py` without restarting CC5. It is off by default: set `CC5_DEV_MODE=1` (or `CC5_RELOAD_SECRET`) in the environment CC5 starts from.
@@ -287,7 +291,7 @@ cc5-mcp-server/
 │   ├── cc5-bridge.ts       # HTTP client for CC5 bridge
 │   ├── types.ts            # Type definitions
 │   ├── util.ts             # Shared utilities (bridgeCall wrapper)
-│   ├── tools/              # MCP tool definitions (15 files, 57 tools total)
+│   ├── tools/              # MCP tool definitions (16 files, 59 tools total)
 │   │   ├── morph.ts        # Morph search, adjust, reset (5 tools)
 │   │   ├── scene.ts        # Scene/avatar management, viewport, subdivision (7 tools)
 │   │   ├── asset.ts        # Asset loading / FBX export (2 tools)
@@ -301,6 +305,7 @@ cc5-mcp-server/
 │   │   ├── visibility.ts   # Show/hide items, scene objects (2 tools)
 │   │   ├── edit.ts         # Undo/redo (2 tools)
 │   │   ├── expression.ts   # Expression info, set, reset (3 tools)
+│   │   ├── facial-profile.ts # Facial profile detect + convert (2 tools)
 │   │   ├── scripting.ts    # Python execution (1 tool)
 │   │   └── metahuman.ts    # MetaHuman export (2 tools)
 │   └── resources/
@@ -330,6 +335,7 @@ The bridge exposes one HTTP route per tool. The tables below list the core route
 | `GET /avatars` | List all scene avatars | `{"result": [{"name": "...", "id": "...", "type": "..."}]}` |
 | `GET /avatar/info` | Current avatar details + active morphs | `{"result": {"name": "...", "active_morphs": {...}}}` |
 | `GET /morphs/catalog` | Full morph catalog grouped by category | `{"result": {"Category": [{"id": "...", "display_name": "..."}]}}` |
+| `GET /facial/profile` | Current avatar's facial-profile detection (read-only) | `{"result": {"profile_type": "CC5MetaHuman", "expression_set_uid": "...", "total_sliders": 379, "heuristic_class": "...", "arkit_capable": true}}` |
 
 ### POST Endpoints
 
@@ -341,6 +347,7 @@ The bridge exposes one HTTP route per tool. The tables below list the core route
 | `POST /avatar/create` | *(none)* | Create a default CC3+ avatar |
 | `POST /asset/load` | `file_path` | Load a CC5 asset file |
 | `POST /export/fbx` | `output_path`, `options` (optional) | Export avatar as FBX |
+| `POST /facial/profile/convert` | `target_profile_path`, `dry_run` (default true), `backup_current_to` (optional) | Swap facial profile via LoadProfile of a target `.ccFacialProfile`. `dry_run=true` inspects/validates only |
 | `POST /viewport/capture` | `output_path` (optional) | Capture viewport screenshot |
 | `POST /subdivision` | `level` (0-2) | Set HD subdivision level |
 

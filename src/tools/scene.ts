@@ -59,13 +59,35 @@ export function registerSceneTools(server: McpServer, bridge: CC5Bridge) {
     {},
     async () => {
       try {
-        const connected = await bridge.healthCheck();
+        const h = await bridge.healthDetail();
+        if (!h) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: "CC5 bridge is NOT responding. Make sure Character Creator 5 is running with the MCP Bridge plugin loaded.",
+            }],
+          };
+        }
+        // Reachable but frozen is the dangerous case: calls queue up and never run,
+        // so a caller that only checks reachability will wait forever.
+        if (h.main_thread_blocked) {
+          const age = h.ms_since_main_thread_tick;
+          return {
+            content: [{
+              type: "text" as const,
+              text:
+                "CC5 bridge is reachable BUT CC5's main thread is BLOCKED" +
+                (age === null ? "" : ` (no tick for ${age} ms)`) +
+                `, queue_depth=${h.queue_depth}.\n` +
+                "A modal dialog in CC5 is the usual cause. Commands sent now will NOT execute " +
+                "until it is dismissed. Do not retry blindly -- report this and wait.",
+            }],
+          };
+        }
         return {
           content: [{
             type: "text" as const,
-            text: connected
-              ? "CC5 bridge is connected and ready."
-              : "CC5 bridge is NOT responding. Make sure Character Creator 5 is running with the MCP Bridge plugin loaded.",
+            text: `CC5 bridge is connected and ready. (main thread alive, queue_depth=${h.queue_depth})`,
           }],
         };
       } catch {

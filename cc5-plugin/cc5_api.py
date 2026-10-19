@@ -136,6 +136,98 @@ def _invalidate_caches() -> None:
     _render_image_broken = False
 
 
+def headshot_from_photo(
+    photo_path: str,
+    body_type: str = "Neutral",
+    baby: bool = False,
+) -> dict[str, Any]:
+    """Create a Headshot 3 character using Reallusion's bundled RLPy2 pattern.
+
+    The file guard runs before any Headshot API call. Silent mode is restored to
+    its previous value even when generation raises, and scene-dependent caches
+    are invalidated after every attempted generation because the avatar may have
+    been replaced before an exception was reported.
+    """
+    import time
+
+    if not isinstance(photo_path, str) or not photo_path.strip():
+        return {"ok": False, "error": "photo_path must be a non-empty string"}
+    resolved_photo = os.path.realpath(photo_path)
+    if not os.path.isfile(resolved_photo):
+        return {"ok": False, "error": f"photo not found: {resolved_photo}"}
+
+    # Verified by introspecting RLPy2.EHSBodyType on CC5 v5.11.1823:
+    #   Male=0 Female=1 Baby=2 Kid=3 Neutral=4 Current=5
+    # RLPy (v1) numbers these differently (Neutral=3, no Kid), so never pass raw
+    # ints between the two APIs -- always resolve by attribute name as below.
+    # "Current" is excluded deliberately: it reuses the avatar already in the
+    # scene, which is not what a photo-to-head call should do.
+    allowed_body_types = {"Male", "Female", "Baby", "Kid", "Neutral"}
+    if body_type not in allowed_body_types:
+        return {
+            "ok": False,
+            "error": f"unsupported body_type: {body_type}",
+            "allowed": sorted(allowed_body_types),
+        }
+    if not isinstance(baby, bool):
+        return {
+            "ok": False,
+            "error": "baby must be a bool",
+        }
+
+    import RLPy2
+
+    face_feature_preset = RLPy2.RArrayListWString()
+    skin_list = RLPy2.RArrayListWString(3, "None")
+    skin_list[0] = "Soft Skin"
+    mask_list = RLPy2.RArrayListWString(4, "None")
+    mask_list[0] = "No Mask"
+    body_type_value = getattr(RLPy2.EHSBodyType, body_type)
+
+    previous_silent = None
+    silent_changed = False
+    started = time.perf_counter()
+    try:
+        if hasattr(RLPy, "RGlobal_GetSilentMode") and hasattr(RLPy, "RGlobal_SetSilentMode"):
+            previous_silent = bool(RLPy.RGlobal_GetSilentMode())
+            RLPy.RGlobal_SetSilentMode(True)
+            silent_changed = True
+        hs_interface = RLPy2.Headshot3.GetInterface()
+        ret = hs_interface.CenerateCharacter(
+            resolved_photo,
+            body_type_value,
+            baby,
+            face_feature_preset,
+            skin_list,
+            mask_list,
+        )
+        elapsed = time.perf_counter() - started
+        return {
+            "ok": True,
+            "ret": repr(ret),
+            "elapsed_seconds": round(elapsed, 3),
+            "body_type": body_type,
+            "baby": baby,
+            "avatar_count": len(RLPy.RScene.GetAvatars()),
+        }
+    except Exception as exc:
+        elapsed = time.perf_counter() - started
+        return {
+            "ok": False,
+            "error": repr(exc),
+            "elapsed_seconds": round(elapsed, 3),
+            "body_type": body_type,
+            "baby": baby,
+        }
+    finally:
+        _invalidate_caches()
+        if silent_changed:
+            try:
+                RLPy.RGlobal_SetSilentMode(previous_silent)
+            except Exception:
+                pass
+
+
 def get_morph_catalog() -> dict[str, list[dict[str, str]]]:
     """Enumerate all available shaping morph IDs, grouped by category (cached per avatar ID)."""
     avatar = get_first_avatar()
@@ -484,7 +576,18 @@ def export_fbx(
         flags2 |= _safe_flag("EExportFbxOptions2_UnrealPreset")
         flags2 |= _safe_flag("EExportFbxOptions2_UnrealEngine4BoneAxis")
         flags2 |= _safe_flag("EExportFbxOptions2_YUp")
-        notes.append("target_tool=UE5 preset applied")
+        # The UI's "Unreal Engine" preset also writes the Auto Setup companion
+        # .json manifest. Without it, UE's CC Auto Setup importer (UCCFbxFactory)
+        # crashes with "Array index out of bounds" (verified 2026-07-02).
+        flags3 |= _safe_flag("EExportFbxOptions3_ExportJson")
+        # Characters whose body shape is driven by bone scaling export an FBX
+        # whose bind-pose matrices don't match the node transforms unless the
+        # exporter re-bakes them — UE then force-enables T0-as-ref-pose and hits
+        # a deterministic engine crash in morph import (verified 2026-07-02:
+        # 11/14 meshes invalid without these; 14/14 valid at 1e-6 with them).
+        flags2 |= _safe_flag("EExportFbxOptions2_ResetSkinPose")
+        flags2 |= _safe_flag("EExportFbxOptions2_ResetBoneScale")
+        notes.append("target_tool=UE5 preset applied (incl. ExportJson + ResetSkinPose/ResetBoneScale)")
     elif target_upper == "UNITY":
         flags |= _safe_flag("EExportFbxOptions_AutoSkinRigidMesh")
         flags2 |= _safe_flag("EExportFbxOptions2_UnityPreset")
@@ -1330,6 +1433,231 @@ def set_ibl(image_path: str = "", enable: bool = True) -> dict[str, Any]:
 
 
 # --- Expression Control ---
+
+def _facial_profile_type_map() -> dict[int, str]:
+    """Map EFacialProfile enum ints -> readable labels (built dynamically so it
+    never breaks if Reallusion renumbers the enum)."""
+    mapping: dict[int, str] = {}
+    for attr, label in (
+        ("EFacialProfile__None", "None"),
+        ("EFacialProfile_CC5MetaHuman", "CC5MetaHuman"),
+        ("EFacialProfile_CC4Extended", "CC4Extended"),
+        ("EFacialProfile_CC4Standard", "CC4Standard"),
+        ("EFacialProfile_Traditional", "Traditional"),
+    ):
+        val = getattr(RLPy, attr, None)
+        if val is None:
+            continue
+        try:
+            mapping[int(val)] = label
+        except (TypeError, ValueError):
+            pass
+    return mapping
+
+
+def _classify_facial_profile(uid: str, total_sliders: int) -> str:
+    """Heuristic ExPlus/HD/MetaHuman/Traditional label from the expression-set UID
+    and slider count. Reference thresholds (Reallusion courses): CC4 Standard=60,
+    CC4 Extended=140, ExPlus=63 (ARKit52 + tongue), CC5 Extended~160, CC5 HD/
+    MetaHuman~390 (262 expression + 128 corrective)."""
+    u = (uid or "").lower()
+    if "metahuman" in u:
+        return "CC5 MetaHuman (HD)"
+    if "explus" in u or "ex plus" in u or "ex+" in u:
+        return "ExPlus (ARKit52)"
+    if "extended" in u:
+        return "Extended"
+    if "traditional" in u:
+        return "Traditional"
+    if "standard" in u:
+        return "Standard"
+    # Fall back to slider-count buckets when the UID string is unrecognised.
+    if total_sliders >= 300:
+        return "CC5 HD / MetaHuman (~390)"
+    if total_sliders >= 150:
+        return "CC5 Extended (~160)"
+    if total_sliders >= 120:
+        return "CC4 Extended (~140)"
+    if total_sliders >= 60:
+        return "ExPlus / CC4 Standard (~60-63)"
+    return "unknown"
+
+
+def get_facial_profile() -> dict[str, Any]:
+    """Detect the current avatar's facial (expression) profile. Read-only.
+
+    Returns the authoritative RLPy profile type (GetProfileType) + expression-set
+    UID (GetExpressionSetUid), a per-category slider-count breakdown, and a
+    heuristic ExPlus/HD/MetaHuman/Traditional class. Does NOT modify the scene.
+    """
+    avatar = get_first_avatar()
+    if not avatar:
+        return {"success": False, "error": "No avatar"}
+
+    try:
+        fp = avatar.GetFacialProfileComponent()
+    except Exception as e:
+        return {"success": False, "error": f"No facial profile component: {e}"}
+    if not fp:
+        return {"success": False, "error": "No facial profile component"}
+
+    result: dict[str, Any] = {"success": True, "avatar": avatar.GetName()}
+
+    # Authoritative profile type (enum int -> label).
+    try:
+        pt_int = int(fp.GetProfileType())
+        result["profile_type_id"] = pt_int
+        result["profile_type"] = _facial_profile_type_map().get(pt_int, f"Unknown({pt_int})")
+    except Exception as e:
+        result["profile_type_error"] = str(e)
+
+    # Expression-set UID string (e.g. "CC5 MetaHuman", "Traditional", "ExPlus").
+    uid = ""
+    face_comp = avatar.GetFaceComponent()
+    if face_comp:
+        try:
+            uid = str(face_comp.GetExpressionSetUid())
+        except Exception as e:
+            result["expression_set_uid_error"] = str(e)
+    result["expression_set_uid"] = uid
+
+    # Per-category slider counts.
+    category_counts: dict[str, int] = {}
+    total = 0
+    try:
+        for cat in fp.GetExpressionCategoryNames():
+            try:
+                sliders = fp.GetExpressionSliderNames(cat)
+                n = len(sliders) if sliders else 0
+            except Exception:
+                n = 0
+            category_counts[cat] = n
+            total += n
+    except Exception as e:
+        result["category_error"] = str(e)
+    result["category_slider_counts"] = category_counts
+    result["total_sliders"] = total
+    result["category_count"] = len(category_counts)
+
+    result["heuristic_class"] = _classify_facial_profile(uid, total)
+    result["arkit_capable"] = (
+        any(k in (uid or "").lower() for k in ("metahuman", "explus", "arkit"))
+        or total >= 150
+    )
+    return result
+
+
+def _facial_profile_summary(info: Any) -> dict[str, Any]:
+    """Small before/after summary extracted from a get_facial_profile() result."""
+    if not isinstance(info, dict):
+        return {}
+    return {
+        "profile_type": info.get("profile_type"),
+        "expression_set_uid": info.get("expression_set_uid"),
+        "total_sliders": info.get("total_sliders"),
+    }
+
+
+def convert_facial_profile(
+    target_profile_path: str = "",
+    dry_run: bool = True,
+    backup_current_to: str = "",
+) -> dict[str, Any]:
+    """Swap the current avatar's facial profile by LOADING a target profile asset.
+
+    RLPy scope (verified 2026-07-12): Reallusion's RLPy exposes NO direct
+    profile-type conversion, and NO equivalent of the F8 "Edit Expression ->
+    Corrective enable" one-click ExPlus upgrade. The only programmatic way to
+    change the active facial profile is RIFacialProfileComponent.LoadProfile(path)
+    with a pre-built .ccFacialProfile asset (same-topology constraint). This tool
+    wraps that operation.
+
+    Intended workflow — temporary switch for export, then restore:
+      1) get_facial_profile            (record current type)
+      2) convert_facial_profile(target, dry_run=false, backup_current_to=<save>)
+      3) export_fbx(...)
+      4) convert_facial_profile(<backup>, dry_run=false)   (restore original)
+
+    Safety: dry_run defaults to True. In dry-run NOTHING changes — the tool only
+    inspects the current profile and validates the target path.
+    """
+    avatar = get_first_avatar()
+    if not avatar:
+        return {"success": False, "error": "No avatar"}
+    try:
+        fp = avatar.GetFacialProfileComponent()
+    except Exception as e:
+        return {"success": False, "error": f"No facial profile component: {e}"}
+    if not fp:
+        return {"success": False, "error": "No facial profile component"}
+
+    current_summary = _facial_profile_summary(get_facial_profile())
+    notes = [
+        "RLPy has no direct profile-type / ExPlus-upgrade API; this LOADS a target "
+        ".ccFacialProfile via RIFacialProfileComponent.LoadProfile (same-topology).",
+        "Recommended: pass backup_current_to to save the current profile, switch "
+        "only for export, then convert back to the backup to restore the original.",
+    ]
+
+    path_error = None
+    if target_profile_path:
+        if not os.path.isabs(target_profile_path):
+            path_error = "target_profile_path must be an absolute path"
+        elif not os.path.exists(target_profile_path):
+            path_error = f"target_profile_path not found: {target_profile_path}"
+
+    if dry_run:
+        return {
+            "success": True,
+            "dry_run": True,
+            "applied": False,
+            "current_profile": current_summary,
+            "target_profile_path": target_profile_path,
+            "target_path_valid": bool(target_profile_path) and path_error is None,
+            "path_error": path_error,
+            "backup_current_to": backup_current_to,
+            "notes": notes,
+        }
+
+    # --- Real apply path (scene-modifying) ---
+    if not target_profile_path:
+        return {"success": False, "error": "target_profile_path is required when dry_run=false"}
+    if path_error:
+        return {"success": False, "error": path_error}
+    if not hasattr(fp, "LoadProfile"):
+        return {"success": False, "error": "RIFacialProfileComponent.LoadProfile unavailable in this RLPy build"}
+    if backup_current_to and not os.path.isabs(backup_current_to):
+        return {"success": False, "error": "backup_current_to must be an absolute path"}
+
+    saved_backup = None
+    try:
+        RLPy.RGlobal.BeginAction("Convert Facial Profile")
+        try:
+            if backup_current_to:
+                backup_dir = os.path.dirname(backup_current_to)
+                if backup_dir:
+                    os.makedirs(backup_dir, exist_ok=True)
+                fp.SaveProfile(backup_current_to)
+                saved_backup = backup_current_to
+            fp.LoadProfile(target_profile_path)
+            RLPy.RGlobal.ObjectModified(avatar, RLPy.EObjectModifiedType_Transform)
+        finally:
+            RLPy.RGlobal.EndAction()
+    except Exception as e:
+        return {"success": False, "error": f"LoadProfile failed: {e}", "backup_saved_to": saved_backup}
+
+    _invalidate_caches()
+    return {
+        "success": True,
+        "dry_run": False,
+        "applied": True,
+        "before": current_summary,
+        "after": _facial_profile_summary(get_facial_profile()),
+        "backup_saved_to": saved_backup,
+        "target_profile_path": target_profile_path,
+        "notes": notes,
+    }
+
 
 def get_expression_info() -> dict[str, Any]:
     """Get available expression groups and names for the current avatar."""
@@ -3987,6 +4315,12 @@ def _auto_patch_server() -> None:
         "set_ambient":           lambda p: _self.set_ambient(float(p["r"]), float(p["g"]), float(p["b"])),
         "set_ibl":               lambda p: _self.set_ibl(p.get("image_path", ""), bool(p.get("enable", True))),
         "get_expression_info":   lambda p: _self.get_expression_info(),
+        "get_facial_profile":    lambda p: _self.get_facial_profile(),
+        "convert_facial_profile": lambda p: _self.convert_facial_profile(
+            p.get("target_profile_path", ""),
+            bool(p.get("dry_run", True)),
+            p.get("backup_current_to", ""),
+        ),
         "set_expression":        lambda p: _self.set_expression(p["expressions"]),
         "reset_expression":      lambda p: _self.reset_expression(),
         "reset_all_morphs":      lambda p: _self.reset_all_morphs(p.get("avatar_name", "")),
@@ -4050,6 +4384,7 @@ def _auto_patch_server() -> None:
             "/avatar/delete":    "delete_avatar",
             "/expression/set":   "set_expression",
             "/expression/reset": "reset_expression",
+            "/facial/profile/convert": "convert_facial_profile",
             "/morphs/reset":     "reset_all_morphs",
             "/morphs/search":    "search_morphs",
             "/material/info":    "get_material_info",
@@ -4088,6 +4423,7 @@ def _auto_patch_server() -> None:
             "/lights":           "get_lights",
             "/visual/settings":  "get_visual_settings",
             "/expressions":      "get_expression_info",
+            "/facial/profile":   "get_facial_profile",
             "/material/info":    "get_material_info",
             # Tier 1: Content Management
             "/clothes":          "list_clothes",

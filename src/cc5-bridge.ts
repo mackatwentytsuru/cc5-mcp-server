@@ -3,6 +3,7 @@
  */
 
 import type {
+  CC5Health,
   CC5Avatar,
   CC5Response,
   MorphCatalog,
@@ -27,6 +28,8 @@ import type {
   ExpressionItem,
   ExpressionSetResult,
   ExpressionResetResult,
+  FacialProfileInfo,
+  ConvertFacialProfileResult,
   ResetMorphsResult,
   MaterialInfo,
   DiffuseColor,
@@ -126,6 +129,23 @@ export class CC5Bridge {
     } catch (err) {
       console.error("[CC5 Bridge] healthCheck failed:", err);
       return false;
+    }
+  }
+
+  /**
+   * Full health, including whether CC5's main thread is actually running.
+   *
+   * The bridge's HTTP server lives on its own thread, so /health answers even when
+   * CC5 is frozen behind a modal dialog. In that state every queued RLPy call hangs
+   * until the dialog is dismissed. `main_thread_blocked` is what distinguishes
+   * "reachable" from "able to do work" -- always check it before reporting success.
+   */
+  async healthDetail(): Promise<CC5Health | null> {
+    try {
+      return await this.request<CC5Health>("/health");
+    } catch (err) {
+      console.error("[CC5 Bridge] healthDetail failed:", err);
+      return null;
     }
   }
 
@@ -527,6 +547,24 @@ export class CC5Bridge {
 
   async execPython(code: string): Promise<{ success: boolean; output?: string; result?: string; error?: string }> {
     return this.request<{ success: boolean; output?: string; result?: string; error?: string }>("/exec/python", "POST", { code });
+  }
+
+  // --- Facial profile ---
+
+  async getFacialProfile(): Promise<FacialProfileInfo> {
+    return this.request<FacialProfileInfo>("/facial/profile");
+  }
+
+  async convertFacialProfile(opts: {
+    target_profile_path?: string;
+    dry_run?: boolean;
+    backup_current_to?: string;
+  }): Promise<ConvertFacialProfileResult> {
+    return this.request<ConvertFacialProfileResult>("/facial/profile/convert", "POST", {
+      target_profile_path: opts.target_profile_path ?? "",
+      dry_run: opts.dry_run ?? true,
+      backup_current_to: opts.backup_current_to ?? "",
+    });
   }
 
   // --- ActorMIXER PRO: Create Mixer Assets ---

@@ -14,6 +14,7 @@ import os
 import queue
 import sys
 import threading
+import time
 import traceback
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
@@ -101,6 +102,14 @@ response_events: dict[str, threading.Event] = {}
 _command_counter = 0
 _counter_lock = threading.Lock()
 _processing = False  # Re-entrance guard for process_command_queue
+
+# Main-thread heartbeat. Updated by process_command_queue (16 ms QTimer).
+# The HTTP server runs on its own thread, so /health answers even when CC5's main
+# thread is frozen by a modal dialog. Comparing now() against this timestamp is the
+# only reliable way to tell "bridge alive" from "CC5 actually able to run RLPy".
+_last_main_thread_tick: float = 0.0
+# Above this age the main thread is considered blocked (QTimer interval is 16 ms).
+MAIN_THREAD_STALL_SEC = 2.0
 
 MAX_REQUEST_BYTES = 1 * 1024 * 1024  # 1 MB
 
@@ -209,6 +218,12 @@ ACTION_MAP: dict[str, Any] = {
     "set_ambient":           lambda p: cc5_api.set_ambient(float(p["r"]), float(p["g"]), float(p["b"])),
     "set_ibl":               lambda p: cc5_api.set_ibl(p.get("image_path", ""), bool(p.get("enable", True))),
     "get_expression_info":   lambda p: cc5_api.get_expression_info(),
+    "get_facial_profile":    lambda p: cc5_api.get_facial_profile(),
+    "convert_facial_profile": lambda p: cc5_api.convert_facial_profile(
+        p.get("target_profile_path", ""),
+        bool(p.get("dry_run", True)),
+        p.get("backup_current_to", ""),
+    ),
     "set_expression":        lambda p: cc5_api.set_expression(p["expressions"]),
     "reset_expression":      lambda p: cc5_api.reset_expression(),
     "reset_all_morphs":      lambda p: cc5_api.reset_all_morphs(p.get("avatar_name", "")),
@@ -281,6 +296,7 @@ POST_ROUTES: dict[str, str] = {
     "/visual/ibl":       "set_ibl",
     "/expression/set":   "set_expression",
     "/expression/reset": "reset_expression",
+    "/facial/profile/convert": "convert_facial_profile",
     "/material/info":    "get_material_info",
     "/material/color/get": "get_diffuse_color",
     "/material/color/set": "set_diffuse_color",
@@ -324,6 +340,7 @@ GET_ROUTES: dict[str, str | None] = {
     "/lights":         "get_lights",
     "/visual/settings": "get_visual_settings",
     "/expressions":    "get_expression_info",
+    "/facial/profile": "get_facial_profile",
     "/material/info":  "get_material_info",
     # Tier 1: Content Management
     "/clothes":        "list_clothes",
@@ -338,9 +355,39 @@ GET_ROUTES: dict[str, str | None] = {
 }
 
 
+def _health_payload() -> dict:
+    """Health info including main-thread liveness.
+
+    `main_thread_blocked` is the field that matters: the HTTP thread answers even
+    when CC5 is frozen behind a modal dialog, so "connected" alone is not enough.
+    """
+    now = time.time()
+    age = (now - _last_main_thread_tick) if _last_main_thread_tick else None
+    blocked = (age is None) or (age > MAIN_THREAD_STALL_SEC)
+    payload = {
+        "status": "ok",
+        "service": "cc5-mcp-bridge",
+        "version": API_VERSION,
+        "main_thread_blocked": blocked,
+        "ms_since_main_thread_tick": None if age is None else int(age * 1000),
+        "queue_depth": command_queue.qsize(),
+    }
+    if blocked:
+        payload["hint"] = (
+            "CC5's main thread is not draining the command queue. A modal dialog is the "
+            "usual cause -- check the CC5 window and dismiss it. Commands sent now will "
+            "not execute until the main thread resumes."
+        )
+    return payload
+
+
 def process_command_queue() -> None:
     """Drain the queue and execute RLPy calls on the main thread. Called by QTimer."""
-    global _processing
+    global _processing, _last_main_thread_tick
+    # Heartbeat: proves the CC5 main thread is still running this QTimer callback.
+    # A modal dialog blocks the main thread, so this stops updating while the HTTP
+    # thread keeps answering /health -- that combination is how callers detect a stall.
+    _last_main_thread_tick = time.time()
     if _processing:
         return
     _processing = True
@@ -523,7 +570,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
 
         if path == "/health":
-            self._send_json(200, {"result": {"status": "ok", "service": "cc5-mcp-bridge", "version": API_VERSION}})
+            self._send_json(200, {"result": _health_payload()})
             return
 
         if path == "/api":

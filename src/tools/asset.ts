@@ -84,7 +84,10 @@ export function registerAssetTools(server: McpServer, bridge: CC5Bridge) {
         .describe("FBX Options: true = 'Mesh and Motion' (default), false = 'Mesh' (mesh only)."),
       fps: z.number().int().positive().optional()
         .describe("Include Motion 'Frame Rate' (e.g. 30). Maps to RLPy.RFps.Fps{n}; unsupported values are skipped with a note."),
-      motion_range: z.tuple([z.number().int(), z.number().int()]).optional()
+      // NOTE: z.tuple() emits tuple-form JSON Schema `items` (an array of schemas),
+      // which some MCP clients' schema validators reject. z.array().length(2) means
+      // the same thing ([start, end], exactly two items) and is accepted everywhere.
+      motion_range: z.array(z.number().int()).length(2).optional()
         .describe("Include Motion frame range [start, end]. Omit for 'All' (the dialog default)."),
       convert_image_format: z.boolean().optional()
         .describe("Texture Settings 'Convert Image Format' (TIF -> PNG)."),

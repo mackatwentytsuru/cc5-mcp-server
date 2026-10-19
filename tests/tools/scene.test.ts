@@ -214,37 +214,61 @@ describe("get_avatar_info handler", () => {
 // ── check_cc5_connection ──────────────────────────────────────────────────────
 
 describe("check_cc5_connection handler", () => {
+  const HEALTHY = {
+    status: "ok", service: "cc5-mcp-bridge", version: "1.2.0",
+    main_thread_blocked: false, ms_since_main_thread_tick: 12, queue_depth: 0,
+  };
+
   it("returns connected message when bridge is healthy", async () => {
-    bridge.healthCheck.mockResolvedValue(true);
+    bridge.healthDetail.mockResolvedValue(HEALTHY);
     const handler = server.getRegisteredTool("check_cc5_connection");
     const result = await handler({});
     expect(result.content[0].text).toContain("connected and ready");
+    expect(result.content[0].text).toContain("queue_depth=0");
   });
 
-  it("returns not-responding message when healthCheck returns false", async () => {
-    bridge.healthCheck.mockResolvedValue(false);
+  it("warns when the bridge answers but CC5's main thread is blocked", async () => {
+    bridge.healthDetail.mockResolvedValue({ ...HEALTHY, main_thread_blocked: true, ms_since_main_thread_tick: 5400, queue_depth: 3 });
+    const handler = server.getRegisteredTool("check_cc5_connection");
+    const text = (await handler({})).content[0].text;
+    expect(text).toContain("BLOCKED");
+    expect(text).toContain("no tick for 5400 ms");
+    expect(text).toContain("queue_depth=3");
+    expect(text).not.toContain("connected and ready");
+  });
+
+  it("omits the tick age when the main thread never ticked", async () => {
+    bridge.healthDetail.mockResolvedValue({ ...HEALTHY, main_thread_blocked: true, ms_since_main_thread_tick: null });
+    const handler = server.getRegisteredTool("check_cc5_connection");
+    const text = (await handler({})).content[0].text;
+    expect(text).toContain("BLOCKED");
+    expect(text).not.toContain("no tick for");
+  });
+
+  it("returns not-responding message when healthDetail returns null", async () => {
+    bridge.healthDetail.mockResolvedValue(null);
     const handler = server.getRegisteredTool("check_cc5_connection");
     const result = await handler({});
     expect(result.content[0].text).toContain("NOT responding");
     expect(result.content[0].text).toContain("Character Creator 5");
   });
 
-  it("returns not-responding message when healthCheck throws", async () => {
-    bridge.healthCheck.mockRejectedValue(new Error("ECONNREFUSED"));
+  it("returns not-responding message when healthDetail throws", async () => {
+    bridge.healthDetail.mockRejectedValue(new Error("ECONNREFUSED"));
     const handler = server.getRegisteredTool("check_cc5_connection");
     const result = await handler({});
     expect(result.content[0].text).toContain("NOT responding");
   });
 
-  it("calls bridge.healthCheck once per invocation", async () => {
-    bridge.healthCheck.mockResolvedValue(true);
+  it("calls bridge.healthDetail once per invocation", async () => {
+    bridge.healthDetail.mockResolvedValue(HEALTHY);
     const handler = server.getRegisteredTool("check_cc5_connection");
     await handler({});
-    expect(bridge.healthCheck).toHaveBeenCalledTimes(1);
+    expect(bridge.healthDetail).toHaveBeenCalledTimes(1);
   });
 
   it("returns content with type 'text'", async () => {
-    bridge.healthCheck.mockResolvedValue(true);
+    bridge.healthDetail.mockResolvedValue(HEALTHY);
     const handler = server.getRegisteredTool("check_cc5_connection");
     const result = await handler({});
     expect(result.content[0].type).toBe("text");

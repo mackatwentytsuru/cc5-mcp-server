@@ -21,6 +21,7 @@ import { registerEditTools } from "./tools/edit.js";
 import { registerCameraTools } from "./tools/camera.js";
 import { registerLightTools } from "./tools/light.js";
 import { registerExpressionTools } from "./tools/expression.js";
+import { registerFacialProfileTools } from "./tools/facial-profile.js";
 import { registerMaterialTools } from "./tools/material.js";
 import { registerContentTools } from "./tools/content.js";
 import { registerColorTools } from "./tools/color.js";
@@ -48,6 +49,7 @@ async function main() {
   registerCameraTools(server, bridge);
   registerLightTools(server, bridge);
   registerExpressionTools(server, bridge);
+  registerFacialProfileTools(server, bridge);
   registerMaterialTools(server, bridge);
   registerContentTools(server, bridge);
   registerColorTools(server, bridge);
