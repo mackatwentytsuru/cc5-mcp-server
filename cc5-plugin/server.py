@@ -22,8 +22,75 @@ from urllib.parse import urlparse
 import cc5_api
 
 RELOAD_SECRET = os.environ.get("CC5_RELOAD_SECRET", "")
-DEV_MODE = os.environ.get("CC5_DEV_MODE", "1") == "1"  # Default: dev mode on
-API_VERSION = "1.1.0"
+API_VERSION = "1.2.0"
+
+
+def _env_flag(name: str) -> bool:
+    """True when the environment variable is set to 1 / true / yes (any case)."""
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
+
+
+# Development mode: enables /reload without a secret and the full /api listing.
+# Off by default. It does NOT enable code execution -- that is CC5_ALLOW_EXEC.
+DEV_MODE = _env_flag("CC5_DEV_MODE")
+
+# Actions that run arbitrary code inside CC5, or drive CC5's UI (dialogs and
+# keystrokes) without the user confirming anything. They are refused unless
+# CC5_ALLOW_EXEC=1 is set in the environment CC5 was started from. The check is
+# by action name, so a route re-added by cc5_api._auto_patch_server() after a
+# hot reload cannot bypass it.
+EXEC_GATED_ACTIONS: frozenset[str] = frozenset({
+    "exec_python",
+    "silent_install_filter",
+    "silent_trigger_dialog",
+    "silent_configure_and_click",
+    "silent_finalize",
+})
+
+# Host names a legitimate local client puts in the Host header. A page that uses
+# DNS rebinding to reach 127.0.0.1 still sends its own host name, so it fails here.
+_LOOPBACK_HOSTNAMES = ("127.0.0.1", "localhost", "[::1]")
+
+
+def exec_allowed() -> bool:
+    """Whether CC5_ALLOW_EXEC is on. Read per request, never cached."""
+    return _env_flag("CC5_ALLOW_EXEC")
+
+
+def exec_disabled_error(action: str) -> str:
+    return (
+        f"'{action}' is disabled. It can run arbitrary code or drive CC5's UI "
+        "without confirmation, so it is off by default. To enable it, set the "
+        "environment variable CC5_ALLOW_EXEC=1 for Character Creator 5 (for "
+        "example run 'setx CC5_ALLOW_EXEC 1', then restart CC5) and in the MCP "
+        "server's env. See the Security section of the README."
+    )
+
+
+def check_request_headers(headers: Any, port: int) -> str | None:
+    """Return why a request must be refused, or None when it may proceed.
+
+    - Host must be a loopback name plus this server's port (blocks DNS rebinding).
+    - An Origin header means a web page sent the request: refuse it.
+    - Sec-Fetch-Site other than "none" means a page triggered the request. This
+      also covers GETs that browsers send without Origin (e.g. <img src=...>).
+
+    curl, Python urllib, PowerShell and Node fetch all send a loopback Host and
+    neither Origin nor Sec-Fetch-Site, so normal clients are unaffected.
+    """
+    host = (headers.get("Host") or "").strip().lower()
+    if host not in {f"{name}:{port}" for name in _LOOPBACK_HOSTNAMES}:
+        return (
+            f"Host header {host[:100]!r} is not allowed. "
+            f"Use http://127.0.0.1:{port} or http://localhost:{port}."
+        )
+    if headers.get("Origin") is not None:
+        return "Requests from web pages (with an Origin header) are not accepted."
+    fetch_site = headers.get("Sec-Fetch-Site")
+    if fetch_site is not None and fetch_site.strip().lower() != "none":
+        return "Requests triggered by a web page (Sec-Fetch-Site) are not accepted."
+    return None
+
 
 # Thread-safe command queue: HTTP thread -> main thread
 command_queue: queue.Queue = queue.Queue(maxsize=100)
@@ -394,6 +461,16 @@ class BridgeHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _reject_untrusted(self) -> bool:
+        """Answer 403 and return True when the request fails the Host/Origin checks."""
+        reason = check_request_headers(self.headers, self.server.server_address[1])
+        if reason is None:
+            return False
+        print(f"[CC5 MCP Bridge] Refused {self.command} {self.path[:200]!r}: {reason}")
+        self.close_connection = True  # the request body (if any) is left unread
+        self._send_json(403, {"error": reason})
+        return True
+
     def _read_json(self) -> dict:
         raw_length = self.headers.get("Content-Length", "0")
         try:
@@ -414,6 +491,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
         return parsed
 
     def do_GET(self) -> None:
+        if self._reject_untrusted():
+            return
         path = urlparse(self.path).path
 
         if path == "/health":
@@ -429,7 +508,10 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
         if path == "/reload":
             if not DEV_MODE and not RELOAD_SECRET:
-                self._send_json(403, {"error": "/reload disabled. Set CC5_DEV_MODE=1 or CC5_RELOAD_SECRET."})
+                self._send_json(403, {"error": (
+                    "/reload is disabled. Set CC5_DEV_MODE=1 (or CC5_RELOAD_SECRET, then send "
+                    "the X-Reload-Token header) in the environment CC5 starts from, then restart CC5."
+                )})
                 return
             if RELOAD_SECRET:
                 token = self.headers.get("X-Reload-Token", "")
@@ -449,6 +531,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
             self._send_json(404, {"error": f"Not found: {path}"})
 
     def do_POST(self) -> None:
+        if self._reject_untrusted():
+            return
         path = urlparse(self.path).path
 
         try:
@@ -459,8 +543,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
         action = POST_ROUTES.get(path)
         if action:
-            if action == "exec_python" and not DEV_MODE and os.environ.get("CC5_ALLOW_EXEC", "").strip().lower() not in ("1", "true", "yes"):
-                self._send_json(403, {"error": "/exec/python disabled. Set CC5_DEV_MODE=1 or CC5_ALLOW_EXEC=1."})
+            if action in EXEC_GATED_ACTIONS and not exec_allowed():
+                self._send_json(403, {"error": exec_disabled_error(action)})
                 return
             status, data = _execute_sync(action, params)
             self._send_json(status, data)
@@ -481,7 +565,12 @@ def start_server(port: int = 5101) -> threading.Thread:
     def run() -> None:
         httpd.serve_forever()
 
-    if not RELOAD_SECRET:
+    print(
+        "[CC5 MCP Bridge] dev mode (/reload, full /api): "
+        f"{'ON' if DEV_MODE else 'off'} | exec_python + silent Export Head: "
+        f"{'ON (CC5_ALLOW_EXEC)' if exec_allowed() else 'off'}"
+    )
+    if DEV_MODE and not RELOAD_SECRET:
         print("[CC5 MCP Bridge] WARNING: /reload endpoint has no authentication. Set CC5_RELOAD_SECRET env var to secure it.")
 
     thread = threading.Thread(target=run, daemon=True)
@@ -494,4 +583,5 @@ def stop_server() -> None:
     global _httpd
     if _httpd is not None:
         _httpd.shutdown()
+        _httpd.server_close()  # release the listening socket (frees the port)
         _httpd = None

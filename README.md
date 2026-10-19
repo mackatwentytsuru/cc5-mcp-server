@@ -121,7 +121,7 @@ The MCP server provides 57 tools (registered in 15 modules under `src/tools/`) f
 #### Advanced (1)
 | Tool | Description |
 |------|-------------|
-| `exec_python` | Execute Python code inside CC5's RLPy environment. Available when `CC5_DEV_MODE=1` (the default) or `CC5_ALLOW_EXEC=1` is set -- see [Security](#security) |
+| `exec_python` | Execute Python code inside CC5's RLPy environment. **Off by default** -- works only when `CC5_ALLOW_EXEC=1` is set, see [Security](#security) |
 
 ### MCP Resources
 
@@ -174,6 +174,8 @@ Add to your `~/.claude.json` under `mcpServers` (a ready-made snippet is in `cla
 ```
 
 Replace `<path-to-project>` with the absolute path to this repository.
+
+`exec_python` and the silent Export Head routes are off by default. To use them, see [Security](#security).
 
 ### 4. Start the Bridge
 
@@ -237,8 +239,8 @@ Passing a bare filename (no directory component) exports into `D:\CC5Export` by 
 |---------------------|---------|-------------|
 | `CC5_BRIDGE_URL` | `http://127.0.0.1:5101` | Full URL of the CC5 bridge HTTP server |
 | `CC5_BRIDGE_PORT` | `5101` | Port for the bridge server (set in `cc5-plugin/main.py`) |
-| `CC5_DEV_MODE` | `1` | Development mode (0 = production, 1 = development). In development mode the `/reload` endpoint, the `/api` endpoint listing and the `/exec/python` endpoint are enabled |
-| `CC5_ALLOW_EXEC` | *(unset)* | Enable the `/exec/python` endpoint (the `exec_python` tool) when `CC5_DEV_MODE` is not 1. Accepts `1`, `true` or `yes` |
+| `CC5_DEV_MODE` | `0` | Development helpers in the bridge plugin: `GET /reload` without a token and the full `GET /api` route list. Accepts `1`, `true` or `yes`. Read from the environment CC5 starts from. It does **not** enable code execution |
+| `CC5_ALLOW_EXEC` | *(unset)* | Enables `exec_python` (`POST /exec/python`) and the silent Export Head routes (`POST /export/head_mh/silent/*`). Accepts `1`, `true` or `yes`. Set it for CC5 **and** for the MCP server -- see [Security](#security) |
 | `CC5_RELOAD_SECRET` | *(empty)* | Auth token for the `/reload` endpoint. If set, requests must include `X-Reload-Token` header |
 | `CC5_REQUEST_TIMEOUT_MS` | `30000` | HTTP request timeout in milliseconds (MCP server side) |
 | `CC5_ROOT` | `C:\Program Files\Reallusion\Character Creator 5` | CC5 installation path (used for default avatar loading) |
@@ -259,11 +261,12 @@ npm run dev          # Watch mode (recompiles on change)
 npm test             # Run tests
 npm run test:watch   # Watch mode
 npm run test:coverage # With coverage report
+npm run test:py      # Bridge plugin security tests (Python 3.10+, no CC5 needed)
 ```
 
 ### Hot-Reload the Python Plugin
 
-The bridge supports hot-reloading `cc5_api.py` without restarting CC5:
+The bridge supports hot-reloading `cc5_api.py` without restarting CC5. It is off by default: set `CC5_DEV_MODE=1` (or `CC5_RELOAD_SECRET`) in the environment CC5 starts from.
 
 ```bash
 # Without auth
@@ -307,6 +310,7 @@ cc5-mcp-server/
 │   ├── server.py           # HTTP bridge server (http.server)
 │   ├── cc5_api.py          # RLPy API wrapper
 │   └── config.json         # Plugin configuration
+├── tests/                  # Vitest unit tests; tests/python = bridge security tests
 ├── start_bridge.py         # Manual bridge startup script
 ├── install-plugin.ps1      # Plugin installer (requires admin)
 └── claude-mcp-config.json  # Claude Code MCP config snippet
@@ -322,7 +326,7 @@ The bridge exposes one HTTP route per tool. The tables below list the core route
 |----------|-------------|----------|
 | `GET /health` | Health check | `{"result": {"status": "ok", "service": "cc5-mcp-bridge", "version": "..."}}` |
 | `GET /api` | API discovery (all endpoints and required params, dev mode) | `{"result": {"service": "...", "endpoints": {...}}}` |
-| `GET /reload` | Hot-reload cc5_api module | `{"result": {"success": true}}` |
+| `GET /reload` | Hot-reload cc5_api module (needs `CC5_DEV_MODE=1` or `CC5_RELOAD_SECRET`) | `{"result": {"success": true}}` |
 | `GET /avatars` | List all scene avatars | `{"result": [{"name": "...", "id": "...", "type": "..."}]}` |
 | `GET /avatar/info` | Current avatar details + active morphs | `{"result": {"name": "...", "active_morphs": {...}}}` |
 | `GET /morphs/catalog` | Full morph catalog grouped by category | `{"result": {"Category": [{"id": "...", "display_name": "..."}]}}` |
@@ -344,12 +348,110 @@ All responses follow the envelope format: `{"result": ...}` on success, `{"error
 
 ## Security
 
+The bridge is a local HTTP server running inside CC5. It has these protections:
+
 - **Localhost only** -- The bridge server binds exclusively to `127.0.0.1`. The MCP server validates that `CC5_BRIDGE_URL` points to localhost before connecting.
+- **Host check (DNS rebinding)** -- Every request must carry `Host: 127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`, with the bridge's own port. A web page that points its own domain at 127.0.0.1 still sends its own domain name, so it gets HTTP 403.
+- **No requests from web pages** -- Requests with an `Origin` header, or with a `Sec-Fetch-Site` header other than `none`, get HTTP 403. Browsers add these headers to requests made by web pages (including form posts and `<img>` loads); curl, Python, PowerShell and the MCP server do not send them. The bridge sends no CORS headers.
+- **Risky features are off by default** -- see the next section.
 - **Path validation** -- Both the TypeScript MCP server and the Python plugin validate file paths to prevent path traversal (`..`) attacks. Only allowed file extensions are accepted for asset loading and export.
 - **Reload authentication** -- The `/reload` endpoint supports token-based auth via the `CC5_RELOAD_SECRET` environment variable and `X-Reload-Token` header.
 - **Request size limits** -- The bridge enforces a 1 MB maximum request body size.
 - **Thread safety** -- All RLPy API calls are serialized through a command queue and executed on CC5's main thread via QTimer.
-- **Code execution** -- `exec_python` runs arbitrary Python inside CC5. It is enabled by default because `CC5_DEV_MODE` defaults to `1`. If other software or web pages on the same computer should not be able to reach the bridge, set `CC5_DEV_MODE=0` (and leave `CC5_ALLOW_EXEC` unset) in the environment CC5 is started from.
+
+### Off by default
+
+| Feature | What it does | Turned on by |
+|---------|--------------|--------------|
+| `exec_python` tool / `POST /exec/python` | Runs any Python code inside CC5 | `CC5_ALLOW_EXEC=1` |
+| `POST /export/head_mh/silent/*` (4 routes) | Drives CC5's Export Head dialogs and types the save path with simulated keystrokes, without asking you | `CC5_ALLOW_EXEC=1` |
+| `GET /reload` without a token, full `GET /api` route list | Development helpers | `CC5_DEV_MODE=1` |
+
+Neither `CC5_DEV_MODE` nor `CC5_RELOAD_SECRET` enables code execution. While a feature is off, the bridge answers HTTP 403 and the MCP tool returns an error; both explain how to turn it on. When the plugin starts, CC5's Python console prints which of these are on.
+
+### Turning on exec_python and the silent Export Head routes
+
+`CC5_ALLOW_EXEC` must be set in two places, because CC5 and the MCP server each read their own environment:
+
+1. **For CC5 (the bridge plugin)** -- set it for your Windows user, then restart CC5:
+   ```powershell
+   setx CC5_ALLOW_EXEC 1
+   ```
+   `setx` only reaches programs started after it. Start CC5 from the Start menu or from a new terminal; a terminal or app that was already open keeps its old environment until it is restarted.
+2. **For the MCP server** -- add it to the server's `env` (needed for the `exec_python` tool; the silent routes are called on the bridge directly, so they only need step 1):
+   ```json
+   "env": { "CC5_BRIDGE_URL": "http://127.0.0.1:5101", "CC5_ALLOW_EXEC": "1" }
+   ```
+
+To turn it off again, remove both settings and restart CC5 and your MCP client. For the Windows user variable:
+
+```powershell
+[Environment]::SetEnvironmentVariable("CC5_ALLOW_EXEC", $null, "User")
+```
+
+### What turning it on risks
+
+- Any program running on your computer under your account, and anything that can make the LLM call `exec_python` (for example instructions hidden in a file or web page the model reads), can run code inside CC5 with your user's permissions: read and write your files, start programs, use the network.
+- The silent Export Head routes send keystrokes to the window in front. If another window comes to the front while they run, the keystrokes go there.
+- The Host and Origin checks stop web pages, not other programs on the same computer. Only turn this on for a computer you trust, never make port 5101 reachable from other computers (no port forwarding or proxies), and turn it off when you do not need it.
+
+### Upgrading from 1.1.x
+
+- `exec_python` used to be on by default (through `CC5_DEV_MODE`, which defaulted to `1`). It is now off until you set `CC5_ALLOW_EXEC=1` as described above.
+- `CC5_DEV_MODE` now defaults to `0`. Set `CC5_DEV_MODE=1` for CC5 if you use `GET /reload` while working on the plugin.
+- Rebuild the MCP server (`npm run build`), reinstall the plugin and restart CC5. `GET /health` reports `"version": "1.2.0"` once the new plugin is running. Note that `install-plugin.ps1` replaces the whole `CC5_MCP_Bridge` folder, so move anything you keep in it first.
+
+## セキュリティ(日本語)
+
+ブリッジは、CC5 の中で動くローカルの HTTP サーバーです。次の守りが入っています。
+
+- **このパソコンの中だけ** -- ブリッジは `127.0.0.1` だけで待ち受けます。MCP サーバーは、localhost 以外を指す `CC5_BRIDGE_URL` を受け付けません。
+- **Host の確認(DNS リバインディング対策)** -- Host ヘッダーが `127.0.0.1:<ポート>`・`localhost:<ポート>`・`[::1]:<ポート>`(ブリッジ自身のポート)でないリクエストは、HTTP 403 で断ります。自分のドメインを 127.0.0.1 に向けた Web ページは、自分のドメイン名を送ってくるので、ここで止まります。
+- **Web ページからのリクエストを断る** -- `Origin` ヘッダーがある、または `Sec-Fetch-Site` が `none` 以外のリクエストは、HTTP 403 で断ります。ブラウザーは、Web ページが出すリクエスト(フォームの送信や `<img>` の読み込みを含む)にこれらを付けます。curl・Python・PowerShell・MCP サーバーは付けません。CORS のヘッダーも返しません。
+- **危ない機能は初期状態で無効** -- 下の表のとおりです。
+- パスの検査、`/reload` のトークン認証、1 MB の上限、CC5 のメインスレッドでの実行は、これまでどおりです。
+
+### 初期状態で無効なもの
+
+| 機能 | すること | 有効にする設定 |
+|------|---------|----------------|
+| `exec_python` ツール / `POST /exec/python` | CC5 の中で、どんな Python コードでも動かす | `CC5_ALLOW_EXEC=1` |
+| `POST /export/head_mh/silent/*`(4 つ) | CC5 の Export Head の画面を自動で操作し、保存先をキー入力で打ち込む(確認なし) | `CC5_ALLOW_EXEC=1` |
+| トークンなしの `GET /reload`、`GET /api` の全ルート一覧 | 開発用の機能 | `CC5_DEV_MODE=1` |
+
+`CC5_DEV_MODE` や `CC5_RELOAD_SECRET` では、コードの実行は有効になりません。無効のあいだは、ブリッジは HTTP 403、MCP ツールはエラーを返し、どうすれば有効にできるかを知らせます。プラグインが起動すると、CC5 の Python コンソールに、どれが有効かが表示されます。
+
+### exec_python と silent ルートを有効にする
+
+`CC5_ALLOW_EXEC` は 2 か所に設定します。CC5 と MCP サーバーは、それぞれ自分の環境変数を読むからです。
+
+1. **CC5(ブリッジ)用** -- Windows のユーザー環境変数に設定して、CC5 を再起動します。
+   ```powershell
+   setx CC5_ALLOW_EXEC 1
+   ```
+   `setx` は、このあとに起動したプログラムにだけ効きます。CC5 はスタートメニューか、新しく開いたターミナルから起動してください。前から開いているターミナルやアプリは、再起動するまで古い設定のままです。
+2. **MCP サーバー用** -- サーバーの `env` に足します(`exec_python` ツールに必要です。silent ルートはブリッジを直接呼ぶので、1 だけで動きます)。
+   ```json
+   "env": { "CC5_BRIDGE_URL": "http://127.0.0.1:5101", "CC5_ALLOW_EXEC": "1" }
+   ```
+
+無効に戻すときは、両方の設定を消して、CC5 と MCP クライアントを再起動します。Windows のユーザー環境変数は次のコマンドで消せます。
+
+```powershell
+[Environment]::SetEnvironmentVariable("CC5_ALLOW_EXEC", $null, "User")
+```
+
+### 有効にすると何が危ないか
+
+- このパソコンで同じユーザーとして動くプログラムや、LLM に `exec_python` を呼ばせられるもの(たとえば、モデルが読むファイルや Web ページに隠された指示)が、CC5 の中でコードを動かせるようになります。あなたのユーザーの権限でできること(ファイルの読み書き、プログラムの起動、ネットへの通信)は、全部できてしまいます。
+- silent ルートは、いちばん前のウィンドウにキー入力を送ります。動いているあいだに別のウィンドウが前に出ると、そちらに入力されます。
+- Host と Origin の確認で防げるのは Web ページだけです。同じパソコンの中の別のプログラムは防げません。信頼できるパソコンでだけ有効にし、ポート 5101 をほかのパソコンから届くようにしないでください(ポートの転送やプロキシをしない)。使わないときは無効に戻してください。
+
+### 1.1.x からの更新
+
+- これまでは `CC5_DEV_MODE` の初期値が `1` だったため、`exec_python` が初期状態で有効でした。今は、上のとおり `CC5_ALLOW_EXEC=1` を設定するまで無効です。
+- `CC5_DEV_MODE` の初期値は `0` になりました。プラグインの開発で `GET /reload` を使うときは、CC5 用に `CC5_DEV_MODE=1` を設定してください。
+- MCP サーバーを作り直し(`npm run build`)、プラグインを入れ直して、CC5 を再起動します。新しいプラグインが動いていれば、`GET /health` が `"version": "1.2.0"` を返します。`install-plugin.ps1` は `CC5_MCP_Bridge` フォルダーを丸ごと入れ替えるので、そこに置いているものは先に移してください。
 
 ## License
 

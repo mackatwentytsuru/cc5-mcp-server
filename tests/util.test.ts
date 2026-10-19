@@ -3,7 +3,21 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { bridgeCall } from "../src/util.js";
+import { bridgeCall, isEnvFlagEnabled } from "../src/util.js";
+
+describe("isEnvFlagEnabled", () => {
+  it("is false when the variable is not set", () => {
+    expect(isEnvFlagEnabled("CC5_TEST_FLAG", {})).toBe(false);
+  });
+
+  it.each(["1", "true", "TRUE", "yes", " Yes "])("is true for %j", (value) => {
+    expect(isEnvFlagEnabled("CC5_TEST_FLAG", { CC5_TEST_FLAG: value })).toBe(true);
+  });
+
+  it.each(["", "0", "false", "no", "off", "2", "enabled"])("is false for %j", (value) => {
+    expect(isEnvFlagEnabled("CC5_TEST_FLAG", { CC5_TEST_FLAG: value })).toBe(false);
+  });
+});
 
 describe("bridgeCall", () => {
   it("returns formatted success text when the fn resolves", async () => {

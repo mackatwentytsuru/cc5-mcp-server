@@ -33,7 +33,7 @@ import { registerMorphResources } from "./resources/morphs.js";
 async function main() {
   const server = new McpServer({
     name: "cc5-mcp-server",
-    version: "1.1.0",
+    version: "1.2.0",
   });
 
   // Bridge to CC5's Python plugin HTTP server

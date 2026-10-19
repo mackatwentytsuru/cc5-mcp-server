@@ -2,6 +2,17 @@
  * Shared utilities for MCP tool callbacks.
  */
 
+const TRUTHY_FLAG_VALUES = new Set(["1", "true", "yes"]);
+
+/**
+ * True when the environment variable is set to 1 / true / yes (any case).
+ * Read on every call so the result always reflects the current environment.
+ */
+export function isEnvFlagEnabled(name: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env[name];
+  return raw !== undefined && TRUTHY_FLAG_VALUES.has(raw.trim().toLowerCase());
+}
+
 /**
  * Wraps a bridge call with try/catch, returning a structured MCP content response.
  * Prevents unhandled errors from propagating to the MCP SDK.

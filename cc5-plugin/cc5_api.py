@@ -2387,25 +2387,45 @@ def reset_all_morphs(avatar_name: str = "") -> dict[str, Any]:
     return {"success": True, "reset_count": count}
 
 
+# --- Opt-in gate for code execution and silent UI automation ---
+#
+# exec_python and the silent Export Head steps are refused unless CC5_ALLOW_EXEC
+# is set (1 / true / yes). CC5_DEV_MODE and CC5_RELOAD_SECRET do NOT enable them:
+# running code must always be an explicit opt-in. server.py checks the same thing
+# per route; it is repeated here because cc5_api is hot-reloaded on its own, so
+# the gate must hold even when an older server.py is the one that is loaded.
+
+def _exec_allowed() -> bool:
+    return os.environ.get("CC5_ALLOW_EXEC", "").strip().lower() in ("1", "true", "yes")
+
+
+def _exec_gate(action: str) -> dict[str, Any] | None:
+    """Return a refusal result when CC5_ALLOW_EXEC is off, else None."""
+    if _exec_allowed():
+        return None
+    return {
+        "success": False,
+        "error": (
+            f"'{action}' is disabled. It can run arbitrary code or drive CC5's UI "
+            "without confirmation, so it is off by default. To enable it, set the "
+            "environment variable CC5_ALLOW_EXEC=1 for Character Creator 5 (for "
+            "example run 'setx CC5_ALLOW_EXEC 1', then restart CC5) and in the MCP "
+            "server's env. See the Security section of the README."
+        ),
+    }
+
+
 # --- Python Script Execution ---
 
 def exec_python(code: str) -> dict[str, Any]:
     """Execute arbitrary Python code inside CC5's RLPy environment.
     The code has access to RLPy module and the running CC5 scene.
+    Off unless CC5_ALLOW_EXEC is set (see _exec_gate).
     Returns: {"success": True, "output": "<captured stdout>", "result": "<last expression>"}
     """
-    # --- Production safety gate (hot-reloadable; mirrors server-side DEV_MODE) ---
-    # Disabled when dev mode is off unless an explicit exec opt-in / reload secret
-    # is present. Keeps arbitrary code execution off by default in production.
-    # NOTE: deliberately NOT gated on CC5_RELOAD_SECRET — exec must not be enabled
-    # as a side effect of securing /reload. Gate only on dev mode / explicit exec opt-in.
-    dev_mode = os.environ.get("CC5_DEV_MODE", "1").strip().lower() not in ("0", "false", "no", "")
-    allow_exec = os.environ.get("CC5_ALLOW_EXEC", "").strip().lower() in ("1", "true", "yes")
-    if not dev_mode and not allow_exec:
-        return {
-            "success": False,
-            "error": "/exec/python disabled. Set CC5_DEV_MODE=1 or CC5_ALLOW_EXEC=1.",
-        }
+    refused = _exec_gate("exec_python")
+    if refused:
+        return refused
 
     if not isinstance(code, str):
         return {"success": False, "error": "code must be a string"}
@@ -3045,6 +3065,9 @@ def silent_install_filter(output_dir: str, character_name: str) -> dict[str, Any
     native save dialog matching CC5's process, then SendInput's the path +
     Enter. Pure OS-level — no Qt or C++ touch.
     """
+    refused = _exec_gate("silent_install_filter")
+    if refused:
+        return refused
     import time, threading
 
     if "\x00" in output_dir or "\x00" in character_name:
@@ -3228,6 +3251,9 @@ def silent_trigger_dialog() -> dict[str, Any]:
     The dialog opens via QTimer.singleShot so this returns immediately.
     Wait ~1 second, then call silent_configure_and_click.
     """
+    refused = _exec_gate("silent_trigger_dialog")
+    if refused:
+        return refused
     if _SILENT_EXPORT_STATE.get("phase") not in ("filter_installed", "handler_armed", "menu_triggered"):
         return {"success": False, "error": f"Wrong phase: {_SILENT_EXPORT_STATE.get('phase')}. Call silent_install_filter first."}
     chosen = _silent_export_find_action()
@@ -3248,6 +3274,9 @@ def silent_configure_and_click(gender: str = "Female", max_texture_size: int = 4
     actual export+texture writing runs asynchronously inside CC5 (poll
     get_export_status to know when done).
     """
+    refused = _exec_gate("silent_configure_and_click")
+    if refused:
+        return refused
     from PySide2.QtWidgets import QComboBox, QCheckBox, QPushButton, QApplication
     from PySide2.QtCore import QTimer
 
@@ -3312,6 +3341,9 @@ def silent_finalize() -> dict[str, Any]:
 
     Call this after the export progress completes (get_export_status shows done).
     """
+    refused = _exec_gate("silent_finalize")
+    if refused:
+        return refused
     from PySide2.QtCore import QTimer
     _silent_export_remove_filter()
     try:

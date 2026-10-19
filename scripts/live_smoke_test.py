@@ -25,11 +25,11 @@ BASE = os.environ.get("CC5_BRIDGE_URL", "http://127.0.0.1:5101")
 P, F, S = [], [], []
 
 
-def call(method, path, body=None, timeout=120):
+def call(method, path, body=None, timeout=120, headers=None):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(
         BASE + path, data=data, method=method,
-        headers={"Content-Type": "application/json"})
+        headers={"Content-Type": "application/json", **(headers or {})})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, json.loads(r.read().decode())
@@ -208,7 +208,18 @@ s, r = call("POST", "/skin/bake", {}, timeout=120); ok("bake_skin_textures (resp
 s, r = call("GET", "/export/head_mh/status"); ok("export_head_mh status", s == 200 and is_resp(r))
 s, r = call("POST", "/undo"); ok("undo", res(r).get("success") is not False and is_resp(r))
 s, r = call("POST", "/redo"); ok("redo", res(r).get("success") is not False and is_resp(r))
-s, r = call("POST", "/exec/python", {"code": "result=6*7"}); ok("exec_python", res(r).get("success") and str(res(r).get("result")) == "42")
+# exec_python is off unless CC5 was started with CC5_ALLOW_EXEC=1. This script
+# cannot see CC5's environment, so it expects whatever its own shell has set.
+s, r = call("POST", "/exec/python", {"code": "result=6*7"})
+if os.environ.get("CC5_ALLOW_EXEC", "").strip().lower() in ("1", "true", "yes"):
+    ok("exec_python (CC5_ALLOW_EXEC on)", s == 200 and str(res(r).get("result")) == "42", r)
+else:
+    ok("exec_python refused by default", s == 403 and "CC5_ALLOW_EXEC" in str((r or {}).get("error", "")), r)
+
+print("== Security: Host / Origin checks ==")
+s, r = call("GET", "/health", headers={"Origin": "https://example.com"}); ok("request with Origin refused", s == 403, r)
+s, r = call("GET", "/health", headers={"Host": "example.com:5101"}); ok("foreign Host refused (DNS rebinding)", s == 403, r)
+s, r = call("GET", "/health", headers={"Sec-Fetch-Site": "cross-site"}); ok("browser-triggered request refused", s == 403, r)
 
 print(f"\n==== {len(P)} PASS / {len(F)} FAIL / {len(S)} SKIP ====")
 if F:
