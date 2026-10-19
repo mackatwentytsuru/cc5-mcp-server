@@ -12,14 +12,16 @@ What is checked:
   * Requests with a non-loopback Host (DNS rebinding), any Origin header, or a
     browser Sec-Fetch-Site other than "none" are refused before anything runs.
   * Ordinary routes keep working for the clients the project uses.
+  * capture_viewport's PowerShell fallback never puts the output path on the
+    command line (where PowerShell would run text from it).
 """
 
 from __future__ import annotations
 
 import http.client
-import importlib
 import json
 import os
+import subprocess
 import sys
 import threading
 import unittest
@@ -170,6 +172,16 @@ class ExecGateTests(BridgeTestCase):
                 self.assertEqual(data["result"]["stub"], action)
                 stubs[action].assert_called_once()
 
+    def test_gate_also_covers_get_routes(self) -> None:
+        # A gated action reached through any route table entry (here a GET route
+        # added by a hot patch) is still refused.
+        stubs = self.stub_actions(exec_python={"success": True})
+        with mock.patch.dict(server.GET_ROUTES, {"/sneaky": "exec_python"}):
+            status, data = self.request("GET", "/sneaky")
+        self.assertEqual(status, 403)
+        self.assertIn("CC5_ALLOW_EXEC=1", data["error"])
+        stubs["exec_python"].assert_not_called()
+
     def test_safe_routes_work_without_allow_exec(self) -> None:
         stubs = self.stub_actions(
             get_avatars=[{"name": "A"}],
@@ -190,6 +202,14 @@ class ExecGateTests(BridgeTestCase):
 
 
 class ReloadGateTests(BridgeTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        # RELOAD_SECRET is read at import; make these tests independent of the
+        # developer's own environment.
+        patcher = mock.patch.object(server, "RELOAD_SECRET", "")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_reload_refused_when_dev_mode_off(self) -> None:
         with mock.patch.object(server, "DEV_MODE", False), \
                 mock.patch.object(server, "reload_modules") as reload_mock:
@@ -203,6 +223,17 @@ class ReloadGateTests(BridgeTestCase):
                 mock.patch.object(server, "reload_modules", return_value={"success": True}) as reload_mock:
             status, _ = self.request("GET", "/reload")
         self.assertEqual(status, 200)
+        reload_mock.assert_called_once()
+
+    def test_wrong_or_non_ascii_token_is_refused_cleanly(self) -> None:
+        with mock.patch.object(server, "RELOAD_SECRET", "s3cret"), \
+                mock.patch.object(server, "reload_modules", return_value={"success": True}) as reload_mock:
+            for token in ("wrong", "s3crét"):
+                with self.subTest(token=token):
+                    status, data = self.request("GET", "/reload", headers={"X-Reload-Token": token})
+                    self.assertEqual((status, data), (403, {"error": "Forbidden"}))
+            status, _ = self.request("GET", "/reload", headers={"X-Reload-Token": "s3cret"})
+            self.assertEqual(status, 200)
         reload_mock.assert_called_once()
 
     def test_api_listing_is_short_when_dev_mode_off(self) -> None:
@@ -256,10 +287,11 @@ class HostAndOriginTests(BridgeTestCase):
                                   silent_trigger_dialog={"success": True})
         for path in ("/exec/python", "/export/head_mh/silent/trigger_dialog"):
             with self.subTest(path=path):
-                status, _ = self.request("POST", path, {"code": "1"},
-                                         headers={"Origin": "https://evil.example",
-                                                  "Content-Type": "text/plain"})
+                status, data = self.request("POST", path, {"code": "1" * 5000},
+                                            headers={"Origin": "https://evil.example",
+                                                     "Content-Type": "text/plain"})
                 self.assertEqual(status, 403)
+                self.assertIn("Origin", data["error"])  # a readable reply, not a reset
         stubs["exec_python"].assert_not_called()
         stubs["silent_trigger_dialog"].assert_not_called()
 
@@ -343,18 +375,44 @@ class Cc5ApiGateTests(unittest.TestCase):
         self.assertEqual(cc5_api.exec_python("6*7"), {"success": True, "result": "42"})
 
 
+class CaptureFallbackTests(unittest.TestCase):
+    """capture_viewport's PowerShell fallback must not run text from the path."""
+
+    def test_output_path_goes_through_env_not_command_line(self) -> None:
+        evil = "C:/Users/Public/a;New-Item canary.txt;b.png"
+        with mock.patch("subprocess.run") as run:
+            run.return_value = mock.MagicMock(returncode=0, stderr=b"")
+            cc5_api._capture_window_screenshot(evil)
+        argv = run.call_args.args[0]
+        self.assertFalse(any(evil in str(arg) for arg in argv))
+        self.assertEqual(run.call_args.kwargs["env"]["CC5_CAPTURE_OUTPUT_PATH"], evil)
+        script = argv[argv.index("-Command") + 1]
+        self.assertIn("$env:CC5_CAPTURE_OUTPUT_PATH", script)
+        self.assertEqual(argv[-1], script)  # nothing is appended after the script
+
+
 class DefaultsTests(unittest.TestCase):
+    def _dev_mode_in_fresh_process(self, value: str | None) -> str:
+        env = {k: v for k, v in os.environ.items() if k != "CC5_DEV_MODE"}
+        if value is not None:
+            env["CC5_DEV_MODE"] = value
+        code = (
+            "import sys; from unittest import mock; "
+            "sys.modules['RLPy'] = mock.MagicMock(); "
+            f"sys.path.insert(0, {PLUGIN_DIR!r}); "
+            "import server; print(server.DEV_MODE)"
+        )
+        out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True,
+                             text=True, timeout=60, check=True)
+        return out.stdout.strip().splitlines()[-1]
+
     def test_dev_mode_is_off_when_unset(self) -> None:
-        patcher = _without_flags()
-        try:
-            importlib.reload(server)
-            self.assertFalse(server.DEV_MODE)
-            os.environ["CC5_DEV_MODE"] = "1"
-            importlib.reload(server)
-            self.assertTrue(server.DEV_MODE)
-        finally:
-            patcher.stop()
-            importlib.reload(server)
+        self.assertEqual(self._dev_mode_in_fresh_process(None), "False")
+        self.assertEqual(self._dev_mode_in_fresh_process("0"), "False")
+        self.assertEqual(self._dev_mode_in_fresh_process("1"), "True")
+
+    def test_handler_has_a_socket_timeout(self) -> None:
+        self.assertTrue(0 < server.BridgeHandler.timeout <= 60)
 
     def test_exec_gate_lists_exactly_the_risky_actions(self) -> None:
         self.assertEqual(

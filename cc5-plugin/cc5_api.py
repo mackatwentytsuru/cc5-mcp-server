@@ -723,11 +723,12 @@ def get_avatar_info() -> dict[str, Any] | None:
 def _capture_window_screenshot(output_path: str) -> None:
     """Fallback: capture CC5 window only via PowerShell + GetWindowRect."""
     import subprocess
-    # Pass the output path as a bound PowerShell parameter instead of
-    # interpolating it into the script body — prevents PS command injection
-    # via single-quote / paren breakout in caller-influenced paths.
+    # The output path reaches PowerShell only through an environment variable.
+    # Never put it on the command line: with -Command, PowerShell joins every
+    # argument after it into one script, so a path such as "a;<command>;b.png"
+    # would run <command> (a bound "-OutputPath" parameter does not work there).
     ps_script = """
-param([string]$OutputPath)
+$OutputPath = $env:CC5_CAPTURE_OUTPUT_PATH
 Add-Type -AssemblyName System.Drawing
 Add-Type @'
 using System;
@@ -739,8 +740,8 @@ public class Win32 {
 '@
 $proc = Get-Process -Name "CharacterCreator*" -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $proc -or $proc.MainWindowHandle -eq [IntPtr]::Zero) {
-    $screen = [System.Windows.Forms.Screen]::PrimaryScreen
     Add-Type -AssemblyName System.Windows.Forms
+    $screen = [System.Windows.Forms.Screen]::PrimaryScreen
     $bitmap = New-Object System.Drawing.Bitmap($screen.Bounds.Width, $screen.Bounds.Height)
     $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
     $graphics.CopyFromScreen($screen.Bounds.Location, [System.Drawing.Point]::Empty, $screen.Bounds.Size)
@@ -762,9 +763,9 @@ $graphics.Dispose()
 $bitmap.Dispose()
 """
     result = subprocess.run(
-        ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script,
-         "-OutputPath", output_path],
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_script],
         capture_output=True, timeout=10,
+        env={**os.environ, "CC5_CAPTURE_OUTPUT_PATH": output_path},
     )
     if result.returncode != 0:
         stderr_text = result.stderr.decode("utf-8", errors="replace").strip()

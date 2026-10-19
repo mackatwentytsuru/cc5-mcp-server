@@ -386,6 +386,11 @@ def _validate_params(action: str, params: dict) -> str | None:
 
 def _execute_sync(action: str, params: dict, timeout: float = 30.0) -> tuple[int, Any]:
     """Queue a command, wait for main-thread execution, return (http_status, result)."""
+    # Opt-in gate. Checked here, on the single path every GET and POST action
+    # takes, so no route table entry (even one hot-patched later) can skip it.
+    if action in EXEC_GATED_ACTIONS and not exec_allowed():
+        return 403, {"error": exec_disabled_error(action)}
+
     # Validate required params before queueing (returns 400, not 500)
     error = _validate_params(action, params)
     if error:
@@ -448,9 +453,17 @@ def _api_info() -> dict[str, Any]:
 class BridgeHandler(BaseHTTPRequestHandler):
     """HTTP request handler for the CC5 bridge API."""
 
+    # Socket timeout (seconds) for reading a request and writing the reply. The
+    # server handles one connection at a time, so without it an idle or stalled
+    # connection (e.g. a browser preconnect) would block every other request.
+    # Waiting for CC5 to run a command is not socket I/O and is not affected.
+    timeout = 10
+
     def log_message(self, format: str, *args: Any) -> None:
-        # Log non-2xx responses for debugging
-        if args and not str(args[0]).startswith("2"):
+        # Log non-2xx responses for debugging. For log_request() the arguments
+        # are (request line, status code, size); log_error() passes (code, message).
+        status = str(args[1]) if len(args) > 1 else ""
+        if not status.startswith("2"):
             print(f"[CC5 MCP Bridge] {format % args}")
 
     def _send_json(self, status: int, data: Any) -> None:
@@ -467,9 +480,23 @@ class BridgeHandler(BaseHTTPRequestHandler):
         if reason is None:
             return False
         print(f"[CC5 MCP Bridge] Refused {self.command} {self.path[:200]!r}: {reason}")
-        self.close_connection = True  # the request body (if any) is left unread
+        self._discard_body()
+        self.close_connection = True
         self._send_json(403, {"error": reason})
         return True
+
+    def _discard_body(self, limit: int = 64 * 1024) -> None:
+        """Read and drop a small request body before refusing the request.
+
+        Closing a socket with unread data makes Windows send a reset, and the
+        client would then see a connection error instead of the 403 message.
+        """
+        try:
+            length = int(self.headers.get("Content-Length", "0") or 0)
+            if 0 < length <= limit:
+                self.rfile.read(length)
+        except (ValueError, OSError):
+            pass
 
     def _read_json(self) -> dict:
         raw_length = self.headers.get("Content-Length", "0")
@@ -515,7 +542,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 return
             if RELOAD_SECRET:
                 token = self.headers.get("X-Reload-Token", "")
-                if not hmac.compare_digest(token, RELOAD_SECRET):
+                # Compare bytes: compare_digest raises TypeError on non-ASCII str.
+                if not hmac.compare_digest(token.encode("utf-8"), RELOAD_SECRET.encode("utf-8")):
                     self._send_json(403, {"error": "Forbidden"})
                     return
             result = reload_modules()
@@ -543,9 +571,6 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
         action = POST_ROUTES.get(path)
         if action:
-            if action in EXEC_GATED_ACTIONS and not exec_allowed():
-                self._send_json(403, {"error": exec_disabled_error(action)})
-                return
             status, data = _execute_sync(action, params)
             self._send_json(status, data)
         else:
