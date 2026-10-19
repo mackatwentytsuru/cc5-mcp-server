@@ -1,5 +1,5 @@
 # CC5 MCP Bridge Plugin Installer
-$source = "C:\Users\macka\Projects\cc5-mcp-server\cc5-plugin"
+$source = Join-Path $PSScriptRoot "cc5-plugin"
 $dest   = "C:\Program Files\Reallusion\Character Creator 5\Bin64\OpenPlugin\CC5_MCP_Bridge"
 
 if (Test-Path $dest) {
