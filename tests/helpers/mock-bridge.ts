@@ -26,6 +26,8 @@ import type {
   ExpressionItem,
   ExpressionSetResult,
   ExpressionResetResult,
+  FacialProfileInfo,
+  ConvertFacialProfileResult,
   ResetMorphsResult,
   MaterialInfo,
   DiffuseColor,
@@ -45,6 +47,7 @@ export type MockBridge = {
 export function createMockBridge(): MockBridge {
   return {
     healthCheck: vi.fn<[], Promise<boolean>>(),
+    healthDetail: vi.fn(),
     getAvatars: vi.fn<[], Promise<CC5Avatar[]>>(),
     getAvatarInfo: vi.fn<[], Promise<AvatarInfo | null>>(),
     getMorphCatalog: vi.fn<[], Promise<MorphCatalog>>(),
@@ -74,6 +77,8 @@ export function createMockBridge(): MockBridge {
     getExpressionInfo: vi.fn<[], Promise<ExpressionInfo>>(),
     setExpression: vi.fn<[ExpressionItem[]], Promise<ExpressionSetResult>>(),
     resetExpression: vi.fn<[], Promise<ExpressionResetResult>>(),
+    getFacialProfile: vi.fn<[], Promise<FacialProfileInfo>>(),
+    convertFacialProfile: vi.fn<[{ target_profile_path?: string; dry_run?: boolean; backup_current_to?: string }], Promise<ConvertFacialProfileResult>>(),
     resetAllMorphs: vi.fn<[string?], Promise<ResetMorphsResult>>(),
     searchMorphs: vi.fn<[string, string?], Promise<Array<{ id: string; display_name: string; category: string }>>>(),
     getMaterialInfo: vi.fn<[string?], Promise<MaterialInfo>>(),

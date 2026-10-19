@@ -65,8 +65,8 @@ export function registerMetaHumanTools(server: McpServer, bridge: CC5Bridge) {
     "export_head_metahuman",
     "Trigger CC5's 'File -> Export -> Export Head -> Mesh to MetaHuman' pipeline (Chapter 4). Opens the relevant menu/dialog; user must confirm output path and gender in the resulting CC5 dialog.",
     {
-      output_dir: z.string().describe("Absolute directory where the Mesh-to-MetaHuman files will be written (e.g., 'D:/epic/BYONDEgirls57Stage/Content/Characters/CC5/BEYONZ/')"),
-      character_name: z.string().describe("Character name (e.g., 'BEYONZ'). Used as the base file name."),
+      output_dir: z.string().describe("Absolute directory where the Mesh-to-MetaHuman files will be written (e.g., 'D:/UEProjects/MyProject/Content/Characters/CC5/MyCharacter/')"),
+      character_name: z.string().describe("Character name (e.g., 'MyCharacter'). Used as the base file name."),
       gender: z.enum(["Male", "Female"]).default("Female").describe("Character gender - selects 'Mesh to MetaHuman Male' or 'Mesh to MetaHuman Female'."),
     },
     async ({ output_dir, character_name, gender }) => {

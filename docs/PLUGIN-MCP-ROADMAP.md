@@ -65,3 +65,16 @@ This roadmap is grounded in a **live RLPy automation audit** run on the actual C
 - Respect trial-content / DRM gates — do not bypass `IsTrialContentMode()` or licensing.
 - When researching plugin APIs with sub-agents, keep them **web-only**; do NOT give research
   agents live cc5 MCP access (a research agent once applied a hair element to the live scene).
+- **Never probe an unknown RLPy signature by calling it with `None` / wrong-arity args.**
+  A SWIG null-reference error can be caught as a Python exception yet still leave the C++ side
+  corrupt, crashing CC5 seconds later. Read `docs/rlpy-api-reference.md` first.
+  See [headshot3-findings.md](headshot3-findings.md) §2 for two measured crashes.
+- A modal dialog in CC5 blocks the main-thread QTimer queue, so `exec_python` silently stalls
+  while the bridge still reports "connected". Watch for dialogs when calls appear to hang.
+
+## Related docs
+
+- **[headshot3-findings.md](headshot3-findings.md)** — Headshot 3 automation research (2026-07-20).
+  Which Headshot API to use (`RLPy2.Headshot3`, not `RLPy.RHeadshot`), measured enum values,
+  UE5 FBX export flags and why each is required, plus dev-workflow pitfalls
+  (repo vs. Program Files copy, actual hot-reload scope, modal-dialog stalls).
