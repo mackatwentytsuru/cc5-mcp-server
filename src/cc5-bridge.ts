@@ -51,6 +51,26 @@ import type {
   ExportHeadMetaHumanResult,
   CreateActorMixerOptions,
   CreateActorMixerResult,
+  WorkflowItemSelector,
+  WorkflowListItemsResult,
+  WorkflowSetVisibleResult,
+  WorkflowRemoveItemResult,
+  WorkflowImportFbxResult,
+  WorkflowAttachResult,
+  WorkflowWeightTemplate,
+  WorkflowTransferWeightsResult,
+  WorkflowHairTemplate,
+  WorkflowConvertHairResult,
+  WorkflowClothToAccessoryResult,
+  WorkflowConformResult,
+  WorkflowTransformResult,
+  WorkflowTransformUpdate,
+  WorkflowSaveResult,
+  WorkflowExportObjResult,
+  WorkflowFloorContactResult,
+  WorkflowSimpleResult,
+  WorkflowRenderResult,
+  WorkflowViews4Result,
 } from "./types.js";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:5101";
@@ -581,5 +601,143 @@ export class CC5Bridge {
     if (opts.save_presets !== undefined) body.save_presets = opts.save_presets;
     if (opts.save_avatar_presets !== undefined) body.save_avatar_presets = opts.save_avatar_presets;
     return this.request<CreateActorMixerResult>("/actor_mixer/create", "POST", body);
+  }
+
+  // --- Text-only workflow routes ---
+
+  /** GET /workflow/items (sent as POST with an empty body per the contract). */
+  async listSceneItems(): Promise<WorkflowListItemsResult> {
+    return this.request<WorkflowListItemsResult>("/workflow/items", "POST", {});
+  }
+
+  async wfSetVisible(
+    sel: WorkflowItemSelector,
+    visible: boolean
+  ): Promise<WorkflowSetVisibleResult> {
+    return this.request<WorkflowSetVisibleResult>("/workflow/visible", "POST", {
+      ...sel,
+      visible,
+    });
+  }
+
+  async wfRemoveItem(sel: WorkflowItemSelector): Promise<WorkflowRemoveItemResult> {
+    return this.request<WorkflowRemoveItemResult>("/workflow/remove", "POST", { ...sel });
+  }
+
+  async wfImportFbx(filePath: string): Promise<WorkflowImportFbxResult> {
+    return this.request<WorkflowImportFbxResult>("/workflow/import_fbx", "POST", {
+      file_path: filePath,
+    });
+  }
+
+  async wfAttachToBone(
+    sel: WorkflowItemSelector,
+    boneName: string
+  ): Promise<WorkflowAttachResult> {
+    return this.request<WorkflowAttachResult>("/workflow/attach", "POST", {
+      ...sel,
+      bone_name: boneName,
+    });
+  }
+
+  async wfTransferSkinWeights(
+    sel: WorkflowItemSelector,
+    template: WorkflowWeightTemplate
+  ): Promise<WorkflowTransferWeightsResult> {
+    return this.request<WorkflowTransferWeightsResult>("/workflow/transfer_weights", "POST", {
+      ...sel,
+      template,
+    });
+  }
+
+  async wfConvertToHair(
+    sel: WorkflowItemSelector,
+    template: WorkflowHairTemplate
+  ): Promise<WorkflowConvertHairResult> {
+    return this.request<WorkflowConvertHairResult>("/workflow/convert_hair", "POST", {
+      ...sel,
+      template,
+    });
+  }
+
+  async wfClothToAccessory(
+    sel: WorkflowItemSelector,
+    keepCurrentShape: boolean = true
+  ): Promise<WorkflowClothToAccessoryResult> {
+    return this.request<WorkflowClothToAccessoryResult>("/workflow/cloth_to_accessory", "POST", {
+      ...sel,
+      keep_current_shape: keepCurrentShape,
+    });
+  }
+
+  async wfConformCloth(
+    sel: WorkflowItemSelector,
+    iterations: number = 1,
+    values?: Record<string, number>
+  ): Promise<WorkflowConformResult> {
+    const body: Record<string, unknown> = { ...sel, iterations };
+    if (values !== undefined) body.values = values;
+    return this.request<WorkflowConformResult>("/workflow/conform", "POST", body);
+  }
+
+  async wfGetTransform(sel: WorkflowItemSelector): Promise<WorkflowTransformResult> {
+    return this.request<WorkflowTransformResult>("/workflow/transform/get", "POST", { ...sel });
+  }
+
+  async wfSetTransform(
+    sel: WorkflowItemSelector,
+    update: WorkflowTransformUpdate
+  ): Promise<WorkflowTransformResult> {
+    const body: Record<string, unknown> = { ...sel };
+    if (update.move !== undefined) body.move = update.move;
+    if (update.rotate !== undefined) body.rotate = update.rotate;
+    if (update.scale !== undefined) body.scale = update.scale;
+    return this.request<WorkflowTransformResult>("/workflow/transform/set", "POST", body);
+  }
+
+  async wfSaveProject(filePath?: string): Promise<WorkflowSaveResult> {
+    const body: Record<string, unknown> = {};
+    if (filePath !== undefined) body.file_path = filePath;
+    return this.request<WorkflowSaveResult>("/workflow/save", "POST", body);
+  }
+
+  async wfExportObj(
+    filePath: string,
+    currentPose: boolean = true,
+    withMaterials: boolean = true
+  ): Promise<WorkflowExportObjResult> {
+    return this.request<WorkflowExportObjResult>("/workflow/export_obj", "POST", {
+      file_path: filePath,
+      current_pose: currentPose,
+      with_materials: withMaterials,
+    });
+  }
+
+  async wfGetFloorContact(): Promise<WorkflowFloorContactResult> {
+    return this.request<WorkflowFloorContactResult>("/workflow/floor_contact/get", "POST", {});
+  }
+
+  async wfSetFloorContact(value: Record<string, unknown>): Promise<WorkflowSimpleResult> {
+    return this.request<WorkflowSimpleResult>("/workflow/floor_contact/set", "POST", { value });
+  }
+
+  async wfAutoAdjustFootHeight(): Promise<WorkflowSimpleResult> {
+    return this.request<WorkflowSimpleResult>("/workflow/foot_auto", "POST", {});
+  }
+
+  async wfRenderViewport(filePath: string): Promise<WorkflowRenderResult> {
+    return this.request<WorkflowRenderResult>("/workflow/render", "POST", {
+      file_path: filePath,
+    });
+  }
+
+  async wfCaptureViews4(
+    folder: string,
+    prefix: string,
+    target?: WorkflowItemSelector
+  ): Promise<WorkflowViews4Result> {
+    const body: Record<string, unknown> = { folder, prefix };
+    if (target !== undefined) body.target = target;
+    return this.request<WorkflowViews4Result>("/workflow/views4", "POST", body);
   }
 }

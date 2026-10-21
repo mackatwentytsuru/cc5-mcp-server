@@ -26,6 +26,7 @@ import { registerMaterialTools } from "./tools/material.js";
 import { registerContentTools } from "./tools/content.js";
 import { registerColorTools } from "./tools/color.js";
 import { registerVisibilityTools } from "./tools/visibility.js";
+import { registerWorkflowTools } from "./tools/workflow.js";
 import { registerScriptingTools } from "./tools/scripting.js";
 import { registerMetaHumanTools } from "./tools/metahuman.js";
 import { registerActorMixerTools } from "./tools/actor-mixer.js";
@@ -60,6 +61,7 @@ async function main() {
   registerContentTools(server, bridge);
   registerColorTools(server, bridge);
   registerVisibilityTools(server, bridge);
+  registerWorkflowTools(server, bridge);
   registerScriptingTools(server, bridge);
   registerMetaHumanTools(server, bridge);
   registerActorMixerTools(server, bridge);
