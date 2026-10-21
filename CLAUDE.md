@@ -67,6 +67,7 @@ cc5_api.py の変更（API 関数の修正、新関数追加）はリロード�
 | RLPy の関数が見つからない | CC5 バージョン差異 | `hasattr()` でチェックしてグレースフルに失敗 |
 | モーフが効かない | アバターがシーンにいない | `create_avatar` で先にアバターを作成 |
 | マテリアル色が変わらない | メッシュ/マテリアル名が間違い | `get_material_info` で正しい名前を確認 |
+| `export_fbx` が失敗 (RStatus IsError) | シーンに体験版 (未購入) の素材がある。`RGlobal.IsTrialContentMode()` が True。CC5 は書き出しを拒否する | 体験版の素材を外す/購入する (人が判断)。書き出し後はファイルの存在・大きさも検証される |
 | Undo が効かない | `BeginAction/EndAction` で囲まれていない | 変更操作は必ず BeginAction/EndAction で囲む |
 | キャプチャが空画像 | シーンにアバターがいない | アバター作成 → モーフ適用 → キャプチャ |
 | RenderImage が失敗 | .ccProject 読み込み後に発生することがある | 自動で Windows スクリーンショットにフォールバック |

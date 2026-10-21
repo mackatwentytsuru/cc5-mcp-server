@@ -11,6 +11,7 @@ import os
 import sys
 import base64
 import tempfile
+import time
 import urllib.parse
 from typing import Any
 
@@ -486,6 +487,96 @@ def load_asset(file_path: str) -> dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
+def _describe_rlpy_status(status: Any) -> tuple[bool | None, str]:
+    """Interpret a return value from an RLPy call as (ok, description).
+
+    RLPy file operations return an RStatus (IsError()/GetStatusCode()); some
+    builds return a bool or None. ok is None when the value is not interpretable
+    (so callers rely on checking the filesystem instead).
+    """
+    if status is None:
+        return None, "None"
+    if isinstance(status, bool):
+        return status, f"bool({status})"
+    if hasattr(status, "IsError"):
+        try:
+            is_err = bool(status.IsError())
+        except Exception:
+            return None, repr(status)
+        code = ""
+        try:
+            code = f", code={status.GetStatusCode()}"
+        except Exception:
+            pass
+        return (not is_err), f"RStatus(IsError={is_err}{code})"
+    return None, repr(status)
+
+
+def _export_failure_hints() -> str:
+    """Best-effort, read-only explanation for a refused export (no UI is touched)."""
+    parts: list[str] = []
+    glob = getattr(RLPy, "RGlobal", None)
+    trial_content = None
+    for name in ("IsTrialContentMode", "IsTrialVersion"):
+        fn = getattr(glob, name, None) if glob is not None else None
+        if fn is None:
+            continue
+        try:
+            val = bool(fn())
+        except Exception:
+            continue
+        parts.append(f"RGlobal.{name}()={val}")
+        if name == "IsTrialContentMode":
+            trial_content = val
+    if trial_content:
+        parts.append(
+            "CAUSE: the project contains trial (unpurchased) content, so CC5 refuses to "
+            "export ('This project contains trial content. Purchase the trial content ... "
+            "in order to export it.'). Replace or remove the trial items, or purchase them; "
+            "a person must decide. This tool never clicks any CC5 pop-up."
+        )
+    else:
+        parts.append(
+            "Cause unknown. Check CC5 for a pop-up (list_dialogs); a person must decide "
+            "on it. This tool never clicks any CC5 pop-up."
+        )
+    return " ".join(parts)
+
+
+def _verify_fbx_written(output_path: str, status: Any, notes: list[str],
+                        started_at: float) -> dict[str, Any] | None:
+    """Confirm an FBX export actually produced a file.
+
+    Returns a failure dict if the export reported an error, or if no non-empty
+    file exists at output_path that was written during this call. Returns None
+    when the file is verified (size is appended to notes).
+    """
+    ok, desc = _describe_rlpy_status(status)
+    notes.append(f"ExportFbxFile returned {desc}")
+    if ok is False:
+        hints = _export_failure_hints()
+        return {"success": False,
+                "error": f"CC5 reported an FBX export error: {desc}. {hints}",
+                "notes": notes}
+    try:
+        st = os.stat(output_path)
+    except OSError:
+        st = None
+    if st is None or st.st_size <= 0 or st.st_mtime < started_at - 2.0:
+        reason = ("no file was created" if st is None
+                  else "file is empty" if st.st_size <= 0
+                  else "file was not updated by this export (stale file)")
+        return {
+            "success": False,
+            "error": f"FBX export reported success but verification failed: {reason} at {output_path}",
+            "path": output_path,
+            "notes": notes,
+        }
+    notes.append(f"verified: {st.st_size} bytes written")
+    return None
+
+
+
 def export_fbx(
     output_path: str,
     options_flags: int = 0,
@@ -630,6 +721,8 @@ def export_fbx(
     applied_fps: int | None = None
     applied_motion_range: list | None = None
     applied_texture_size: int | None = None
+    export_status: Any = None
+    export_started = time.time()
 
     try:
         dir_path = os.path.dirname(output_path)
@@ -711,7 +804,7 @@ def export_fbx(
                     except Exception as e:
                         notes.append(f"WARNING: SetTextureSize failed: {e}")
 
-                RLPy.RFileIO.ExportFbxFile(avatar, output_path, setting)
+                export_status = RLPy.RFileIO.ExportFbxFile(avatar, output_path, setting)
                 used_setting_object = True
             except Exception as e:
                 notes.append(f"RExportFbxSetting overload failed ({e}); falling back to 2-arg export")
@@ -759,7 +852,12 @@ def export_fbx(
                     except Exception:
                         pass
             # 2-arg fallback — avoids passing bare int as 3rd arg
-            RLPy.RFileIO.ExportFbxFile(avatar, output_path)
+            export_status = RLPy.RFileIO.ExportFbxFile(avatar, output_path)
+
+        # Never trust the return value alone: confirm the file really exists.
+        failure = _verify_fbx_written(output_path, export_status, notes, export_started)
+        if failure is not None:
+            return failure
 
         # Honest reporting: echo flags/options only when actually applied.
         result: dict[str, Any] = {
