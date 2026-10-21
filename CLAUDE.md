@@ -219,7 +219,7 @@ powershell -ExecutionPolicy Bypass -File install-plugin.ps1
 
 ### 4. CC5 起動 → 自動でブリッジ起動（手動操作不要）
 
-## 利用可能な MCP ツール (56個)
+## 利用可能な MCP ツール (57個)
 
 ### シーン管理
 | ツール | 説明 |
@@ -300,6 +300,13 @@ powershell -ExecutionPolicy Bypass -File install-plugin.ps1
 |--------|------|
 | create_actor_mixer | ネイティブ「Create Mixer Assets」ダイアログを駆動して .ccMixerPreset を生成。`confirm_create` が安全ゲート (false=フィールド設定後キャンセルするドライラン / true=Create クリック)。ActorMIXER PRO プラグインが必要 |
 
+### 小窓(ダイアログ)検出
+| ツール | 説明 |
+|--------|------|
+| list_dialogs | CC5 と Reallusion Hub の開いている小窓(題名・本文・ボタン・画像)を一覧。読むだけ・主スレッドが止まっていても動く。押す道具は作らない |
+
+**自動の注意:** 小窓が開いていると、どのツールの結果にも先頭に「⚠ CC5 に小窓が出ています ...」が付く(`src/dialogs.ts` が `server.tool` を包む。`scripts/list-dialogs.ps1` が実体)。出たら操作を続けず、人に確かめる。規約・購入・ログイン・更新・削除・上書きは絶対に自分で押さない。`CC5_DIALOG_WATCH=0` で無効。
+
 ### 編集
 | ツール | 説明 |
 |--------|------|
@@ -324,3 +331,5 @@ powershell -ExecutionPolicy Bypass -File install-plugin.ps1
 | CC5_DEV_MODE | 1 | 開発モード (1=reload有効) |
 | CC5_REQUEST_TIMEOUT_MS | 30000 | リクエストタイムアウト (ms) |
 | CC5_ROOT | (自動検出) | CC5 インストールパス |
+| CC5_DIALOG_WATCH | 1 | 0 で小窓の注意を無効化 |
+| CC5_DIALOG_WATCH_IGNORE_HUB | (空) | 1 で Hub だけの小窓を注意から外す |

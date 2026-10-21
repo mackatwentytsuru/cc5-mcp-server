@@ -72,6 +72,21 @@ This roadmap is grounded in a **live RLPy automation audit** run on the actual C
 - A modal dialog in CC5 blocks the main-thread QTimer queue, so `exec_python` silently stalls
   while the bridge still reports "connected". Watch for dialogs when calls appear to hang.
 
+## 小窓(ダイアログ)の検出 (2026-10-21)
+
+CC5 のモーダルな小窓が主のスレッドを止めると、ブリッジは生きているのに何も実行されない。
+これを人が見逃さないための仕組み。
+
+- `list_dialogs` ツール: CC5(CharacterCreator.exe)と Reallusion Hub の、いま開いている小窓の題名・本文・ボタン・
+  プロセス・前面かどうか(と画像)を返す。`scripts/list-dialogs.ps1`(EnumWindows + UI Automation)を使うので、
+  **CC5 の主のスレッドが止まっていても動く**(ブリッジを通らない)。
+- 自動の注意: どの MCP ツールの結果にも、小窓があれば先頭に `⚠ CC5 に小窓が出ています ...` が付く(4 秒キャッシュ)。
+  規約・購入・ログイン・更新・削除・上書きらしい小窓には「人が判断」と付く。
+- **小窓を押す道具は作らない**(読むだけ)。押すかどうかは人が決める。
+- 切る: `CC5_DIALOG_WATCH=0` / Hub だけ隠す: `CC5_DIALOG_WATCH_IGNORE_HUB=1`。
+- 限界: Qt 製の小窓(Hub のお知らせなど)は本文・ボタンが取れないことがある(題名は取れる)。
+  画像は Windows が描画できた時だけ(別の画面や後ろにある窓は、他のアプリを写さないよう画像なしにする)。
+
 ## Related docs
 
 - **[headshot3-findings.md](headshot3-findings.md)** — Headshot 3 automation research (2026-07-20).
