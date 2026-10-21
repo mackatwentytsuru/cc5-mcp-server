@@ -405,3 +405,139 @@ export interface CreateActorMixerResult extends OperationResult {
   /** True when the open avatar holds trial content; ActorMIXER refuses to run. */
   trial_content?: boolean;
 }
+
+// --- Text-only workflow routes (/workflow/*) ---
+
+/** Kind of a scene item, as reported by /workflow/items. */
+export type WorkflowItemKind =
+  | "avatar"
+  | "cloth"
+  | "accessory"
+  | "hair"
+  | "prop"
+  | "light"
+  | "camera";
+
+/** Minimal item reference: name, id and kind. */
+export interface WorkflowItemRef {
+  name: string;
+  id: string;
+  kind: WorkflowItemKind;
+}
+
+/** Scene item as returned by list_scene_items. */
+export interface WorkflowItem extends WorkflowItemRef {
+  visible: boolean;
+  parent: string | null;
+  cloth_type?: string;
+  hair_type?: string;
+}
+
+/** Item selector accepted by most workflow routes. At least one field must be set. */
+export interface WorkflowItemSelector {
+  item_name?: string;
+  item_id?: string;
+}
+
+/** Shared base for workflow replies; `matches` is present when a name was ambiguous. */
+export interface WorkflowItemResult extends OperationResult {
+  name?: string;
+  matches?: WorkflowItemRef[];
+}
+
+export interface WorkflowListItemsResult extends OperationResult {
+  items?: WorkflowItem[];
+}
+
+export interface WorkflowSetVisibleResult extends WorkflowItemResult {
+  id?: string;
+  visible?: boolean;
+}
+
+export interface WorkflowRemoveItemResult extends OperationResult {
+  removed?: WorkflowItemRef;
+}
+
+export interface WorkflowImportFbxResult extends OperationResult {
+  item?: WorkflowItemRef;
+}
+
+export interface WorkflowAttachResult extends WorkflowItemResult {
+  bone?: string;
+  /** Candidate bone names when the requested bone was unknown. */
+  bones?: string[];
+}
+
+/** Templates accepted by /workflow/transfer_weights. */
+export type WorkflowWeightTemplate =
+  | "default"
+  | "dress"
+  | "gloves"
+  | "shoes"
+  | "cloak"
+  | "other";
+
+export interface WorkflowTransferWeightsResult extends WorkflowItemResult {
+  template?: WorkflowWeightTemplate;
+  kind_after?: WorkflowItemKind;
+}
+
+/** Templates accepted by /workflow/convert_hair. */
+export type WorkflowHairTemplate =
+  | "top"
+  | "base_all"
+  | "rear"
+  | "bangs"
+  | "accessory"
+  | "brows"
+  | "upper_lash"
+  | "lower_lash";
+
+export interface WorkflowConvertHairResult extends WorkflowItemResult {
+  template?: WorkflowHairTemplate;
+}
+
+export type WorkflowClothToAccessoryResult = WorkflowItemResult;
+
+export interface WorkflowConformResult extends WorkflowItemResult {
+  before?: Record<string, unknown>;
+  after?: Record<string, unknown>;
+}
+
+export interface WorkflowTransformResult extends WorkflowItemResult {
+  move?: number[];
+  rotate?: number[];
+  scale?: number[];
+}
+
+/** Transform values to apply; omitted fields are left unchanged. */
+export interface WorkflowTransformUpdate {
+  move?: number[];
+  rotate?: number[];
+  scale?: number[];
+}
+
+export interface WorkflowSaveResult extends OperationResult {
+  path?: string;
+}
+
+export interface WorkflowExportObjResult extends OperationResult {
+  path?: string;
+  bytes?: number;
+}
+
+export interface WorkflowFloorContactResult extends OperationResult {
+  value?: unknown;
+}
+
+/** Reply with only success/error (floor-contact set, auto foot height). */
+export type WorkflowSimpleResult = OperationResult;
+
+export interface WorkflowRenderResult extends OperationResult {
+  path?: string;
+}
+
+export interface WorkflowViews4Result extends OperationResult {
+  /** [front, side, top, perspective] */
+  files?: string[];
+}

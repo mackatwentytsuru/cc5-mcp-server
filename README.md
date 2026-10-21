@@ -18,9 +18,9 @@ The MCP server communicates with Claude via **stdio** transport and forwards com
 
 ## Features
 
-### MCP Tools (60)
+### MCP Tools (78)
 
-The MCP server provides 59 tools (registered in 16 modules under `src/tools/`) for controlling CC5. This list matches the code: there is one `server.tool(` call per tool in `src/tools/*.ts` (59 in total, all with unique names).
+The MCP server provides 78 tools (registered in 18 modules under `src/tools/`) for controlling CC5. This list matches the code: there is one `server.tool(` call per tool in `src/tools/*.ts` (78 in total, all with unique names).
 
 #### Scene & Avatar Management (8)
 | Tool | Description |
@@ -131,6 +131,31 @@ The MCP server provides 59 tools (registered in 16 modules under `src/tools/`) f
 | Tool | Description |
 |------|-------------|
 | `exec_python` | Execute Python code inside CC5's RLPy environment. **Off by default** -- works only when `CC5_ALLOW_EXEC=1` is set, see [Security](#security) |
+
+#### Text-only workflow tools (18)
+
+These tools drive the `/workflow/*` routes. They work without the GUI and are meant for text-only models; after every change, call `capture_views4` and check all 4 images (front X, side Y, top Z, perspective).
+
+| Tool | Description |
+|------|-------------|
+| `list_scene_items` | List every scene item with name, id, kind, visibility and parent |
+| `set_visible` | Show or hide one item by name or id |
+| `remove_item` | Remove one clothing, hair, accessory or prop item |
+| `import_fbx` | Import an FBX file as a new scene item |
+| `attach_to_bone` | Attach an item to a named skeleton bone |
+| `transfer_skin_weights` | Transfer skin weights using a clothing template (default, dress, gloves, shoes, cloak, other) |
+| `convert_to_hair` | Convert a mesh item into hair using a hair template (top, base_all, rear, bangs, accessory, brows, upper_lash, lower_lash) |
+| `cloth_to_accessory` | Convert a cloth item into an accessory, keeping its current shape by default |
+| `conform_cloth` | Conform a cloth item to the body with 1-10 iterations and optional conform values |
+| `get_transform` | Read an item's move, rotate and scale values |
+| `set_transform` | Set an item's move, rotate and/or scale values |
+| `save_project` | Save the current project, optionally to a new path |
+| `export_obj` | Export the scene to OBJ (current pose and materials by default) |
+| `get_floor_contact` | Read the current floor-contact settings |
+| `set_floor_contact` | Apply floor-contact settings returned by `get_floor_contact` |
+| `auto_adjust_foot_height` | Automatically adjust foot height so the avatar stands on the floor |
+| `render_viewport` | Render the current viewport to a PNG file |
+| `capture_views4` | Save 4 check images (front, side, top, perspective) and put the camera back |
 
 ### MCP Resources
 
@@ -275,7 +300,7 @@ npm run test:coverage # With coverage report
 npm run test:py      # Bridge plugin security tests (Python 3.10+, no CC5 needed)
 ```
 
-Current suite: 513 Vitest tests in 16 files, plus 36 Python security tests.
+Current suite: 619 Vitest tests in 18 files, plus 36 Python security tests.
 
 ### Hot-Reload the Python Plugin
 
@@ -300,7 +325,7 @@ cc5-mcp-server/
 │   ├── cc5-bridge.ts       # HTTP client for CC5 bridge
 │   ├── types.ts            # Type definitions
 │   ├── util.ts             # Shared utilities (bridgeCall wrapper)
-│   ├── tools/              # MCP tool definitions (16 files, 59 tools total)
+│   ├── tools/              # MCP tool definitions (18 files, 78 tools total)
 │   │   ├── morph.ts        # Morph search, adjust, reset (5 tools)
 │   │   ├── scene.ts        # Scene/avatar management, viewport, subdivision (7 tools)
 │   │   ├── asset.ts        # Asset loading / FBX export (2 tools)
@@ -316,7 +341,8 @@ cc5-mcp-server/
 │   │   ├── expression.ts   # Expression info, set, reset (3 tools)
 │   │   ├── facial-profile.ts # Facial profile detect + convert (2 tools)
 │   │   ├── scripting.ts    # Python execution (1 tool)
-│   │   └── metahuman.ts    # MetaHuman export (2 tools)
+│   │   ├── metahuman.ts    # MetaHuman export (2 tools)
+│   │   └── workflow.ts     # Text-only workflow routes (18 tools)
 │   └── resources/
 │       └── morphs.ts       # Morph catalog & avatar state resources
 ├── cc5-plugin/             # CC5 Python plugin

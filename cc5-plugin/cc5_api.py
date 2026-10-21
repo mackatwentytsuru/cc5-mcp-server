@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import sys
 import base64
+import math
 import tempfile
 import time
 import urllib.parse
@@ -4355,6 +4356,2458 @@ def get_mixer_status() -> dict[str, Any]:
     }
 
 
+# --- Workflow routes (see docs/contract_workflow_routes.md) ---
+#
+# Calling convention: the bridge dispatches with handler(params), so every
+# route takes an optional body dict as its first positional argument, plus
+# keyword overrides for direct callers:
+#     wf_set_visible({"item_name": "Hat", "visible": False})
+#     wf_set_visible(item_name="Hat", visible=False)
+# That also lets the plain function object be registered in ACTION_MAP.
+
+# RLPy does not document the exact TransferSkinWeight template strings, so we
+# guess title-case names ("Default", "Dress", "Gloves", "Shoes", "Cloak",
+# "Other").
+_WF_TRANSFER_TEMPLATES = {
+    "default": "Default",
+    "dress": "Dress",
+    "gloves": "Gloves",
+    "shoes": "Shoes",
+    "cloak": "Cloak",
+    "other": "Other",
+}
+
+# (enum attribute name, is face hair). The eyelash types have no matching
+# EHairType_/EFaceHairType_ constant in the exposed constants list, so they
+# cannot be mapped and are reported as GUI-only.
+_WF_HAIR_ENUM_NAMES = {
+    "top": ("EHairType_Hair_Top", False),
+    "base_all": ("EHairType_Hair_Base", False),
+    "rear": ("EHairType_Hair_Rear", False),
+    "bangs": ("EHairType_Hair_Bangs", False),
+    "accessory": ("EHairType_Hair_Accessory", False),
+    "brows": ("EFaceHairType_Eyebrows", True),
+    "upper_lash": (None, True),
+    "lower_lash": (None, True),
+}
+
+_WF_LIGHT_TYPE_NAMES = (
+    "EObjectType_SpotLight",
+    "EObjectType_PointLight",
+    "EObjectType_DirectionalLight",
+)
+
+_WF_TYPE_KINDS = (
+    ("EObjectType_Avatar", "avatar"),
+    ("EObjectType_Cloth", "cloth"),
+    ("EObjectType_Accessory", "accessory"),
+    ("EObjectType_Hair", "hair"),
+    ("EObjectType_Prop", "prop"),
+    ("EObjectType_Camera", "camera"),
+    ("EObjectType_SpotLight", "light"),
+    ("EObjectType_PointLight", "light"),
+    ("EObjectType_DirectionalLight", "light"),
+    ("EObjectType_Light", "light"),
+)
+
+_WF_VIEW4_ORDER = ("front", "side", "top", "persp")
+
+# Guesses: "Right" for the +X side view; "Home" for the perspective view
+# (SetCameraLocation has no way to request an exact 45 deg yaw / 25 deg pitch).
+_WF_VIEW4_CAMERA = {
+    "front": "ECameraLocationType_Front",
+    "side": "ECameraLocationType_Right",
+    "top": "ECameraLocationType_Top",
+    "persp": "ECameraLocationType_Home",
+}
+
+
+def _wf_params(body: Any, extra: dict[str, Any]) -> dict[str, Any]:
+    """Merge the positional body dict with keyword overrides (None means unset)."""
+    params: dict[str, Any] = dict(body) if isinstance(body, dict) else {}
+    for key, value in extra.items():
+        if value is not None:
+            params[key] = value
+    return params
+
+
+def _wf_obj_name(obj) -> str:
+    try:
+        return obj.GetName()
+    except Exception:
+        return ""
+
+
+def _wf_obj_id(obj) -> Any:
+    try:
+        return obj.GetID()
+    except Exception:
+        return None
+
+
+def _wf_jsonable(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    try:
+        return float(value)
+    except Exception:
+        return str(value)
+
+
+def _wf_visible(obj) -> bool | None:
+    """Visibility where the object exposes IsVisible; cloth/hair have no getter."""
+    try:
+        if hasattr(obj, "IsVisible"):
+            return bool(obj.IsVisible(RLPy.RGlobal.GetTime()))
+    except Exception:
+        pass
+    return None
+
+
+def _wf_parent_name(obj) -> str | None:
+    try:
+        parent = obj.GetParent()
+    except Exception:
+        return None
+    if parent is None:
+        return None
+    return _wf_obj_name(parent) or None
+
+
+def _wf_kind_from_type(obj) -> str | None:
+    try:
+        obj_type = obj.GetType()
+    except Exception:
+        return None
+    for const_name, kind in _WF_TYPE_KINDS:
+        enum = getattr(RLPy, const_name, None)
+        if enum is None:
+            continue
+        try:
+            if obj_type == enum:
+                return kind
+        except Exception:
+            continue
+    return None
+
+
+def _wf_kind_of(obj) -> str:
+    """Best-effort kind for an object (avatar/cloth/accessory/hair/prop/light/camera)."""
+    oid = _wf_obj_id(obj)
+    try:
+        avatars = RLPy.RScene.GetAvatars()
+    except Exception:
+        avatars = []
+    for avatar in avatars or []:
+        if _wf_obj_id(avatar) == oid:
+            return "avatar"
+        for getter, kind in (
+            (avatar.GetClothes, "cloth"),
+            (lambda a=avatar: a.GetAccessories(True), "accessory"),
+            (avatar.GetHairs, "hair"),
+        ):
+            try:
+                items = getter()
+            except Exception:
+                continue
+            for item in items or []:
+                if _wf_obj_id(item) == oid:
+                    return kind
+    return _wf_kind_from_type(obj) or "prop"
+
+
+def _wf_owner_avatar(obj):
+    """Return the avatar that owns obj (the avatar itself, or its parent avatar)."""
+    oid = _wf_obj_id(obj)
+    try:
+        avatars = RLPy.RScene.GetAvatars()
+    except Exception:
+        return None
+    for avatar in avatars or []:
+        if _wf_obj_id(avatar) == oid:
+            return avatar
+    for avatar in avatars or []:
+        for getter in (
+            avatar.GetClothes,
+            lambda a=avatar: a.GetAccessories(True),
+            avatar.GetHairs,
+        ):
+            try:
+                items = getter()
+            except Exception:
+                continue
+            for item in items or []:
+                if _wf_obj_id(item) == oid:
+                    return avatar
+    return None
+
+
+def _wf_scan() -> list[tuple[Any, dict[str, Any]]]:
+    """All scene items as (object, entry) pairs, deduplicated by object id."""
+    found: list[tuple[Any, dict[str, Any]]] = []
+    seen: set[Any] = set()
+
+    def add(obj, kind: str) -> None:
+        oid = _wf_obj_id(obj)
+        if oid is not None and oid in seen:
+            return
+        seen.add(oid)
+        entry: dict[str, Any] = {
+            "name": _wf_obj_name(obj),
+            "id": oid,
+            "kind": kind,
+            "visible": _wf_visible(obj),
+            "parent": _wf_parent_name(obj),
+        }
+        if kind == "cloth":
+            try:
+                entry["cloth_type"] = str(obj.GetClotheType())
+            except Exception:
+                entry["cloth_type"] = None
+        elif kind == "hair":
+            try:
+                entry["hair_type"] = str(obj.GetHairType())
+            except Exception:
+                entry["hair_type"] = None
+        found.append((obj, entry))
+
+    try:
+        avatars = RLPy.RScene.GetAvatars()
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] _wf_scan avatars failed: {e}")
+        avatars = []
+    for avatar in avatars or []:
+        add(avatar, "avatar")
+        for getter, kind in (
+            (avatar.GetClothes, "cloth"),
+            (lambda a=avatar: a.GetAccessories(True), "accessory"),
+            (avatar.GetHairs, "hair"),
+        ):
+            try:
+                items = getter()
+            except Exception as e:
+                print(f"[CC5 MCP Bridge] _wf_scan {kind} failed: {e}")
+                continue
+            for item in items or []:
+                add(item, kind)
+
+    try:
+        props = RLPy.RScene.GetProps()
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] _wf_scan props failed: {e}")
+        props = []
+    for prop in props or []:
+        add(prop, "prop")
+
+    for type_name in _WF_LIGHT_TYPE_NAMES:
+        enum = getattr(RLPy, type_name, None)
+        if enum is None:
+            continue
+        try:
+            lights = RLPy.RScene.FindObjects(enum)
+        except Exception as e:
+            print(f"[CC5 MCP Bridge] _wf_scan {type_name} failed: {e}")
+            continue
+        for light in lights or []:
+            add(light, "light")
+
+    try:
+        cameras = RLPy.RScene.GetCameras()
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] _wf_scan cameras failed: {e}")
+        cameras = []
+    for camera in cameras or []:
+        add(camera, "camera")
+
+    return found
+
+
+def _wf_resolve(item_name: str | None = None, item_id: Any = None):
+    """Resolve an item selector. Returns (object, kind, error_dict_or_None)."""
+    if item_id is None and not item_name:
+        return None, None, {"success": False, "error": "item_name or item_id is required"}
+
+    scan = _wf_scan()
+    if item_id is not None and str(item_id) != "":
+        # Prefer the typed object from the scan (RIAccessory/RICloth/...): QueryObjectByID returns a
+        # generic proxy without TransferSkinWeight etc. (live 10-22). Fall back to it only if the scan misses.
+        typed = [(o, e) for o, e in scan if str(e["id"]) == str(item_id)]
+        if len(typed) == 1:
+            return typed[0][0], typed[0][1]["kind"], None
+        candidates: list[Any] = [str(item_id)]
+        if str(item_id).lstrip("-").isdigit():
+            candidates.append(int(str(item_id)))
+        for candidate in candidates:
+            try:
+                obj = RLPy.RScene.QueryObjectByID(candidate)
+            except Exception:
+                obj = None
+            if obj is not None:
+                return obj, _wf_kind_of(obj), None
+
+    if item_id is not None and str(item_id) != "":
+        wanted = str(item_id)
+        matches = [(o, e) for o, e in scan if str(e["id"]) == wanted]
+        label = f"id {item_id}"
+    else:
+        matches = [(o, e) for o, e in scan if e["name"] == item_name]
+        label = f"name {item_name!r}"
+
+    if not matches:
+        return None, None, {"success": False, "error": f"Item not found: {label}"}
+    if len(matches) > 1:
+        return None, None, {
+            "success": False,
+            "error": "ambiguous name",
+            "matches": [
+                {"name": e["name"], "id": e["id"], "kind": e["kind"]} for _, e in matches
+            ],
+        }
+    obj, entry = matches[0]
+    return obj, entry["kind"], None
+
+
+# --- Routines shared by several routes ---
+
+def _wf_current_project_path() -> str:
+    """Best-effort lookup of the open project path (not part of the documented API)."""
+    app = getattr(RLPy, "RApplication", None)
+    if app is None:
+        return ""
+    for name in ("GetCurrentProjectPath", "GetCurrentProjectFilePath", "GetProjectPath"):
+        getter = getattr(app, name, None)
+        if getter is None:
+            continue
+        try:
+            value = getter()
+        except Exception:
+            continue
+        if isinstance(value, str) and value.lower().endswith(".ccproject"):
+            return value
+    return ""
+
+
+def _wf_conform_get(obj, key: str) -> Any:
+    try:
+        return _wf_jsonable(obj.GetClothConformValue(key))
+    except Exception:
+        return None
+
+
+# Conform panel labels (title case) and lower_snake guesses, in probe order.
+_WF_CONFORM_KEYS = (
+    "Increase Size", "increase_size",
+    "Iteration", "iteration",
+    "Subdivision Level", "subdivision_level",
+    "Margin", "margin",
+    "Close-fitting", "close_fitting",
+    "Smooth", "smooth",
+)
+
+
+def _wf_conform_candidates() -> list[str]:
+    """Unique conform key spellings to probe with GetClothConformValue."""
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for key in _WF_CONFORM_KEYS:
+        if key not in seen:
+            seen.add(key)
+            ordered.append(key)
+    return ordered
+
+
+def _wf_conform_norm(key: str) -> str:
+    """Normalise a conform key for matching (case/underscore/hyphen insensitive)."""
+    text = key.strip().lower().replace("_", " ").replace("-", " ")
+    return " ".join(text.split())
+
+
+def _wf_vec3(value) -> list[float] | None:
+    if value is None:
+        return None
+    try:
+        return [float(value.x), float(value.y), float(value.z)]
+    except Exception:
+        try:
+            return [float(c) for c in list(value)[:3]]
+        except Exception:
+            return None
+
+
+def _wf_vector3(values: list[float]):
+    vector3 = getattr(RLPy, "RVector3", None)
+    if vector3 is None:
+        return None
+    try:
+        return vector3(float(values[0]), float(values[1]), float(values[2]))
+    except Exception:
+        return None
+
+
+def _wf_read_transform(obj) -> dict[str, Any]:
+    """Read the object's local transform as raw T/R/S values."""
+    transform = obj.LocalTransform()
+    return {
+        "move": _wf_vec3(transform.T()),
+        "rotate": _wf_vec3(transform.R()),
+        "scale": _wf_vec3(transform.S()),
+    }
+
+
+def _wf_make_transform(move, rotate, scale):
+    """Build an RTransform from T/R/S value lists. Returns (transform, error)."""
+    transform = RLPy.RTransform()
+    for method_name, values in (("T", move), ("R", rotate), ("S", scale)):
+        if values is None:
+            continue
+        vector = _wf_vector3(values)
+        if vector is None:
+            return None, f"Could not build an RVector3 for {method_name}()"
+        getattr(transform, method_name)(vector)
+    return transform, None
+
+
+def _wf_shoes_items(avatar) -> list[Any]:
+    """Cloth items on the avatar whose cloth type is Shoes."""
+    if avatar is None:
+        return []
+    shoes_enum = getattr(RLPy, "EClotheType_Shoes", None)
+    result: list[Any] = []
+    try:
+        clothes = avatar.GetClothes()
+    except Exception:
+        return []
+    for cloth in clothes or []:
+        try:
+            cloth_type = cloth.GetClotheType()
+        except Exception:
+            continue
+        if shoes_enum is not None:
+            try:
+                if cloth_type == shoes_enum:
+                    result.append(cloth)
+                    continue
+            except Exception:
+                pass
+        if "Shoes" in str(cloth_type):
+            result.append(cloth)
+    return result
+
+
+def _wf_floor_contact_types() -> list[tuple[str, Any]]:
+    """Constants named EFloorContact* exposed by this RLPy build (name, enum)."""
+    types: list[tuple[str, Any]] = []
+    for name in dir(RLPy):
+        if not name.startswith("EFloorContact"):
+            continue
+        try:
+            types.append((name, getattr(RLPy, name)))
+        except Exception:
+            continue
+    return sorted(types, key=lambda item: item[0])
+
+
+def _wf_render_png(file_path: str) -> str | None:
+    """Render the viewport to file_path with no UI interaction. Error string or None."""
+    parent_dir = os.path.dirname(file_path)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
+    if os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+        except Exception:
+            pass
+
+    # RenderImage's native default is ~100x32 px, so raise the export size first.
+    try:
+        _set_render_resolution(1280, 720)
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] _wf_render_png resolution failed: {e}")
+
+    try:
+        RLPy.RGlobal.RenderImage(file_path)
+    except Exception as e:
+        return f"RenderImage failed: {e}"
+
+    if not os.path.exists(file_path) and hasattr(RLPy.RGlobal, "ForceViewportUpdate"):
+        try:
+            RLPy.RGlobal.ForceViewportUpdate()
+            RLPy.RGlobal.RenderImage(file_path)
+        except Exception as e:
+            return f"RenderImage failed: {e}"
+
+    if not os.path.exists(file_path):
+        return (
+            f"RenderImage did not create {file_path}; no silent render path is "
+            "available (refusing to click the UI)"
+        )
+    return None
+
+
+_WF_CAMERA_CONTROL_KEYS = (
+    "Transform", "KT_Transform", "LocalTransform", "WorldTransform", "GlobalTransform",
+)
+
+
+def _wf_camera_find_control(camera) -> tuple[Any, str]:
+    """The first readable/writable transform control on the camera, or (None, "")."""
+    get_control = getattr(camera, "GetControl", None)
+    if get_control is None:
+        return None, ""
+    for key in _WF_CAMERA_CONTROL_KEYS:
+        try:
+            control = get_control(key)
+        except Exception:
+            control = None
+        if control is None:
+            continue
+        if hasattr(control, "SetValue") and hasattr(control, "GetValue"):
+            return control, key
+    return None, ""
+
+
+def _wf_camera_save(camera) -> dict[str, Any]:
+    """Snapshot the camera's transform control value (plus WorldTransform fallback)."""
+    saved: dict[str, Any] = {
+        "control": None,
+        "control_key": "",
+        "value": None,
+        "world": None,
+    }
+    try:
+        saved["world"] = camera.WorldTransform()
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] camera WorldTransform not readable: {e}")
+    control, key = _wf_camera_find_control(camera)
+    if control is not None:
+        try:
+            value = RLPy.RTransform()
+            got = control.GetValue(RLPy.RGlobal.GetTime(), value)
+            if got is not None and hasattr(got, "T"):
+                value = got
+            saved["control"] = control
+            saved["control_key"] = key
+            saved["value"] = value
+        except Exception as e:
+            print(f"[CC5 MCP Bridge] camera control {key} GetValue failed: {e}")
+    if saved["value"] is None:
+        saved["value"] = saved["world"]
+    elif saved["world"] is not None:
+        # A binding that does not fill the out-parameter leaves an identity
+        # RTransform behind; fall back to the world transform in that case.
+        try:
+            unusable = bool(saved["value"].IsIdentity()) and not bool(saved["world"].IsIdentity())
+        except Exception:
+            unusable = False
+        if unusable:
+            print("[CC5 MCP Bridge] camera control GetValue gave identity; using WorldTransform")
+            saved["value"] = saved["world"]
+    return saved
+
+
+def _wf_transform_close(a, b, move_tol: float = 0.5, rotate_tol: float = 0.02) -> bool:
+    """True when two RTransforms agree on translation and rotation."""
+    try:
+        ta, tb = _wf_vec3(a.T()), _wf_vec3(b.T())
+        ra, rb = _wf_vec3(a.R()), _wf_vec3(b.R())
+        if ta is None or tb is None:
+            return False
+        if not all(abs(x - y) <= move_tol for x, y in zip(ta, tb)):
+            return False
+        if ra is not None and rb is not None:
+            if not all(abs(x - y) <= rotate_tol for x, y in zip(ra, rb)):
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def _wf_camera_apply(camera, transform) -> tuple[bool, str]:
+    """Write a camera transform. Returns (applied, method) — RIObject has no setter."""
+    control, key = _wf_camera_find_control(camera)
+    if control is not None:
+        try:
+            control.SetValue(RLPy.RGlobal.GetTime(), transform)
+            return True, f"control:{key}"
+        except Exception as e:
+            print(f"[CC5 MCP Bridge] camera control {key} SetValue failed: {e}")
+    for name in ("SetWorldTransform", "SetLocalTransform"):
+        setter = getattr(camera, name, None)
+        if setter is None:
+            continue
+        try:
+            setter(transform)
+            return True, name
+        except Exception as e:
+            print(f"[CC5 MCP Bridge] camera {name} failed: {e}")
+    return False, ""
+
+
+def _wf_restore_camera(camera, saved: dict[str, Any] | None) -> bool:
+    """Put the camera back after a multi-view capture. False if it did not stick."""
+    restored = False
+    target = (saved or {}).get("value")
+    if target is not None:
+        applied = False
+        control = (saved or {}).get("control")
+        if control is None:
+            control, _key = _wf_camera_find_control(camera)
+        if control is not None and hasattr(control, "SetValue"):
+            try:
+                control.SetValue(RLPy.RGlobal.GetTime(), target)
+                applied = True
+            except Exception as e:
+                print(f"[CC5 MCP Bridge] camera control restore failed: {e}")
+        if not applied:
+            for name in ("SetWorldTransform", "SetLocalTransform"):
+                setter = getattr(camera, name, None)
+                if setter is None:
+                    continue
+                try:
+                    setter(target)
+                    applied = True
+                    break
+                except Exception as e:
+                    print(f"[CC5 MCP Bridge] camera {name} restore failed: {e}")
+        if applied:
+            readbacks: list[Any] = []
+            if control is not None and hasattr(control, "GetValue"):
+                try:
+                    value = RLPy.RTransform()
+                    got = control.GetValue(RLPy.RGlobal.GetTime(), value)
+                    readbacks.append(got if (got is not None and hasattr(got, "T")) else value)
+                except Exception:
+                    pass
+            try:
+                readbacks.append(camera.WorldTransform())
+            except Exception:
+                pass
+            restored = any(
+                readback is not None and _wf_transform_close(target, readback)
+                for readback in readbacks
+            )
+    try:
+        RLPy.RScene.SetCurrentCamera(camera)
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] SetCurrentCamera restore failed: {e}")
+    if hasattr(RLPy.RGlobal, "ForceViewportUpdate"):
+        try:
+            RLPy.RGlobal.ForceViewportUpdate()
+        except Exception:
+            pass
+    return restored
+
+
+# --- Routes ---
+
+def list_scene_items(body: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Route /workflow/items: every scene item with kind/visible/parent."""
+    try:
+        return {"success": True, "items": [entry for _, entry in _wf_scan()]}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_set_visible(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/visible."""
+    params = _wf_params(body, kwargs)
+    try:
+        if params.get("visible") is None:
+            return {"success": False, "error": "visible is required"}
+        visible = bool(params.get("visible"))
+        obj, _kind, error = _wf_resolve(params.get("item_name"), params.get("item_id"))
+        if error:
+            return error
+        RLPy.RGlobal.BeginAction("wf_set_visible")
+        try:
+            (RLPy.RScene.Show if visible else RLPy.RScene.Hide)(obj)
+            try:
+                RLPy.RGlobal.ObjectModified(obj, RLPy.EObjectModifiedType_Attribute)
+            except Exception:
+                pass
+            if hasattr(RLPy.RGlobal, "ForceViewportUpdate"):
+                RLPy.RGlobal.ForceViewportUpdate()
+        finally:
+            RLPy.RGlobal.EndAction()
+        return {
+            "success": True,
+            "name": _wf_obj_name(obj),
+            "id": _wf_obj_id(obj),
+            "visible": visible,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_remove_item(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/remove."""
+    params = _wf_params(body, kwargs)
+    try:
+        obj, kind, error = _wf_resolve(params.get("item_name"), params.get("item_id"))
+        if error:
+            return error
+        removed = {"name": _wf_obj_name(obj), "id": _wf_obj_id(obj), "kind": kind}
+        avatar = _wf_owner_avatar(obj)
+        RLPy.RGlobal.BeginAction("wf_remove_item")
+        try:
+            RLPy.RScene.RemoveObject(obj)
+            if avatar is not None:
+                try:
+                    RLPy.RGlobal.ObjectModified(avatar, RLPy.EObjectModifiedType_Attribute)
+                except Exception:
+                    pass
+            if hasattr(RLPy.RGlobal, "ForceViewportUpdate"):
+                RLPy.RGlobal.ForceViewportUpdate()
+        finally:
+            RLPy.RGlobal.EndAction()
+        return {"success": True, "removed": removed}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+_WF_IMPORT_FBX_TIMEOUT = 20.0
+
+_WF_IMPORT_FBX_STATE: dict[str, Any] = {
+    "phase": "idle",  # idle | file_dialog | prop_dialog | settings_dialog | settling | done | error
+    "file_path": "",
+    "error": "",
+    "notes": [],
+    "before_ids": [],
+    "result": None,
+    "started_at": 0.0,
+    "finished_at": 0.0,
+    "deadline": 0.0,
+    "timer": None,
+    "dialogs": [],
+    "accepted": [],
+    "non_native_dialog": False,
+    "prior_attr": None,
+    "prior_attr_set": False,
+    "steps": {},
+}
+
+
+def _wf_import_fbx_text(widget: Any) -> str:
+    try:
+        return (widget.text() or "").replace("&", "").replace("…", "...").strip().lower()
+    except Exception:
+        return ""
+
+
+def _wf_import_fbx_find_action() -> Any:
+    """QAction for File > Import... (text search of the menu tree)."""
+    try:
+        from PySide2.QtWidgets import QApplication, QMainWindow
+    except Exception:
+        return None
+    app = QApplication.instance()
+    main_win = None
+    if app is not None:
+        for w in app.topLevelWidgets():
+            try:
+                if isinstance(w, QMainWindow) and w.isVisible():
+                    main_win = w
+                    break
+            except Exception:
+                continue
+    if main_win is None:
+        main_win = _mixer_find_main_window()
+    if main_win is None or not hasattr(main_win, "menuBar"):
+        return None
+
+    matches: list[tuple[int, Any]] = []
+
+    def _walk(menu: Any, depth: int = 0) -> None:
+        if menu is None or depth > 6:
+            return
+        try:
+            for act in menu.actions():
+                text = _wf_import_fbx_text(act)
+                sub = act.menu()
+                if sub is not None:
+                    # "Import..." in File is only a submenu header (live 10-22); its leaf
+                    # "Import" item is the one that opens the file dialog.
+                    _walk(sub, depth + 1)
+                    continue
+                if text == "import":
+                    matches.append((0, act))
+                elif text == "import...":
+                    matches.append((1, act))
+                elif text.startswith("import") and "fbx" not in text:
+                    matches.append((2, act))
+        except Exception:
+            pass
+
+    _walk(main_win.menuBar())
+    if not matches:
+        return None
+    matches.sort(key=lambda item: item[0])
+    return matches[0][1]
+
+
+def _wf_import_fbx_force_non_native() -> bool:
+    """Ask Qt not to use the native Windows file dialog, if the app allows it."""
+    try:
+        from PySide2.QtWidgets import QApplication
+        from PySide2.QtCore import Qt
+    except Exception:
+        return False
+    app = QApplication.instance()
+    attr = getattr(Qt, "AA_DontUseNativeDialogs", None)
+    if app is None or attr is None:
+        return False
+    try:
+        prior = bool(app.testAttribute(attr))
+        app.setAttribute(attr, True)
+        _WF_IMPORT_FBX_STATE["prior_attr"] = prior
+        _WF_IMPORT_FBX_STATE["prior_attr_set"] = True
+        return True
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] AA_DontUseNativeDialogs failed: {e}")
+        return False
+
+
+def _wf_import_fbx_restore_attr() -> None:
+    state = _WF_IMPORT_FBX_STATE
+    if not state.get("prior_attr_set"):
+        return
+    state["prior_attr_set"] = False
+    try:
+        from PySide2.QtWidgets import QApplication
+        from PySide2.QtCore import Qt
+    except Exception:
+        return
+    app = QApplication.instance()
+    attr = getattr(Qt, "AA_DontUseNativeDialogs", None)
+    if app is None or attr is None:
+        return
+    try:
+        app.setAttribute(attr, bool(state.get("prior_attr")))
+    except Exception:
+        pass
+
+
+def _wf_import_fbx_install_filter(file_path: str) -> Any:
+    """Auto-accept the (non-native) QFileDialog opened by File > Import."""
+    from PySide2.QtCore import QObject, QEvent, QTimer
+    from PySide2.QtWidgets import QApplication, QFileDialog
+
+    state = _WF_IMPORT_FBX_STATE
+
+    class _ImportFileDialogAccept(QObject):
+        def __init__(self) -> None:
+            super().__init__()
+            self.done = False
+
+        def eventFilter(self, obj, event):
+            if self.done:
+                return False
+            try:
+                if (
+                    isinstance(obj, QFileDialog)
+                    and event.type() in (QEvent.Show, QEvent.WindowActivate)
+                    and id(obj) not in state["accepted"]
+                ):
+                    try:
+                        mode_ok = obj.acceptMode() == QFileDialog.AcceptOpen
+                    except Exception:
+                        mode_ok = True
+                    if not mode_ok:
+                        return False
+                    if not state["non_native_dialog"]:
+                        # Only when the app-level attribute was unavailable.
+                        obj.setOption(QFileDialog.DontUseNativeDialog, True)
+                    obj.selectFile(file_path)
+                    state["accepted"].append(id(obj))
+                    if obj not in state["dialogs"]:
+                        state["dialogs"].append(obj)
+                    state["notes"].append("File dialog filled through Qt (event filter)")
+                    QTimer.singleShot(150, obj.accept)
+            except Exception as e:
+                print(f"[CC5 MCP Bridge] import file filter failed: {e}")
+            return False
+
+    flt = _ImportFileDialogAccept()
+    QApplication.instance().installEventFilter(flt)
+    sys.modules["cc5_api"]._wf_import_fbx_filter = flt  # type: ignore[attr-defined]
+    return flt
+
+
+def _wf_import_fbx_remove_filter() -> None:
+    from PySide2.QtWidgets import QApplication
+
+    flt = getattr(sys.modules["cc5_api"], "_wf_import_fbx_filter", None)
+    if flt is None:
+        return
+    try:
+        flt.done = True
+    except Exception:
+        pass
+    try:
+        QApplication.instance().removeEventFilter(flt)
+    except Exception:
+        pass
+    try:
+        del sys.modules["cc5_api"]._wf_import_fbx_filter  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+
+def _wf_import_fbx_visible_file_dialog() -> Any:
+    try:
+        from PySide2.QtWidgets import QApplication, QFileDialog
+    except Exception:
+        return None
+    app = QApplication.instance()
+    if app is None:
+        return None
+    for w in app.allWidgets():
+        try:
+            if isinstance(w, QFileDialog) and w.isVisible():
+                return w
+        except Exception:
+            continue
+    return None
+
+
+def _wf_import_fbx_is_file_dialog_button(button: Any) -> bool:
+    try:
+        from PySide2.QtWidgets import QFileDialog
+        parent = button.parentWidget()
+        while parent is not None:
+            if isinstance(parent, QFileDialog):
+                return True
+            parent = parent.parentWidget()
+    except Exception:
+        pass
+    return False
+
+
+def _wf_import_fbx_find_button(kind: str) -> Any:
+    """Visible Prop / Convert button belonging to the import dialogs."""
+    try:
+        from PySide2.QtWidgets import QAbstractButton, QApplication
+    except Exception:
+        return None
+    app = QApplication.instance()
+    if app is None:
+        return None
+
+    best = None
+    best_score = -1
+    for w in app.allWidgets():
+        try:
+            if not isinstance(w, QAbstractButton) or not w.isVisible():
+                continue
+            if _wf_import_fbx_is_file_dialog_button(w):
+                continue
+            text = _wf_import_fbx_text(w)
+            try:
+                obj_name = (w.objectName() or "").strip().lower()
+            except Exception:
+                obj_name = ""
+            score = -1
+            if kind == "prop":
+                if text == "prop":
+                    score = 4
+                elif "prop" in obj_name:
+                    score = 3
+                elif text.startswith("prop"):
+                    score = 2
+            else:  # settings: "Convert All" first, then OK
+                if "convert" in text:
+                    score = 4 if "all" in text else 3
+                elif "convert" in obj_name:
+                    score = 2
+                elif text in ("ok", "okay"):
+                    score = 1
+                elif "ok" in obj_name:
+                    score = 1
+            if score > best_score:
+                best = w
+                best_score = score
+        except Exception:
+            continue
+    return best if best_score >= 0 else None
+
+
+def _wf_import_fbx_visible_dialogs() -> list[Any]:
+    try:
+        from PySide2.QtWidgets import QApplication, QDialog, QFileDialog
+    except Exception:
+        return []
+    app = QApplication.instance()
+    if app is None:
+        return []
+    found = []
+    for w in app.topLevelWidgets():
+        try:
+            if isinstance(w, QDialog) and not isinstance(w, QFileDialog) and w.isVisible():
+                found.append(w)
+        except Exception:
+            continue
+    return found
+
+
+def _wf_import_fbx_diff() -> list[dict[str, Any]]:
+    before = set(_WF_IMPORT_FBX_STATE["before_ids"])
+    new_items = []
+    for _obj, entry in _wf_scan():
+        if str(entry["id"]) in before:
+            continue
+        # Lights/cameras get new ids on a reload; they are not the import result.
+        if entry.get("kind") in ("light", "camera"):
+            continue
+        new_items.append({
+            "name": entry["name"],
+            "id": entry["id"],
+            "kind": entry["kind"],
+        })
+    return new_items
+
+
+def _wf_import_fbx_cleanup() -> None:
+    state = _WF_IMPORT_FBX_STATE
+    timer = state.get("timer")
+    state["timer"] = None
+    if timer is not None:
+        try:
+            timer.stop()
+        except Exception:
+            pass
+        try:
+            timer.deleteLater()
+        except Exception:
+            pass
+    _wf_import_fbx_remove_filter()
+    # Never leave a modal dialog we opened (file / Prop / Import Settings).
+    try:
+        from PySide2.QtCore import QTimer
+    except Exception:
+        QTimer = None  # type: ignore[assignment]
+    seen = set()
+    for dlg in state.get("dialogs", []):
+        if dlg is None or id(dlg) in seen:
+            continue
+        seen.add(id(dlg))
+        try:
+            if dlg.isVisible() and QTimer is not None:
+                QTimer.singleShot(0, dlg.reject)
+        except Exception:
+            pass
+    _wf_import_fbx_restore_attr()
+
+
+def _wf_import_fbx_fail(message: str) -> None:
+    state = _WF_IMPORT_FBX_STATE
+    if state["phase"] in ("done", "error"):
+        return
+    state["phase"] = "error"
+    state["error"] = message
+    state["finished_at"] = time.time()
+    state["notes"].append(message)
+    _wf_import_fbx_cleanup()
+
+
+def _wf_import_fbx_finish(new_items: list[dict[str, Any]]) -> None:
+    state = _WF_IMPORT_FBX_STATE
+    props = [item for item in new_items if item.get("kind") == "prop"]
+    chosen = (props or new_items)[-1]
+    state["result"] = {"item": chosen, "new_items": new_items}
+    state["phase"] = "done"
+    state["finished_at"] = time.time()
+    state["notes"].append(f"Imported: {chosen['name']} ({chosen['kind']})")
+    _wf_import_fbx_cleanup()
+
+
+def wf_import_fbx_tick() -> None:
+    """QTimer step of the GUI import: file -> Prop -> Convert All -> diff."""
+    from PySide2.QtCore import QTimer
+    from PySide2.QtWidgets import QFileDialog
+
+    state = _WF_IMPORT_FBX_STATE
+    if state["phase"] in ("done", "error", "idle"):
+        _wf_import_fbx_cleanup()
+        return
+    if time.time() > state["deadline"]:
+        phase = state["phase"]
+        if phase == "file_dialog" and not state["accepted"]:
+            if state["non_native_dialog"]:
+                _wf_import_fbx_fail("needs GUI: import file dialog (timeout)")
+            else:
+                _wf_import_fbx_fail("needs GUI: native file dialog")
+        elif phase == "prop_dialog":
+            _wf_import_fbx_fail("needs GUI: Import Fbx Character/Prop dialog")
+        elif phase == "settings_dialog":
+            _wf_import_fbx_fail("needs GUI: Import Settings dialog")
+        else:
+            _wf_import_fbx_fail("needs GUI: imported item did not appear")
+        return
+
+    try:
+        if state["phase"] == "file_dialog":
+            dlg = _wf_import_fbx_visible_file_dialog()
+            if dlg is not None:
+                if id(dlg) not in state["accepted"]:
+                    if not state["non_native_dialog"]:
+                        try:
+                            dlg.setOption(QFileDialog.DontUseNativeDialog, True)
+                        except Exception:
+                            pass
+                    dlg.selectFile(state["file_path"])
+                    state["accepted"].append(id(dlg))
+                    if dlg not in state["dialogs"]:
+                        state["dialogs"].append(dlg)
+                    state["notes"].append("File dialog filled through Qt (timer)")
+                    QTimer.singleShot(150, dlg.accept)
+                return
+            if state["accepted"]:
+                state["phase"] = "prop_dialog"
+            return
+
+        if state["phase"] == "prop_dialog":
+            prop_btn = _wf_import_fbx_find_button("prop")
+            if prop_btn is not None:
+                for dlg in _wf_import_fbx_visible_dialogs():
+                    if dlg not in state["dialogs"]:
+                        state["dialogs"].append(dlg)
+                state["notes"].append("Prop button clicked")
+                QTimer.singleShot(100, prop_btn.click)
+                state["phase"] = "settings_dialog"
+                return
+            # Some FBX builds go straight to Import Settings.
+            convert_btn = _wf_import_fbx_find_button("settings")
+            if convert_btn is not None:
+                for dlg in _wf_import_fbx_visible_dialogs():
+                    if dlg not in state["dialogs"]:
+                        state["dialogs"].append(dlg)
+                state["notes"].append("No Prop choice; Convert clicked")
+                QTimer.singleShot(100, convert_btn.click)
+                state["phase"] = "settling"
+            return
+
+        if state["phase"] == "settings_dialog":
+            convert_btn = _wf_import_fbx_find_button("settings")
+            if convert_btn is not None:
+                for dlg in _wf_import_fbx_visible_dialogs():
+                    if dlg not in state["dialogs"]:
+                        state["dialogs"].append(dlg)
+                state["notes"].append("Import Settings: Convert clicked")
+                QTimer.singleShot(100, convert_btn.click)
+                state["phase"] = "settling"
+            return
+
+        if state["phase"] == "settling":
+            new_items = _wf_import_fbx_diff()
+            if new_items and not _wf_import_fbx_visible_dialogs():
+                _wf_import_fbx_finish(new_items)
+    except Exception as e:
+        _wf_import_fbx_fail(f"import_fbx tick failed: {e}")
+
+
+def wf_import_fbx_begin(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/import_fbx: start CC5's own File > Import GUI flow, no mouse.
+
+    Async: this arms a QTimer state machine and triggers the menu action; poll
+    GET /workflow/import_fbx/status for progress and the new prop.
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        state = _WF_IMPORT_FBX_STATE
+        if state["phase"] not in ("idle", "done", "error"):
+            return {
+                "success": False,
+                "error": f"An import is already running (phase {state['phase']}). Poll /workflow/import_fbx/status.",
+            }
+        file_path = os.path.abspath((params.get("file_path") or "").strip())
+        if not file_path:
+            return {"success": False, "error": "file_path is required"}
+        path_error = _validate_path(file_path, {".fbx", ".obj"})
+        if path_error:
+            return {"success": False, "error": path_error}
+        if not os.path.isfile(file_path):
+            return {"success": False, "error": f"File not found: {file_path}"}
+
+        action = _wf_import_fbx_find_action()
+        if action is None:
+            return {"success": False, "error": "needs GUI: File > Import menu action not found"}
+
+        from PySide2.QtCore import QTimer
+
+        now = time.time()
+        state.update({
+            "phase": "file_dialog",
+            "file_path": file_path,
+            "error": "",
+            "notes": [],
+            "before_ids": [str(entry["id"]) for _obj, entry in _wf_scan()],
+            "result": None,
+            "started_at": now,
+            "finished_at": 0.0,
+            "deadline": now + _WF_IMPORT_FBX_TIMEOUT,
+            "timer": None,
+            "dialogs": [],
+            "accepted": [],
+            "non_native_dialog": False,
+            "prior_attr": None,
+            "prior_attr_set": False,
+            "steps": {},
+        })
+        state["non_native_dialog"] = _wf_import_fbx_force_non_native()
+        _wf_import_fbx_install_filter(file_path)
+
+        timer = QTimer()
+        timer.setInterval(200)
+        timer.timeout.connect(wf_import_fbx_tick)
+        timer.start()
+        state["timer"] = timer
+        state["notes"].append(f"Menu scheduled: {action.text()}")
+        QTimer.singleShot(50, action.trigger)
+
+        return {
+            "success": True,
+            "phase": "file_dialog",
+            "file_path": file_path,
+            "action_text": action.text(),
+            "non_native_dialog": state["non_native_dialog"],
+            "poll_endpoint": "/workflow/import_fbx/status",
+            "timeout_seconds": _WF_IMPORT_FBX_TIMEOUT,
+        }
+    except Exception as e:
+        _wf_import_fbx_fail(f"import_fbx begin failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
+def wf_import_fbx(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/import_fbx (alias for wf_import_fbx_begin)."""
+    return wf_import_fbx_begin(body, **kwargs)
+
+
+def wf_import_fbx_status(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/import_fbx/status: progress or the imported prop."""
+    _wf_params(body, kwargs)  # status takes no parameters; keep the body shape uniform
+    state = _WF_IMPORT_FBX_STATE
+    payload: dict[str, Any] = {
+        "success": state["phase"] != "error",
+        "phase": state["phase"],
+        "file_path": state["file_path"],
+        "error": state["error"],
+        "notes": list(state["notes"]),
+        "started_at": state["started_at"],
+        "finished_at": state["finished_at"],
+        "non_native_dialog": state["non_native_dialog"],
+    }
+    if state["result"]:
+        payload["item"] = state["result"]["item"]
+        payload["new_items"] = state["result"]["new_items"]
+    return payload
+
+
+def wf_attach_to_bone(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/attach: parent/link an item to a skin bone."""
+    params = _wf_params(body, kwargs)
+    try:
+        bone_name = (params.get("bone_name") or "").strip()
+        if not bone_name:
+            return {"success": False, "error": "bone_name is required"}
+        obj, _kind, error = _wf_resolve(params.get("item_name"), params.get("item_id"))
+        if error:
+            return error
+
+        avatar = _wf_owner_avatar(obj) or get_first_avatar()
+        if not avatar:
+            return {"success": False, "error": "No avatar in scene (needed for the skeleton)"}
+        skeleton = None
+        try:
+            skeleton = avatar.GetSkeletonComponent()
+        except Exception as e:
+            return {"success": False, "error": f"GetSkeletonComponent failed: {e}"}
+        if skeleton is None:
+            return {"success": False, "error": "Avatar has no skeleton component"}
+
+        bone_by_name: dict[str, Any] = {}
+        try:
+            bones = skeleton.GetSkinBones() or []
+        except Exception as e:
+            return {"success": False, "error": f"GetSkinBones failed: {e}"}
+        for bone in bones:
+            try:
+                bone_by_name[bone.GetName()] = bone
+            except Exception:
+                continue
+
+        target = bone_by_name.get(bone_name)
+        if target is None:
+            lowered = bone_name.lower()
+            hits = [name for name in bone_by_name if lowered in name.lower()]
+            candidates = hits or list(bone_by_name)
+            return {
+                "success": False,
+                "error": f"Unknown bone: {bone_name}",
+                "bones": candidates[:40],
+            }
+
+        RLPy.RGlobal.BeginAction("wf_attach_to_bone")
+        try:
+            attached = False
+            last_error: Exception | None = None
+            # LinkTo(*args) is undocumented: try the plausible arities in order.
+            attempts = (
+                lambda: obj.LinkTo(target),
+                lambda: obj.LinkTo(RLPy.RGlobal.GetTime(), target),
+                lambda: obj.SetParent(target),
+            )
+            for attempt in attempts:
+                try:
+                    attempt()
+                    attached = True
+                    break
+                except Exception as exc:
+                    last_error = exc
+            if not attached:
+                raise last_error or RuntimeError("No attach method succeeded")
+        finally:
+            RLPy.RGlobal.EndAction()
+        return {"success": True, "name": _wf_obj_name(obj), "bone": bone_name}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_transfer_skin_weights(
+    body: dict[str, Any] | None = None, **kwargs: Any
+) -> dict[str, Any]:
+    """Route /workflow/transfer_weights."""
+    params = _wf_params(body, kwargs)
+    try:
+        key = (params.get("template") or "default").strip().lower()
+        template = _WF_TRANSFER_TEMPLATES.get(key)
+        if template is None:
+            return {
+                "success": False,
+                "error": (
+                    f"Unknown template: {params.get('template')}. "
+                    f"Valid: {', '.join(sorted(_WF_TRANSFER_TEMPLATES))}"
+                ),
+            }
+        obj, kind, error = _wf_resolve(params.get("item_name"), params.get("item_id"))
+        if error:
+            return error
+        if not hasattr(obj, "TransferSkinWeight"):
+            return {
+                "success": False,
+                "error": f"A {kind} item cannot transfer skin weights",
+            }
+
+        if key == "shoes":
+            avatar = _wf_owner_avatar(obj) or get_first_avatar()
+            existing = _wf_shoes_items(avatar)
+            if existing:
+                if not bool(params.get("replace")):
+                    names = ", ".join(_wf_obj_name(item) for item in existing)
+                    return {
+                        "success": False,
+                        "error": (
+                            f"Avatar already has a shoes item ({names}); "
+                            'pass "replace": true to remove it first'
+                        ),
+                    }
+                RLPy.RGlobal.BeginAction("wf_transfer_skin_weights_replace_shoes")
+                try:
+                    for item in existing:
+                        RLPy.RScene.RemoveObject(item)
+                finally:
+                    RLPy.RGlobal.EndAction()
+
+        RLPy.RGlobal.BeginAction("wf_transfer_skin_weights")
+        try:
+            obj.TransferSkinWeight(template)
+            try:
+                RLPy.RGlobal.ObjectModified(obj, RLPy.EObjectModifiedType_Attribute)
+            except Exception:
+                pass
+        finally:
+            RLPy.RGlobal.EndAction()
+
+        try:
+            kind_after = _wf_kind_of(obj)
+        except Exception:
+            kind_after = kind
+        return {
+            "success": True,
+            "name": _wf_obj_name(obj),
+            "template": key,
+            "kind_after": kind_after,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_convert_to_hair(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/convert_hair."""
+    params = _wf_params(body, kwargs)
+    try:
+        key = (params.get("template") or "").strip().lower()
+        if key not in _WF_HAIR_ENUM_NAMES:
+            return {
+                "success": False,
+                "error": (
+                    f"Unknown template: {params.get('template')}. "
+                    f"Valid: {', '.join(sorted(_WF_HAIR_ENUM_NAMES))}"
+                ),
+            }
+        enum_name, is_face_hair = _WF_HAIR_ENUM_NAMES[key]
+        if enum_name is None:
+            return {
+                "success": False,
+                "error": (
+                    f"needs GUI: no EHairType_/EFaceHairType_ constant for '{key}' "
+                    "eyelashes is exposed in this CC5 build"
+                ),
+            }
+        hair_enum = getattr(RLPy, enum_name, None)
+        if hair_enum is None:
+            return {
+                "success": False,
+                "error": f"{enum_name} is not available in this CC5 build",
+            }
+
+        obj, kind, error = _wf_resolve(params.get("item_name"), params.get("item_id"))
+        if error:
+            return error
+        if is_face_hair:
+            if not hasattr(obj, "ConvertToFaceHair"):
+                return {
+                    "success": False,
+                    "error": f"A {kind} item cannot convert to face hair",
+                }
+            convert = obj.ConvertToFaceHair
+        else:
+            if not hasattr(obj, "ConvertToHair"):
+                return {"success": False, "error": f"A {kind} item cannot convert to hair"}
+            convert = obj.ConvertToHair
+
+        RLPy.RGlobal.BeginAction("wf_convert_to_hair")
+        try:
+            convert(hair_enum)
+            try:
+                RLPy.RGlobal.ObjectModified(obj, RLPy.EObjectModifiedType_Attribute)
+            except Exception:
+                pass
+        finally:
+            RLPy.RGlobal.EndAction()
+        return {"success": True, "name": _wf_obj_name(obj), "template": key}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_cloth_to_accessory(
+    body: dict[str, Any] | None = None, **kwargs: Any
+) -> dict[str, Any]:
+    """Route /workflow/cloth_to_accessory."""
+    params = _wf_params(body, kwargs)
+    try:
+        obj, kind, error = _wf_resolve(params.get("item_name"), params.get("item_id"))
+        if error:
+            return error
+        if not hasattr(obj, "ConvertToAccessory"):
+            return {
+                "success": False,
+                "error": f"A {kind} item cannot convert to an accessory (needs cloth)",
+            }
+        keep_shape = bool(params.get("keep_current_shape", True))
+        RLPy.RGlobal.BeginAction("wf_cloth_to_accessory")
+        try:
+            obj.ConvertToAccessory(keep_shape)
+            try:
+                RLPy.RGlobal.ObjectModified(obj, RLPy.EObjectModifiedType_Attribute)
+            except Exception:
+                pass
+        finally:
+            RLPy.RGlobal.EndAction()
+        return {"success": True, "name": _wf_obj_name(obj)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_conform_cloth(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/conform."""
+    params = _wf_params(body, kwargs)
+    try:
+        obj, kind, error = _wf_resolve(params.get("item_name"), params.get("item_id"))
+        if error:
+            return error
+        if not (hasattr(obj, "SetClothConformValue") and hasattr(obj, "GetClothConformValue")):
+            return {"success": False, "error": f"A {kind} item has no cloth conform values"}
+
+        try:
+            iterations = int(params.get("iterations", 1))
+        except (TypeError, ValueError):
+            return {"success": False, "error": "iterations must be an integer 1..10"}
+        iterations = max(1, min(10, iterations))
+
+        raw_values = params.get("values") or {}
+        if not isinstance(raw_values, dict):
+            return {
+                "success": False,
+                "error": 'values must be an object of {"<conform key>": number}',
+            }
+        values: dict[str, float] = {}
+        for key, raw in raw_values.items():
+            if not isinstance(key, str) or not key:
+                return {"success": False, "error": "conform keys must be non-empty strings"}
+            try:
+                values[key] = float(raw)
+            except (TypeError, ValueError):
+                return {"success": False, "error": f"Conform value for {key!r} is not a number"}
+
+        # The conform key strings are undocumented: probe the CC5 Conform panel
+        # labels and their lower_snake variants, and keep the ones that read a number.
+        available: list[dict[str, Any]] = []
+        working: dict[str, str] = {}
+        for candidate in _wf_conform_candidates():
+            try:
+                raw_value = obj.GetClothConformValue(candidate)
+            except Exception:
+                continue
+            raw_value = _wf_jsonable(raw_value)
+            if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
+                continue
+            available.append({"key": candidate, "value": raw_value})
+            working.setdefault(_wf_conform_norm(candidate), candidate)
+
+        applied: dict[str, float] = {}
+        skipped: dict[str, str] = {}
+        for key, value in values.items():
+            actual = working.get(_wf_conform_norm(key))
+            if actual is None:
+                skipped[key] = "key does not read a number via GetClothConformValue"
+            else:
+                applied[actual] = value
+
+        before = {key: _wf_conform_get(obj, key) for key in applied}
+        RLPy.RGlobal.BeginAction("wf_conform_cloth")
+        try:
+            for key, value in applied.items():
+                obj.SetClothConformValue(key, value)
+            for _ in range(iterations):
+                obj.CalculateCollision()
+            try:
+                RLPy.RGlobal.ObjectModified(obj, RLPy.EObjectModifiedType_Attribute)
+            except Exception:
+                pass
+        finally:
+            RLPy.RGlobal.EndAction()
+        after = {key: _wf_conform_get(obj, key) for key in applied}
+
+        result: dict[str, Any] = {
+            "success": True,
+            "name": _wf_obj_name(obj),
+            "before": before,
+            "after": after,
+            "available_keys": available,
+            "applied_keys": sorted(applied),
+            "skipped_values": skipped,
+        }
+        if not available:
+            result["warning"] = "no conform key read a number via GetClothConformValue"
+        elif values and not applied:
+            result["warning"] = "none of the requested values matched a readable conform key"
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_get_transform(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/transform/get."""
+    params = _wf_params(body, kwargs)
+    try:
+        obj, _kind, error = _wf_resolve(params.get("item_name"), params.get("item_id"))
+        if error:
+            return error
+        values = _wf_read_transform(obj)
+        return {"success": True, "name": _wf_obj_name(obj), **values}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_set_transform(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/transform/set."""
+    params = _wf_params(body, kwargs)
+    try:
+        obj, _kind, error = _wf_resolve(params.get("item_name"), params.get("item_id"))
+        if error:
+            return error
+        current = _wf_read_transform(obj)
+
+        parsed: dict[str, list[float] | None] = {}
+        for key in ("move", "rotate", "scale"):
+            raw = params.get(key)
+            if raw is None:
+                parsed[key] = current[key]
+                continue
+            if not isinstance(raw, (list, tuple)) or len(raw) != 3:
+                return {"success": False, "error": f"{key} must be a list of 3 numbers"}
+            try:
+                parsed[key] = [float(component) for component in raw]
+            except (TypeError, ValueError):
+                return {"success": False, "error": f"{key} must be a list of 3 numbers"}
+
+        if any(parsed[key] is None for key in parsed):
+            return {
+                "success": False,
+                "error": "Current transform is unreadable; pass move, rotate and scale explicitly",
+            }
+
+        transform, build_error = _wf_make_transform(
+            parsed["move"], parsed["rotate"], parsed["scale"]
+        )
+        if build_error:
+            return {"success": False, "error": build_error}
+
+        # RIObject has no documented transform setter, so try, in order:
+        #  1. the object's transform control (GetControl + RTransformControl.SetValue);
+        #  2. an undocumented Set*Transform method if this build has one;
+        #  3. mutating the RTransform returned by LocalTransform() in place.
+        # The read-back below decides whether anything actually took effect.
+        now = RLPy.RGlobal.GetTime()
+        applied = False
+        RLPy.RGlobal.BeginAction("wf_set_transform")
+        try:
+            get_control = getattr(obj, "GetControl", None)
+            if get_control is not None:
+                for key in ("Transform", "KT_Transform"):
+                    try:
+                        control = get_control(key)
+                    except Exception:
+                        control = None
+                    if control is None or not hasattr(control, "SetValue"):
+                        continue
+                    try:
+                        control.SetValue(now, transform)
+                        applied = True
+                        break
+                    except Exception as exc:
+                        print(f"[CC5 MCP Bridge] control {key} SetValue failed: {exc}")
+
+            if not applied:
+                for name in ("SetLocalTransform", "SetWorldTransform", "SetTransform"):
+                    candidate = getattr(obj, name, None)
+                    if candidate is None:
+                        continue
+                    try:
+                        candidate(transform)
+                        applied = True
+                        break
+                    except Exception as exc:
+                        print(f"[CC5 MCP Bridge] {name} failed: {exc}")
+
+            if not applied:
+                try:
+                    local = obj.LocalTransform()
+                    for method_name, values in (
+                        ("T", parsed["move"]),
+                        ("R", parsed["rotate"]),
+                        ("S", parsed["scale"]),
+                    ):
+                        vector = _wf_vector3(values)
+                        if vector is not None:
+                            getattr(local, method_name)(vector)
+                    applied = True
+                except Exception as exc:
+                    print(f"[CC5 MCP Bridge] LocalTransform in-place set failed: {exc}")
+
+            try:
+                RLPy.RGlobal.ObjectModified(obj, RLPy.EObjectModifiedType_Attribute)
+            except Exception:
+                pass
+            if hasattr(RLPy.RGlobal, "ForceViewportUpdate"):
+                RLPy.RGlobal.ForceViewportUpdate()
+        finally:
+            RLPy.RGlobal.EndAction()
+
+        values = _wf_read_transform(obj)
+
+        def _close(a, b) -> bool:
+            return (
+                a is not None
+                and b is not None
+                and len(a) == 3
+                and len(b) == 3
+                and all(abs(float(x) - float(y)) <= 1e-3 for x, y in zip(a, b))
+            )
+
+        if not applied or not all(
+            _close(values[key], parsed[key]) for key in ("move", "rotate", "scale")
+        ):
+            return {
+                "success": False,
+                "error": (
+                    "needs GUI: the transform change did not stick through the "
+                    "available RLPy calls (LocalTransform/GetControl only); "
+                    "change it in the CC5 UI"
+                ),
+                "move": values["move"],
+                "rotate": values["rotate"],
+                "scale": values["scale"],
+            }
+        return {"success": True, "name": _wf_obj_name(obj), **values}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_save_project(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/save."""
+    params = _wf_params(body, kwargs)
+    try:
+        file_path = (params.get("file_path") or "").strip()
+        if not file_path:
+            file_path = _wf_current_project_path()
+            if not file_path:
+                return {
+                    "success": False,
+                    "error": (
+                        "file_path is required: the current project path is not "
+                        "readable through the RLPy API used here"
+                    ),
+                }
+        path_error = _validate_path(file_path, {".ccproject"})
+        if path_error:
+            return {"success": False, "error": path_error}
+        if os.path.basename(file_path).lower().endswith("_hs_ok.ccproject"):
+            return {
+                "success": False,
+                "error": "Refusing to overwrite a *_hs_ok.ccProject safety copy",
+            }
+
+        parent_dir = os.path.dirname(file_path)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
+
+        RLPy.RGlobal.BeginAction("wf_save_project")
+        try:
+            saved = False
+            save_error: Exception | None = None
+            try:
+                RLPy.RFileIO.SaveProject(file_path)
+                saved = True
+            except Exception as exc:
+                save_error = exc
+            if not saved:
+                avatar = get_first_avatar()
+                if avatar is not None:
+                    try:
+                        RLPy.RFileIO.SaveFile(
+                            avatar, RLPy.ESaveFileType_Project, file_path
+                        )
+                        saved = True
+                    except Exception as exc:
+                        save_error = exc
+            if not saved:
+                raise save_error or RuntimeError("SaveProject failed")
+        finally:
+            RLPy.RGlobal.EndAction()
+        return {"success": True, "path": file_path}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_export_obj(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/export_obj."""
+    params = _wf_params(body, kwargs)
+    try:
+        file_path = (params.get("file_path") or "").strip()
+        if not file_path:
+            return {"success": False, "error": "file_path is required"}
+        path_error = _validate_path(file_path, {".obj"})
+        if path_error:
+            return {"success": False, "error": path_error}
+        current_pose = bool(params.get("current_pose", True))
+        with_materials = bool(params.get("with_materials", True))
+
+        obj = None
+        if params.get("item_name") or params.get("item_id"):
+            obj, _kind, error = _wf_resolve(
+                params.get("item_name"), params.get("item_id")
+            )
+            if error:
+                return error
+        if obj is None:
+            obj = get_first_avatar()
+        if obj is None:
+            return {
+                "success": False,
+                "error": "No item selected and no avatar in the scene",
+            }
+
+        parent_dir = os.path.dirname(file_path)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+        RLPy.RGlobal.BeginAction("wf_export_obj")
+        try:
+            exported = False
+            export_error: Exception | None = None
+            # ExportObjFile(*args) is undocumented: try the plausible arities.
+            for args in (
+                (obj, file_path, current_pose, with_materials),
+                (obj, file_path, current_pose),
+                (obj, file_path),
+            ):
+                try:
+                    RLPy.RFileIO.ExportObjFile(*args)
+                except Exception as exc:
+                    export_error = exc
+                    continue
+                if os.path.exists(file_path):
+                    exported = True
+                    break
+            if not exported:
+                raise export_error or RuntimeError(
+                    f"ExportObjFile did not create {file_path}"
+                )
+        finally:
+            RLPy.RGlobal.EndAction()
+        return {
+            "success": True,
+            "path": file_path,
+            "bytes": os.path.getsize(file_path),
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_get_floor_contact(
+    body: dict[str, Any] | None = None, **kwargs: Any
+) -> dict[str, Any]:
+    """Route /workflow/floor_contact/get."""
+    try:
+        avatar = get_first_avatar()
+        if not avatar:
+            return {"success": False, "error": "No avatar in scene"}
+        if not hasattr(avatar, "GetFloorContactValue"):
+            return {
+                "success": False,
+                "error": "GetFloorContactValue is not available in this CC5 build",
+            }
+
+        types = _wf_floor_contact_types()
+        if not types:
+            try:
+                return {
+                    "success": True,
+                    "value": _wf_jsonable(avatar.GetFloorContactValue()),
+                }
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": (
+                        "needs GUI: the floor-contact type enum (EFloorContact*) is "
+                        f"not exposed through RLPy ({e})"
+                    ),
+                }
+
+        values: dict[str, Any] = {}
+        for name, enum in types:
+            if name.endswith("_All"):
+                # EFloorContactType_All is a set-only aggregate, not a channel.
+                continue
+            try:
+                values[name] = _wf_jsonable(avatar.GetFloorContactValue(enum))
+            except Exception as e:
+                print(f"[CC5 MCP Bridge] GetFloorContactValue({name}) failed: {e}")
+                values[name] = None
+        return {"success": True, "value": values}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_set_floor_contact(
+    body: dict[str, Any] | None = None, **kwargs: Any
+) -> dict[str, Any]:
+    """Route /workflow/floor_contact/set (value: an object as returned by get)."""
+    params = _wf_params(body, kwargs)
+    try:
+        value = params.get("value")
+        if value is None:
+            return {"success": False, "error": "value is required"}
+        avatar = get_first_avatar()
+        if not avatar:
+            return {"success": False, "error": "No avatar in scene"}
+        if not hasattr(avatar, "SetFloorContactValue"):
+            return {
+                "success": False,
+                "error": "SetFloorContactValue is not available in this CC5 build",
+            }
+
+        types = _wf_floor_contact_types()
+        type_map = dict(types)
+        updates: list[tuple[str, Any, float]] = []
+
+        if isinstance(value, dict):
+            for key, raw in value.items():
+                enum = type_map.get(key)
+                if enum is None:
+                    return {
+                        "success": False,
+                        "error": (
+                            f"Unknown floor-contact type: {key}. "
+                            f"Valid: {', '.join(sorted(type_map)) or 'none exposed'}"
+                        ),
+                    }
+                try:
+                    updates.append((key, enum, float(raw)))
+                except (TypeError, ValueError):
+                    return {
+                        "success": False,
+                        "error": f"Floor-contact value for {key!r} is not a number",
+                    }
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            if len(types) != 1:
+                return {
+                    "success": False,
+                    "error": (
+                        "value must be an object keyed by floor-contact type "
+                        f"(this build exposes {len(types)} types)"
+                    ),
+                }
+            name, enum = types[0]
+            updates.append((name, enum, float(value)))
+        elif isinstance(value, (list, tuple)):
+            if len(value) != len(types):
+                return {
+                    "success": False,
+                    "error": (
+                        f"value must have {len(types)} entries "
+                        f"({', '.join(name for name, _ in types)})"
+                    ),
+                }
+            for (name, enum), raw in zip(types, value):
+                try:
+                    updates.append((name, enum, float(raw)))
+                except (TypeError, ValueError):
+                    return {
+                        "success": False,
+                        "error": f"Floor-contact value for {name!r} is not a number",
+                    }
+        else:
+            return {
+                "success": False,
+                "error": "value must be an object as returned by /workflow/floor_contact/get",
+            }
+
+        RLPy.RGlobal.BeginAction("wf_set_floor_contact")
+        try:
+            for _name, enum, number in updates:
+                avatar.SetFloorContactValue(enum, number)
+            try:
+                RLPy.RGlobal.ObjectModified(avatar, RLPy.EObjectModifiedType_Attribute)
+            except Exception:
+                pass
+        finally:
+            RLPy.RGlobal.EndAction()
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_auto_adjust_foot_height(
+    body: dict[str, Any] | None = None, **kwargs: Any
+) -> dict[str, Any]:
+    """Route /workflow/foot_auto."""
+    try:
+        avatar = get_first_avatar()
+        if not avatar:
+            return {"success": False, "error": "No avatar in scene"}
+        if not hasattr(avatar, "AutoAdjustFootHeight"):
+            return {
+                "success": False,
+                "error": "AutoAdjustFootHeight is not available in this CC5 build",
+            }
+        RLPy.RGlobal.BeginAction("wf_auto_adjust_foot_height")
+        try:
+            avatar.AutoAdjustFootHeight()
+            try:
+                RLPy.RGlobal.ObjectModified(avatar, RLPy.EObjectModifiedType_Attribute)
+            except Exception:
+                pass
+        finally:
+            RLPy.RGlobal.EndAction()
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_render_viewport(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/render (silent RenderImage only; never clicks)."""
+    params = _wf_params(body, kwargs)
+    try:
+        file_path = (params.get("file_path") or "").strip()
+        if not file_path:
+            return {"success": False, "error": "file_path is required"}
+        path_error = _validate_path(file_path, {".png"})
+        if path_error:
+            return {"success": False, "error": path_error}
+        render_error = _wf_render_png(file_path)
+        if render_error:
+            return {"success": False, "error": render_error}
+        return {"success": True, "path": file_path}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def _wf_bounds_center_size(obj) -> tuple[list[float], list[float]] | None:
+    """(center, size) from RIObject.GetBounds(), tolerant of the binding shape."""
+    get_bounds = getattr(obj, "GetBounds", None)
+    if get_bounds is None:
+        return None
+
+    max_v: list[float] | None = None
+    center: list[float] | None = None
+    min_v: list[float] | None = None
+
+    points = None
+    try:
+        points = get_bounds()
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] GetBounds() failed: {e}")
+
+    if isinstance(points, (list, tuple)) and len(points) >= 3:
+        triple = (points[0], points[1], points[2])
+        if all(isinstance(p, (int, float)) for p in points[:9]) and len(points) >= 9:
+            nums = [float(p) for p in points[:9]]
+            max_v, center, min_v = nums[0:3], nums[3:6], nums[6:9]
+        else:
+            max_v = _wf_vec3(triple[0])
+            center = _wf_vec3(triple[1])
+            min_v = _wf_vec3(triple[2])
+    else:
+        # The reference signature uses out-parameters; fill RVector3 instances.
+        vector3 = getattr(RLPy, "RVector3", None)
+        if vector3 is not None:
+            try:
+                out_max = vector3(0.0, 0.0, 0.0)
+                out_center = vector3(0.0, 0.0, 0.0)
+                out_min = vector3(0.0, 0.0, 0.0)
+                got = get_bounds(out_max, out_center, out_min)
+                if isinstance(got, (list, tuple)) and len(got) >= 3:
+                    out_max, out_center, out_min = got[0], got[1], got[2]
+                max_v = _wf_vec3(out_max)
+                center = _wf_vec3(out_center)
+                min_v = _wf_vec3(out_min)
+            except Exception as e:
+                print(f"[CC5 MCP Bridge] GetBounds(out...) failed: {e}")
+
+    if max_v is None or min_v is None:
+        return None
+    if center is None:
+        center = [(max_v[i] + min_v[i]) * 0.5 for i in range(3)]
+    size = [abs(max_v[i] - min_v[i]) for i in range(3)]
+    if max(size) <= 1e-6:
+        return None
+    return center, size
+
+
+def _wf_target_bounds(target) -> tuple[list[float], list[float]] | None:
+    """Bounds of the requested item, else the first avatar's bounds."""
+    if target is not None:
+        bounds = _wf_bounds_center_size(target)
+        if bounds is not None:
+            return bounds
+    try:
+        avatars = RLPy.RScene.GetAvatars()
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] GetAvatars for framing failed: {e}")
+        avatars = []
+    for avatar in avatars or []:
+        bounds = _wf_bounds_center_size(avatar)
+        if bounds is not None:
+            return bounds
+    return None
+
+
+def _wf_v_sub(a: list[float], b: list[float]) -> list[float]:
+    return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+
+
+def _wf_v_norm(v: list[float]) -> float:
+    return math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
+
+
+def _wf_v_unit(v: list[float], fallback: list[float]) -> list[float]:
+    n = _wf_v_norm(v)
+    if n <= 1e-6:
+        return list(fallback)
+    return [v[0] / n, v[1] / n, v[2] / n]
+
+
+def _wf_camera_fov_degrees(camera) -> float:
+    """Vertical-ish angle of view in degrees; tolerant of radians/defaults."""
+    fov = None
+    try:
+        fov = float(camera.GetAngleOfView(RLPy.RGlobal.GetTime()))
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] GetAngleOfView failed: {e}")
+    if fov is None or fov != fov or fov <= 0.0:
+        fov = 30.0
+    if fov <= 3.2:  # radians
+        fov = math.degrees(fov)
+    return min(120.0, max(5.0, fov))
+
+
+def _wf_framing_distance(camera, frame_height: float, fill: float = 0.8) -> float:
+    """Distance so `frame_height` fills `fill` of a 1280x720 frame height."""
+    frame_height = max(float(frame_height), 1e-3)
+    half = math.radians(_wf_camera_fov_degrees(camera)) * 0.5
+    distance = (frame_height * 0.5) / max(fill * math.tan(half), 1e-6)
+    return max(distance, frame_height * 0.25)
+
+
+def _wf_view_frame_height(size: list[float], key: str) -> float:
+    # CC scenes are Z-up: the vertical extent in front/side is Z.
+    if key == "top":
+        return max(size[0], size[1])
+    return size[2]
+
+
+def _wf_camera_pose_at(camera, position: list[float]) -> Any:
+    """Copy the camera's current pose, moved to `position`. None on failure."""
+    try:
+        transform = camera.WorldTransform()
+        vector = _wf_vector3(position)
+        if vector is None:
+            return None
+        transform.T(vector)
+        return transform
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] camera pose build failed: {e}")
+        return None
+
+
+def _wf_camera_persp_pose(
+    base: Any,
+    position: list[float],
+    yaw_deg: float,
+    pitch_deg: float,
+    look_at: list[float],
+) -> Any:
+    """Front pose rotated by yaw (Z) / pitch (X), then aimed at `look_at`."""
+    try:
+        matrix = base.Matrix()
+        rz = RLPy.RMatrix4()
+        rz.MakeIdentity()
+        rz.RotationZ(math.radians(yaw_deg))
+        rx = RLPy.RMatrix4()
+        rx.MakeIdentity()
+        rx.RotationX(math.radians(pitch_deg))
+        matrix = rz * rx * matrix
+        # The Front preset looks at the scene origin; carry that view direction
+        # through the same rotation, then take out the residual angle to the
+        # requested centre so the shot really looks at the target.
+        try:
+            base_pos = _wf_vec3(base.T())
+            if base_pos is not None:
+                forward = _wf_v_unit([-base_pos[0], -base_pos[1], -base_pos[2]], [0.0, 1.0, 0.0])
+                p, y = math.radians(pitch_deg), math.radians(yaw_deg)
+                fy = forward[1] * math.cos(p) - forward[2] * math.sin(p)
+                fz = forward[1] * math.sin(p) + forward[2] * math.cos(p)
+                fx = forward[0]
+                turned = [
+                    fx * math.cos(y) - fy * math.sin(y),
+                    fx * math.sin(y) + fy * math.cos(y),
+                    fz,
+                ]
+                desired = _wf_v_unit(_wf_v_sub(look_at, position), turned)
+                dot = max(-1.0, min(1.0,
+                    turned[0] * desired[0] + turned[1] * desired[1] + turned[2] * desired[2]))
+                axis = [
+                    turned[1] * desired[2] - turned[2] * desired[1],
+                    turned[2] * desired[0] - turned[0] * desired[2],
+                    turned[0] * desired[1] - turned[1] * desired[0],
+                ]
+                axis_norm = _wf_v_norm(axis)
+                if axis_norm > 1e-6 and dot < 0.999999:
+                    vec = _wf_vector3([c / axis_norm for c in axis])
+                    if vec is not None:
+                        correction = RLPy.RMatrix4()
+                        correction.MakeIdentity()
+                        correction.RotateAxisAngle(vec, math.acos(dot))
+                        matrix = correction * matrix
+        except Exception as e:
+            print(f"[CC5 MCP Bridge] persp look-at correction skipped: {e}")
+        vector = _wf_vector3(position)
+        if vector is None:
+            return None
+        matrix.SetTranslate(vector)
+        transform = RLPy.RTransform()
+        transform.From(matrix)
+        return transform
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] perspective pose build failed: {e}")
+        # Last resort: keep the front orientation, only move the camera.
+        try:
+            transform = base
+            vector = _wf_vector3(position)
+            if vector is not None:
+                transform.T(vector)
+            return transform
+        except Exception:
+            return None
+
+
+def wf_capture_views4(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/views4: front, side, top and a 45/25 perspective image."""
+    params = _wf_params(body, kwargs)
+    try:
+        folder = (params.get("folder") or "").strip()
+        prefix = (params.get("prefix") or "").strip()
+        if not folder:
+            return {"success": False, "error": "folder is required"}
+        if not prefix:
+            return {"success": False, "error": "prefix is required"}
+        if "\x00" in folder or ".." in folder or "\x00" in prefix or "/" in prefix or "\\" in prefix:
+            return {"success": False, "error": "Invalid folder or prefix"}
+
+        target = None
+        if params.get("item_name") or params.get("item_id"):
+            target, _kind, error = _wf_resolve(
+                params.get("item_name"), params.get("item_id")
+            )
+            if error:
+                return error
+
+        camera = RLPy.RScene.GetCurrentCamera()
+        if camera is None:
+            return {"success": False, "error": "No camera in scene"}
+        saved = _wf_camera_save(camera)
+
+        bounds = _wf_target_bounds(target)
+        framing = "target bounds, 80% of frame height" if bounds is not None else "camera presets"
+        if bounds is not None:
+            center, size = bounds
+        else:
+            center, size = [0.0, 0.0, 0.0], None
+
+        os.makedirs(folder, exist_ok=True)
+        files: dict[str, str] = {}
+        views: dict[str, Any] = {}
+        restored = False
+        RLPy.RGlobal.BeginAction("wf_capture_views4")
+        try:
+            if target is not None:
+                try:
+                    RLPy.RScene.SelectObject(target)
+                except Exception as e:
+                    print(f"[CC5 MCP Bridge] SelectObject failed: {e}")
+
+            front_enum = getattr(RLPy, _WF_VIEW4_CAMERA["front"], None)
+            for key in _WF_VIEW4_ORDER:
+                if key == "persp":
+                    # Perspective: 45 deg yaw around Z, tilted 25 deg down,
+                    # aimed at the target center (never the Top preset).
+                    try:
+                        if front_enum is not None:
+                            camera.SetCameraLocation(front_enum)
+                        front_pose = camera.WorldTransform()
+                        front_pos = _wf_vec3(front_pose.T())
+                    except Exception as e:
+                        return {
+                            "success": False,
+                            "error": f"Perspective base pose failed: {e}",
+                        }
+                    if front_pos is None:
+                        return {"success": False, "error": "Perspective: camera pose unreadable"}
+                    horizontal = [front_pos[0] - center[0], front_pos[1] - center[1], 0.0]
+                    direction = _wf_v_unit(horizontal, [0.0, -1.0, 0.0])
+                    yaw = math.radians(45.0)
+                    cos_yaw, sin_yaw = math.cos(yaw), math.sin(yaw)
+                    direction = [
+                        direction[0] * cos_yaw - direction[1] * sin_yaw,
+                        direction[0] * sin_yaw + direction[1] * cos_yaw,
+                        0.0,
+                    ]
+                    if size is not None:
+                        distance = _wf_framing_distance(
+                            camera, _wf_view_frame_height(size, "front")
+                        )
+                    else:
+                        distance = max(_wf_v_norm(_wf_v_sub(front_pos, center)), 10.0)
+                    tilt = math.radians(25.0)
+                    position = [
+                        center[0] + direction[0] * distance * math.cos(tilt),
+                        center[1] + direction[1] * distance * math.cos(tilt),
+                        center[2] + distance * math.sin(tilt),
+                    ]
+                    transform = _wf_camera_persp_pose(
+                        front_pose, position, 45.0, -25.0, center
+                    )
+                    applied, method = (False, "")
+                    if transform is not None:
+                        applied, method = _wf_camera_apply(camera, transform)
+                    if applied:
+                        views[key] = {
+                            "yaw_deg": 45.0,
+                            "pitch_deg": 25.0,
+                            "method": method,
+                            "position": [round(v, 3) for v in position],
+                        }
+                    else:
+                        # The camera transform is not writable on this build (live 10-22):
+                        # fall back to the Back preset so the 4th image is still a new angle.
+                        back_enum = getattr(RLPy, "ECameraLocationType_Back", None)
+                        if back_enum is not None:
+                            camera.SetCameraLocation(back_enum)
+                        views[key] = {"method": "preset Back (camera transform not writable)"}
+                else:
+                    enum_name = _WF_VIEW4_CAMERA[key]
+                    enum = getattr(RLPy, enum_name, None)
+                    if enum is None:
+                        return {
+                            "success": False,
+                            "error": f"Camera view '{key}' is not available in this CC5 version",
+                        }
+                    try:
+                        camera.SetCameraLocation(enum)
+                    except Exception as e:
+                        return {
+                            "success": False,
+                            "error": f"SetCameraLocation failed for the {key} view: {e}",
+                        }
+                    if size is not None:
+                        try:
+                            preset_pose = camera.WorldTransform()
+                            preset_pos = _wf_vec3(preset_pose.T())
+                        except Exception:
+                            preset_pos = None
+                        if preset_pos is not None:
+                            direction = _wf_v_unit(
+                                _wf_v_sub(preset_pos, center),
+                                [0.0, 0.0, 1.0] if key == "top" else [0.0, -1.0, 0.0],
+                            )
+                            distance = _wf_framing_distance(
+                                camera, _wf_view_frame_height(size, key)
+                            )
+                            position = [
+                                center[i] + direction[i] * distance for i in range(3)
+                            ]
+                            transform = _wf_camera_pose_at(camera, position)
+                            if transform is not None:
+                                applied, method = _wf_camera_apply(camera, transform)
+                                if applied:
+                                    views[key] = {
+                                        "method": method,
+                                        "position": [round(v, 3) for v in position],
+                                    }
+                                else:
+                                    camera.SetCameraLocation(enum)   # keep the plain preset view
+                    views.setdefault(key, {"method": "preset"})
+
+                if hasattr(RLPy.RGlobal, "ForceViewportUpdate"):
+                    RLPy.RGlobal.ForceViewportUpdate()
+                out_path = os.path.join(folder, f"{prefix}_{key}.png")
+                path_error = _validate_path(out_path, {".png"})
+                if path_error:
+                    return {"success": False, "error": path_error}
+                render_error = _wf_render_png(out_path)
+                if render_error:
+                    return {"success": False, "error": f"{key} view: {render_error}"}
+                files[key] = out_path
+        finally:
+            restored = _wf_restore_camera(camera, saved)
+            if target is not None:
+                try:
+                    RLPy.RScene.ClearSelectObjects()
+                except Exception as e:
+                    print(f"[CC5 MCP Bridge] ClearSelectObjects failed: {e}")
+            RLPy.RGlobal.EndAction()
+
+        result: dict[str, Any] = {
+            "success": True,
+            "files": [files[key] for key in _WF_VIEW4_ORDER],
+            "camera_restored": restored,
+            "framing": framing,
+            "views": views,
+        }
+        if not restored:
+            result["warning"] = "Camera could not be restored to its previous transform"
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+
+def wf_open_project(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/open_project: open a saved .ccProject (replaces the current scene)."""
+    params = _wf_params(body, kwargs)
+    try:
+        file_path = (params.get("file_path") or "").strip()
+        path_error = _validate_path(file_path, {".ccproject"})
+        if path_error:
+            return {"success": False, "error": path_error}
+        if not os.path.isfile(file_path):
+            return {"success": False, "error": f"No such project file: {file_path}"}
+        RLPy.RFileIO.LoadProject(file_path)
+        return {"success": True, "path": file_path}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_load_cloth_fbx(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/load_cloth_fbx: import an FBX directly as cloth on the first avatar (RFileIO.LoadClotheFromFbx)."""
+    params = _wf_params(body, kwargs)
+    try:
+        file_path = (params.get("file_path") or "").strip()
+        path_error = _validate_path(file_path, {".fbx"})
+        if path_error:
+            return {"success": False, "error": path_error}
+        if not os.path.isfile(file_path):
+            return {"success": False, "error": f"File not found: {file_path}"}
+        avatar = get_first_avatar()
+        if avatar is None:
+            return {"success": False, "error": "No avatar in scene"}
+        before = {str(entry["id"]) for _, entry in _wf_scan()}
+        failed: list[Any] = []
+        RLPy.RGlobal.BeginAction("wf_load_cloth_fbx")
+        try:
+            result = RLPy.RFileIO.LoadClotheFromFbx(avatar, file_path, failed)
+        finally:
+            RLPy.RGlobal.EndAction()
+        new_items = [entry for _, entry in _wf_scan() if str(entry["id"]) not in before]
+        # LoadClotheFromFbx returns [RStatus, failedMeshList]; report the status
+        # instead of only stringifying it (the live test saw [RStatus, ()]).
+        status = None
+        failed_meshes = [str(f) for f in failed]
+        if isinstance(result, (list, tuple)) and result:
+            status = result[0]
+            if len(result) > 1:
+                try:
+                    failed_meshes = [str(f) for f in (result[1] or [])]
+                except Exception:
+                    pass
+        status_error = None
+        status_code = None
+        if status is not None:
+            try:
+                status_error = bool(status.IsError())
+            except Exception as e:
+                print(f"[CC5 MCP Bridge] RStatus.IsError failed: {e}")
+            try:
+                status_code = _wf_jsonable(status.GetStatusCode())
+            except Exception as e:
+                print(f"[CC5 MCP Bridge] RStatus.GetStatusCode failed: {e}")
+        return {
+            "success": bool(new_items),
+            "result": str(result),
+            "status_error": status_error,
+            "status_code": status_code,
+            "failed_meshes": failed_meshes,
+            "items": new_items,
+            **({} if new_items else {"error": "nothing new appeared in the scene"}),
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 # --- Auto-patch server ACTION_MAP on reload ---
 
 def _auto_patch_server() -> None:
@@ -4365,6 +6818,8 @@ def _auto_patch_server() -> None:
 
     import cc5_api as _self
     srv.ACTION_MAP.update({
+        "wf_open_project": wf_open_project,
+        "wf_load_cloth_fbx": wf_load_cloth_fbx,
         "get_avatars":           lambda p: _self.get_avatars(),
         "get_avatar_info":       lambda p: _self.get_avatar_info(),
         "get_morph_catalog":     lambda p: _self.get_morph_catalog(),
@@ -4463,6 +6918,28 @@ def _auto_patch_server() -> None:
         # ActorMIXER PRO: Create Mixer Assets
         "create_actor_mixer": lambda p: _self.create_actor_mixer(p),
         "get_mixer_status":   lambda p: _self.get_mixer_status(),
+        # Workflow routes (docs/contract_workflow_routes.md). These are plain
+        # functions: each takes the JSON body dict as its only positional arg.
+        "list_scene_items":          list_scene_items,
+        "wf_set_visible":            wf_set_visible,
+        "wf_remove_item":            wf_remove_item,
+        "wf_import_fbx":             wf_import_fbx,
+        "wf_import_fbx_begin":       wf_import_fbx_begin,
+        "wf_import_fbx_status":      wf_import_fbx_status,
+        "wf_attach_to_bone":         wf_attach_to_bone,
+        "wf_transfer_skin_weights":  wf_transfer_skin_weights,
+        "wf_convert_to_hair":        wf_convert_to_hair,
+        "wf_cloth_to_accessory":     wf_cloth_to_accessory,
+        "wf_conform_cloth":          wf_conform_cloth,
+        "wf_get_transform":          wf_get_transform,
+        "wf_set_transform":          wf_set_transform,
+        "wf_save_project":           wf_save_project,
+        "wf_export_obj":             wf_export_obj,
+        "wf_get_floor_contact":      wf_get_floor_contact,
+        "wf_set_floor_contact":      wf_set_floor_contact,
+        "wf_auto_adjust_foot_height": wf_auto_adjust_foot_height,
+        "wf_render_viewport":        wf_render_viewport,
+        "wf_capture_views4":         wf_capture_views4,
     })
 
     # Also patch routes so new endpoints work after reload
@@ -4514,6 +6991,27 @@ def _auto_patch_server() -> None:
             "/export/head_mh/silent/finalize":        "silent_finalize",
             # ActorMIXER PRO: Create Mixer Assets
             "/actor_mixer/create":                    "create_actor_mixer",
+            # Workflow routes (docs/contract_workflow_routes.md)
+            "/workflow/items":              "list_scene_items",
+            "/workflow/open_project":       "wf_open_project",
+            "/workflow/load_cloth_fbx":     "wf_load_cloth_fbx",
+            "/workflow/visible":            "wf_set_visible",
+            "/workflow/remove":             "wf_remove_item",
+            "/workflow/import_fbx":         "wf_import_fbx_begin",
+            "/workflow/attach":             "wf_attach_to_bone",
+            "/workflow/transfer_weights":   "wf_transfer_skin_weights",
+            "/workflow/convert_hair":       "wf_convert_to_hair",
+            "/workflow/cloth_to_accessory": "wf_cloth_to_accessory",
+            "/workflow/conform":            "wf_conform_cloth",
+            "/workflow/transform/get":      "wf_get_transform",
+            "/workflow/transform/set":      "wf_set_transform",
+            "/workflow/save":               "wf_save_project",
+            "/workflow/export_obj":         "wf_export_obj",
+            "/workflow/floor_contact/get":  "wf_get_floor_contact",
+            "/workflow/floor_contact/set":  "wf_set_floor_contact",
+            "/workflow/foot_auto":          "wf_auto_adjust_foot_height",
+            "/workflow/render":             "wf_render_viewport",
+            "/workflow/views4":             "wf_capture_views4",
         })
     if hasattr(srv, "GET_ROUTES"):
         srv.GET_ROUTES.update({
@@ -4531,6 +7029,8 @@ def _auto_patch_server() -> None:
             "/scene/objects":    "get_scene_objects",
             # Silent export polling
             "/export/head_mh/status": "get_export_status",
+            # GUI import polling (File > Import flow, no mouse)
+            "/workflow/import_fbx/status": "wf_import_fbx_status",
             # ActorMIXER PRO: Create Mixer Assets polling
             "/actor_mixer/status": "get_mixer_status",
         })
