@@ -96,6 +96,13 @@ The MCP server provides 46 tools across 15 modules for controlling CC5:
 | `undo` | Undo the last operation |
 | `redo` | Redo an undone operation |
 
+#### Pop-up (dialog) detection
+| Tool | Description |
+|------|-------------|
+| `list_dialogs` | List the dialogs currently open in CC5 and Reallusion Hub (title, body text, button labels, process, foreground) with a PNG of each when Windows can render it. **Read-only**; works even while CC5's main thread is blocked by a modal dialog. There is deliberately no tool that clicks dialogs. |
+
+**Automatic warning (Japanese):** while a dialog is open, *every* tool result starts with `⚠ CC5 に小窓が出ています ...` (or `ℹ Reallusion Hub に小窓 ...`) showing title / body / buttons. Dialogs that look like agreements, purchases, logins, updates, deletes or overwrites are flagged "人が判断". Scans are cached ~4 s (about 1 s when a rescan is needed). Implemented by `scripts/list-dialogs.ps1` (EnumWindows + UI Automation), independent of the bridge. Set `CC5_DIALOG_WATCH=0` to disable, `CC5_DIALOG_WATCH_IGNORE_HUB=1` to hide Hub-only notices.
+
 #### Advanced Features
 | Tool | Description |
 |------|-------------|
@@ -222,6 +229,8 @@ Passing a bare filename (no directory component) exports into `D:\CC5Export` by 
 | `CC5_RELOAD_SECRET` | *(empty)* | Auth token for the `/reload` endpoint. If set, requests must include `X-Reload-Token` header |
 | `CC5_REQUEST_TIMEOUT_MS` | `30000` | HTTP request timeout in milliseconds (MCP server side) |
 | `CC5_ROOT` | `C:\Program Files\Reallusion\Character Creator 5` | CC5 installation path (used for default avatar loading) |
+| `CC5_DIALOG_WATCH` | `1` | `0` disables the dialog warning that is prepended to tool results |
+| `CC5_DIALOG_WATCH_IGNORE_HUB` | *(unset)* | `1` hides Reallusion Hub-only dialogs from the warning |
 | `CC5_EXPORT_DIR` | `D:\CC5Export` | Default output folder for `export_fbx` when given a bare filename (no directory). Read by the bridge plugin. |
 
 ## Development

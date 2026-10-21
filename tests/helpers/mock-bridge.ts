@@ -47,6 +47,7 @@ export type MockBridge = {
 export function createMockBridge(): MockBridge {
   return {
     healthCheck: vi.fn<[], Promise<boolean>>(),
+    healthDetail: vi.fn(),
     getAvatars: vi.fn<[], Promise<CC5Avatar[]>>(),
     getAvatarInfo: vi.fn<[], Promise<AvatarInfo | null>>(),
     getMorphCatalog: vi.fn<[], Promise<MorphCatalog>>(),

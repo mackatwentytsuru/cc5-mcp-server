@@ -29,6 +29,8 @@ import { registerVisibilityTools } from "./tools/visibility.js";
 import { registerScriptingTools } from "./tools/scripting.js";
 import { registerMetaHumanTools } from "./tools/metahuman.js";
 import { registerActorMixerTools } from "./tools/actor-mixer.js";
+import { registerDialogTools } from "./tools/dialogs.js";
+import { DialogWatcher, withDialogWatch } from "./dialogs.js";
 import { registerMorphResources } from "./resources/morphs.js";
 
 async function main() {
@@ -39,6 +41,10 @@ async function main() {
 
   // Bridge to CC5's Python plugin HTTP server
   const bridge = new CC5Bridge(process.env.CC5_BRIDGE_URL);
+
+  // Every tool result gets a warning header while a CC5 / Reallusion Hub dialog is open.
+  const dialogWatcher = new DialogWatcher();
+  withDialogWatch(server, dialogWatcher);
 
   // Register all tools
   registerMorphTools(server, bridge);
@@ -57,6 +63,7 @@ async function main() {
   registerScriptingTools(server, bridge);
   registerMetaHumanTools(server, bridge);
   registerActorMixerTools(server, bridge);
+  registerDialogTools(server, dialogWatcher);
 
   // Register resources
   registerMorphResources(server, bridge);
