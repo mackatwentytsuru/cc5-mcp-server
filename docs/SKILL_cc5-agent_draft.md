@@ -86,8 +86,15 @@ Route limits (from the plugin report — expect these, do not "fix" them by clic
 - `convert_to_hair` has no upper_lash/lower_lash template (no API constant) — CC's built-in lashes
   looked better than custom ones anyway.
 - Conform key strings are undocumented; pass `values` to read them back.
-- `capture_views4` perspective is a preset view (Home/Focus), not an exact 45°; if the camera
-  cannot be restored, a `warning` is included.
+- `capture_views4`: the camera transform is not writable on CC5 5.12, so the 4 images are the
+  Front / Right / Top / Back presets (the 4th is Back, not a 45° view). The avatar is small in the
+  1280x720 frame — crop the centre before judging. A `warning` says when the camera was not restored.
+- `import_fbx` is async: POST `/workflow/import_fbx`, then poll GET `/workflow/import_fbx/status`.
+  The file dialog is filled through Qt, but the "Import Fbx" Character/Prop chooser is NOT clicked yet:
+  if `phase` stays `settling`/`error` and an "Import Fbx" window is open, press its **Prop** button and
+  then **Convert All** in "Import Settings" (GUI), then run `list_scene_items`.
+- Pass `item_name` when an id-based call says an accessory "cannot transfer skin weights" (fixed in the
+  resolver, but keep this fallback in mind).
 
 ## Text-only outfit workflow (custom FBX parts)
 
@@ -121,9 +128,12 @@ pull tight items (corset) to a 3 mm gap; push-only for skirts/boots; smooth the 
 over mesh edges; export and re-import.
 
 ```
-blender --background part.blend --python J:/OTOLUME/parts/beyon/cc5_trial3/scripts/v11_fit_part.py
-blender --background part.blend --python J:/OTOLUME/parts/beyon/cc5_trial3/scripts/v11_check_part.py
+# measure parts against the body + 4 renders (2x2 sheet)
+blender -b --python J:/OTOLUME/parts/beyon/cc5_trial3/scripts/v11_check_part.py -- BODY_AND_PARTS.obj GROUP1,GROUP2 ABS/OUT_PREFIX [--against GROUPX]
+# fit one part: tight (corset) or --push-only (skirt, boots); --against keeps it outside other layers
+blender -b --python J:/OTOLUME/parts/beyon/cc5_trial3/scripts/v11_fit_part.py -- BODY_AND_PARTS.obj GROUP ABS/OUT.fbx ABS/OUT_PREFIX [--gap 0.003] [--push-only] [--against G1,G2]
 ```
+The OBJ is CC5's "Character With Current Pose" export (Z-up, cm) with materials; GROUP names are the OBJ `g` names (they can repeat with `_00` suffixes — check `PART`/`BBOX` lines to tell new from old).
 
 - `v11_fit_part.py` — fits the part mesh onto the imported body OBJ by signed distance.
 - `v11_check_part.py` — reports remaining distances/gaps so you can verify by numbers.
