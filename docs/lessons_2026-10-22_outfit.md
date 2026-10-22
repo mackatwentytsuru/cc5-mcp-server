@@ -113,3 +113,4 @@ These lessons go into the cc5-agent skill. Every item was learned the hard way.
 - CC5 の目は、上まぶたと下まぶたで別々の穴(ふちの輪)になっている。眼球 4 倍だと目の穴は横 8.8cm・縦 5.8cm。目の位置をふちから取るときは両方の輪を使い、口や涙のふちを外す。
 - CC5 の髪(15:46): Content の「Highlights bangs」は髪の形ではなく Material Plus(.iMtlPlus)。前髪の形 `Hair/Element/Hair/Hair Builder 2 - eGirl/Bangs/Highlight Bangs.rlHairElement` を先に読み込む(`/asset/load`、.rlHair/.rlHairElement を許可に追加)。髪の色は Digital_Human Hair の材質どうしで値を写す(`/material/shader/get` → `/material/shader/set`)。根元の黒は RootColor。
 - 新しい CC5 の髪を当てると、髪として登録してあった自作の髪(beyon_hair)は置き換わる。部品の番号(id)は、CC5 を開き直すと変わる。
+- 帽子の矢印(ギズモ)が出ない(16:00): ピボットが帽子から 1.6m 離れたひざの高さにあり、ギズモが画面の外に出ていた。`/workflow/pivot {"action":"center"}`(RIAccessory/RIProp.SetPivot。向きは RVector3)で帽子の中心へ移すと出た。形と位置は変わらない。
