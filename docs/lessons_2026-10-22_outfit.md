@@ -79,3 +79,13 @@ These lessons go into the cc5-agent skill. Every item was learned the hard way.
 - After a successful import, CC5 stops answering for 10–60 s while it converts. Poll `/workflow/import_fbx/status` with a long timeout and do not fire other routes in the meantime. In the 11:48 run, a trace in %TEMP%/cc5_import_trace.log showed every step.
 - Two silent CC5 exits (no APPCRASH entry) happened right after an import began, at 11:37 and 11:45. Both times the bridge had been reloaded several times while the project was still loading. Reload once, only after the project has finished loading.
 - **The avatar lift is recomputed every time a Shoes item is transferred**, and it depends on where the shoe sits. A transferred cloth cannot be moved afterwards: there is no Transform data block on cloth. Measured with boots v13c: prop raised 6.803 → lift 9.541; raised 9.541 → lift 8.368. That is roughly linear (lift ≈ 12.455 − 0.428 × offset), so the fixed point is ≈ 8.72. Procedure: import → raise by the guess → attach → transfer Shoes → export the current pose and measure the lift from a body or hair offset → repeat with the solved offset until boot-top-minus-lift equals the authored boot top.
+
+## 10-22 afternoon: high heels that survive motions (verified)
+- Foot-bone keys at frame 0 are motion data. Applying any motion overwrites them, the feet go flat, and the heel-pose boots get crushed.
+- **What works:**
+  1. Pose `CC_Base_L/R_Foot` X −37 and `ToeBase` X +37 at frame 0.
+  2. Transfer Skin Weights with the Shoes template.
+  3. Select the shoes. In Modify > Attribute press **High Heels** and press **Ok with Heel Height 0**.
+  CC5 moves the current foot pose into the shoes' high-heel setting, and the frame-0 keys read 0 afterwards. With the keys at 0 the feet stay heeled. A foot key of +15 is added on top while the boot keeps its heel shape.
+- The High Heels dialog is relative: it opens at 0 each time and adds to the current result. The live preview while typing is much weaker than the result after Ok. Heel Height 100 on flat-fitted boots gave about 60°, and the instep collapsed. The official "fit to flat feet, then raise Heel Height" route crushed this platform stiletto.
+- New routes: `/workflow/high_heels/open` selects the shoes and presses the Modify > Attribute button (verified). `/workflow/high_heels/state` and `/workflow/high_heels/set` cannot see the spin box, because it is a custom widget. Set the value with the keyboard on the dialog window and press Ok inside the dialog only. The Modify panel must show the Attribute tab; the Render tab hides the button.

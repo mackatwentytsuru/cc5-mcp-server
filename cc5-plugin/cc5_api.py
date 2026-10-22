@@ -6161,6 +6161,227 @@ def wf_bone_rotation(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[
         return {"success": False, "error": str(e)}
 
 
+# --- High Heels (GUI only: no RLPy API for the heel height) ---
+
+def _wf_high_heels_dialog() -> Any:
+    """Visible top-level dialog titled "High Heels", or None.
+
+    CC5 opens it from the Modify > Attribute button of the same name. It has no
+    objectName and no RLPy handle, so the window title is the only stable selector.
+    """
+    try:
+        from PySide2.QtWidgets import QApplication
+    except Exception:
+        return None
+    app = QApplication.instance()
+    if app is None:
+        return None
+    for w in app.topLevelWidgets():
+        try:
+            if w.isVisible() and (w.windowTitle() or "").strip().lower() == "high heels":
+                return w
+        except Exception:
+            continue
+    return None
+
+
+def _wf_high_heels_spins(dlg: Any) -> list[Any]:
+    """Spin boxes of the High Heels dialog (QDoubleSpinBox is not a QSpinBox)."""
+    try:
+        from PySide2.QtWidgets import QDoubleSpinBox, QSpinBox
+    except Exception:
+        return []
+    found: list[Any] = []
+    for klass in (QSpinBox, QDoubleSpinBox):
+        try:
+            found.extend(dlg.findChildren(klass))
+        except Exception:
+            continue
+    return found
+
+
+def _wf_high_heels_read(dlg: Any) -> dict[str, Any]:
+    """Spin-box and slider readings of the High Heels dialog."""
+    try:
+        from PySide2.QtWidgets import QSlider
+    except Exception:
+        return {"spin_boxes": [], "slider": None}
+    spins: list[dict[str, Any]] = []
+    for spin in _wf_high_heels_spins(dlg):
+        try:
+            spins.append({
+                "value": spin.value(),
+                "minimum": spin.minimum(),
+                "maximum": spin.maximum(),
+            })
+        except Exception:
+            continue
+    slider = None
+    try:
+        sliders = dlg.findChildren(QSlider)
+        if sliders:
+            first = sliders[0]
+            slider = {
+                "value": first.value(),
+                "minimum": first.minimum(),
+                "maximum": first.maximum(),
+            }
+    except Exception:
+        slider = None
+    return {"spin_boxes": spins, "slider": slider}
+
+
+def wf_high_heels_open(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/high_heels/open: select the shoes, click Modify > Attribute > High Heels.
+
+    Body: {"item_name"|"item_id"} for the shoes. The dialog appears a moment after the
+    click; poll /workflow/high_heels/state, then drive /workflow/high_heels/set.
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        from PySide2.QtWidgets import QAbstractButton, QApplication, QMainWindow
+
+        obj, _kind, error = _wf_resolve(params.get("item_name"), params.get("item_id"))
+        if error:
+            return error
+        RLPy.RScene.ClearSelectObjects()
+        RLPy.RScene.SelectObject(obj)
+
+        not_visible = {
+            "success": False,
+            "error": "High Heels button not visible (open Modify > Attribute with the shoes selected)",
+        }
+        app = QApplication.instance()
+        if app is None:
+            return not_visible
+        main_win = None
+        for w in app.topLevelWidgets():
+            try:
+                if isinstance(w, QMainWindow) and w.isVisible():
+                    main_win = w
+                    break
+            except Exception:
+                continue
+        if main_win is None:
+            main_win = _mixer_find_main_window()
+        if main_win is None:
+            return not_visible
+
+        btn = None
+        for candidate in main_win.findChildren(QAbstractButton):
+            try:
+                if not candidate.isVisible() or _wf_import_fbx_text(candidate) != "high heels":
+                    continue
+                # The "High Heels" dialog carries a button of the same name; only the
+                # Modify > Attribute one is a child of the QMainWindow, never a dialog.
+                win = candidate.window()
+                if not isinstance(win, QMainWindow) or win is not main_win:
+                    continue
+                btn = candidate
+                break
+            except Exception:
+                continue
+        if btn is None:
+            return not_visible
+
+        _wf_qt_later(btn, "click", 150)
+        return {"success": True, "clicked": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_high_heels_state(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/high_heels/state: heel-height spin box and slider of the open dialog."""
+    try:
+        dlg = _wf_high_heels_dialog()
+        if dlg is None:
+            return {"success": True, "open": False}
+        return {"success": True, "open": True, **_wf_high_heels_read(dlg)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_high_heels_set(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/high_heels/set: drive the High Heels dialog, then Ok or Cancel.
+
+    Body: {"value": number, "press": "ok" | "cancel" | null}. The value is clamped to the
+    spin box range; only buttons inside the "High Heels" dialog are ever clicked.
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        from PySide2.QtWidgets import QAbstractButton, QSpinBox
+
+        raw_value = params.get("value")
+        if raw_value is None:
+            return {"success": False, "error": "value is required"}
+        try:
+            wanted = float(raw_value)
+        except (TypeError, ValueError):
+            return {"success": False, "error": "value must be a number"}
+        press = params.get("press")
+        if press is not None:
+            press = str(press).strip().lower() or None
+        if press is not None and press not in ("ok", "cancel"):
+            return {"success": False, "error": 'press must be "ok", "cancel" or null'}
+
+        dlg = _wf_high_heels_dialog()
+        if dlg is None:
+            return {
+                "success": False,
+                "error": 'The "High Heels" dialog is not open (run /workflow/high_heels/open first)',
+            }
+
+        spins = _wf_high_heels_spins(dlg)
+        if not spins:
+            return {"success": False, "error": 'The "High Heels" dialog has no spin box'}
+        spin = spins[0]
+        try:
+            low, high = float(spin.minimum()), float(spin.maximum())
+            clamped = max(low, min(high, wanted))
+            # QSpinBox takes ints only; QDoubleSpinBox takes the float as is.
+            spin.setValue(int(round(clamped)) if isinstance(spin, QSpinBox) else clamped)
+        except Exception as e:
+            return {"success": False, "error": f"could not set the heel value: {e}"}
+
+        # The panel applies the height on editingFinished (slider drag end) and Ok;
+        # setValue alone can leave the result untouched.
+        try:
+            spin.editingFinished.emit()
+        except Exception:
+            pass
+
+        set_value = spin.value()
+        pressed = None
+        if press:
+            btn = None
+            for candidate in dlg.findChildren(QAbstractButton):
+                try:
+                    if _wf_import_fbx_text(candidate) == press:
+                        btn = candidate
+                        break
+                except Exception:
+                    continue
+            if btn is None:
+                return {
+                    "success": False,
+                    "error": f'"{press}" button not found in the "High Heels" dialog',
+                    "value": set_value,
+                    "state": _wf_high_heels_read(dlg),
+                }
+            _wf_qt_later(btn, "click", 200)
+            pressed = press
+
+        return {
+            "success": True,
+            "value": set_value,
+            "clamped": set_value != wanted,
+            "pressed": pressed,
+            "state": _wf_high_heels_read(dlg),
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def wf_get_transform(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
     """Route /workflow/transform/get."""
     params = _wf_params(body, kwargs)
@@ -7937,6 +8158,9 @@ def _auto_patch_server() -> None:
         "wf_conform_cloth":          wf_conform_cloth,
         "wf_get_transform":          wf_get_transform,
         "wf_bone_rotation":          wf_bone_rotation,
+        "wf_high_heels_open":        wf_high_heels_open,
+        "wf_high_heels_state":       wf_high_heels_state,
+        "wf_high_heels_set":         wf_high_heels_set,
         "wf_set_transform":          wf_set_transform,
         "wf_save_project":           wf_save_project,
         "wf_export_obj":             wf_export_obj,
@@ -8018,6 +8242,9 @@ def _auto_patch_server() -> None:
             "/workflow/conform":            "wf_conform_cloth",
             "/workflow/transform/get":      "wf_get_transform",
             "/workflow/bone/rotation":      "wf_bone_rotation",
+            "/workflow/high_heels/open":    "wf_high_heels_open",
+            "/workflow/high_heels/state":   "wf_high_heels_state",
+            "/workflow/high_heels/set":     "wf_high_heels_set",
             "/workflow/transform/set":      "wf_set_transform",
             "/workflow/save":               "wf_save_project",
             "/workflow/export_obj":         "wf_export_obj",
