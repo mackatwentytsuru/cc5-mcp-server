@@ -6382,6 +6382,83 @@ def wf_high_heels_set(body: dict[str, Any] | None = None, **kwargs: Any) -> dict
         return {"success": False, "error": str(e)}
 
 
+def wf_menu_find(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/menu/find: list main-window menu actions whose text contains `text` (read-only)."""
+    params = _wf_params(body, kwargs)
+    try:
+        from PySide2.QtWidgets import QApplication, QMainWindow
+        needle = (params.get("text") or "").strip().lower()
+        app = QApplication.instance()
+        main_win = next((w for w in app.topLevelWidgets() if isinstance(w, QMainWindow) and w.isVisible()), None)
+        if main_win is None:
+            return {"success": False, "error": "main window not found"}
+        found: list[dict[str, Any]] = []
+
+        def _walk(menu: Any, path: list[str], depth: int = 0) -> None:
+            if menu is None or depth > 6:
+                return
+            for act in menu.actions():
+                text = (act.text() or "").replace("&", "")
+                sub = act.menu()
+                if sub is not None:
+                    _walk(sub, path + [text], depth + 1)
+                    continue
+                if text and (not needle or needle in text.lower()):
+                    found.append({"path": " > ".join(path + [text]), "enabled": act.isEnabled(),
+                                  "checkable": act.isCheckable(), "checked": act.isChecked()})
+
+        _walk(main_win.menuBar(), [])
+        return {"success": True, "count": len(found), "actions": found[:200]}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+_WF_MENU_DENY = ("exit", "delete", "remove", "game base", "convert", "buy", "pack", "purchase",
+                 "new project", "open", "reset", "clear")
+
+
+def wf_menu_trigger(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/menu/trigger: trigger one main-window menu action by its exact path.
+
+    Body: {"path": "Character > Pose Offset"}. Actions whose text contains a word from
+    _WF_MENU_DENY are refused, so destructive or purchase items are never fired from here.
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        from PySide2.QtWidgets import QApplication, QMainWindow
+        want = [p.strip().lower() for p in (params.get("path") or "").split(">") if p.strip()]
+        if not want:
+            return {"success": False, "error": "path is required, e.g. 'Character > Pose Offset'"}
+        if any(word in want[-1] for word in _WF_MENU_DENY):
+            return {"success": False, "error": f"refused: '{want[-1]}' is on the deny list"}
+        app = QApplication.instance()
+        main_win = next((w for w in app.topLevelWidgets() if isinstance(w, QMainWindow) and w.isVisible()), None)
+        if main_win is None:
+            return {"success": False, "error": "main window not found"}
+        menu = main_win.menuBar()
+        action = None
+        for depth, name in enumerate(want):
+            match = None
+            for act in menu.actions():
+                if (act.text() or "").replace("&", "").strip().lower() == name:
+                    match = act
+                    break
+            if match is None:
+                return {"success": False, "error": f"menu item not found: {name}"}
+            if depth == len(want) - 1:
+                action = match
+            else:
+                menu = match.menu()
+                if menu is None:
+                    return {"success": False, "error": f"not a submenu: {name}"}
+        if action is None or action.menu() is not None:
+            return {"success": False, "error": "path does not end at an action"}
+        _wf_qt_later(action, "trigger", 50)
+        return {"success": True, "triggered": " > ".join(want)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def wf_get_transform(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
     """Route /workflow/transform/get."""
     params = _wf_params(body, kwargs)
@@ -8158,6 +8235,8 @@ def _auto_patch_server() -> None:
         "wf_conform_cloth":          wf_conform_cloth,
         "wf_get_transform":          wf_get_transform,
         "wf_bone_rotation":          wf_bone_rotation,
+        "wf_menu_find":              wf_menu_find,
+        "wf_menu_trigger":           wf_menu_trigger,
         "wf_high_heels_open":        wf_high_heels_open,
         "wf_high_heels_state":       wf_high_heels_state,
         "wf_high_heels_set":         wf_high_heels_set,
@@ -8242,6 +8321,8 @@ def _auto_patch_server() -> None:
             "/workflow/conform":            "wf_conform_cloth",
             "/workflow/transform/get":      "wf_get_transform",
             "/workflow/bone/rotation":      "wf_bone_rotation",
+            "/workflow/menu/find":          "wf_menu_find",
+            "/workflow/menu/trigger":       "wf_menu_trigger",
             "/workflow/high_heels/open":    "wf_high_heels_open",
             "/workflow/high_heels/state":   "wf_high_heels_state",
             "/workflow/high_heels/set":     "wf_high_heels_set",
