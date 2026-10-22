@@ -106,3 +106,5 @@ These lessons go into the cc5-agent skill. Every item was learned the hard way.
 - 小窓が開いている間、`_wf_qt_later`(QTimer)の後回しの押しが動かないことがある。`QMetaObject.invokeMethod(..., Qt.QueuedConnection)` なら動く。
 - 髪を頭に固定し直す手順(14:10): 元の FBX を部品として読み込む → キャラ全体を今の姿勢で OBJ に書き出し、登録済みの髪と新しい部品の頂点(同じ並び)で回転と移動を求める(Kabsch)→ `/workflow/transform/set` に移動と回転(scipy の 'xyz' の角度、度)を入れる → `/workflow/attach` で CC_Base_Head に付ける。ずれ 0.003cm。
 - `ExportObjFile` の3つ目の引数は EExport3DFileOption(AxisYUp, ResetToBindPose など)。キャラに付いた部品(髪・小物)だけを書き出すことはできない。キャラ全体を書き出し、g の名前で取り出す。隠した部品も書き出される。
+- 目の下の「くま」のような弓なりの線(14:42): essential head morphs/pack_eye206(目の下のふくらみ)が 0.44 で効いていた。-0.6 にすると線がやわらぐ(本人が選んだ)。Eye Bag Lower Depth を - にすると線は逆に濃くなる。Eye Bag Curve(head_04_fix_head)は頭全体の形が変わるので使わない。
+- 見比べは `/workflow/timeline`(再生の状態・止める・コマ合わせ)で同じコマにしてから撮る。`/workflow/buttons` で再生ボタンなどを tool tip で探して押せる(消す・買う・更新などは押さない)。

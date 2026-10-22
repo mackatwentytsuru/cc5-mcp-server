@@ -6793,6 +6793,69 @@ def wf_file_dialog_fill(body: dict[str, Any] | None = None, **kwargs: Any) -> di
         return {"success": False, "error": str(e)}
 
 
+def wf_timeline(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/timeline: {"action": "state"|"pause"|"set", "frame": n}.
+
+    "pause" stops playback where it is; "set" pauses and moves to a frame, so
+    captures for before/after comparisons show the same pose.
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        action = (params.get("action") or "state").strip().lower()
+        fps = RLPy.RGlobal.GetFps()                      # RFps: frames by index, not a number
+        if action in ("pause", "set") and RLPy.RGlobal.IsPlaying():
+            RLPy.RGlobal.Pause()
+        if action == "set":
+            RLPy.RGlobal.SetTime(fps.IndexedFrameTime(int(params.get("frame", 0))))
+        now = RLPy.RGlobal.GetTime()
+        return {"success": True, "playing": bool(RLPy.RGlobal.IsPlaying()),
+                "time_ms": float(now.ToFloat()) if hasattr(now, "ToFloat") else None,
+                "frame": int(fps.GetFrameIndex(now)),
+                "end_frame": int(fps.GetFrameIndex(RLPy.RGlobal.GetEndTime()))}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+_WF_BUTTON_DENY = ("delete", "remove", "buy", "purchase", "pack", "convert", "exit", "reset", "clear", "update")
+
+
+def wf_buttons(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/buttons: list visible buttons whose tool tip / text / name contains `find`,
+    or click the one with exactly that tool tip (queued), e.g. the Animation Player's Pause.
+
+    Body: {"find": "pause"} or {"click_tip": "Pause"}. Words in _WF_BUTTON_DENY are never clicked.
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        from PySide2.QtCore import QMetaObject, Qt
+        from PySide2.QtWidgets import QAbstractButton, QApplication
+        found = []
+        for b in QApplication.instance().allWidgets():
+            try:
+                if not isinstance(b, QAbstractButton) or not b.isVisible():
+                    continue
+                tip, text, name = b.toolTip() or "", b.text() or "", b.objectName() or ""
+                found.append((b, tip, text, name))
+            except Exception:
+                continue
+        want = (params.get("click_tip") or "").strip().lower()
+        if want:
+            if any(w in want for w in _WF_BUTTON_DENY):
+                return {"success": False, "error": "refused by the deny list"}
+            hits = [f for f in found if f[1].strip().lower() == want]
+            if len(hits) != 1:
+                return {"success": False, "error": "%d buttons have that tool tip" % len(hits),
+                        "candidates": [{"tip": h[1], "name": h[3]} for h in hits][:10]}
+            ok = QMetaObject.invokeMethod(hits[0][0], "click", Qt.QueuedConnection)
+            return {"success": bool(ok), "clicked": hits[0][1], "name": hits[0][3]}
+        needle = (params.get("find") or "").strip().lower()
+        rows = [{"tip": t, "text": x, "name": n, "window": _wf_dialog_title(b), "enabled": b.isEnabled()}
+                for b, t, x, n in found if needle in (t + " " + x + " " + n).lower()]
+        return {"success": True, "count": len(rows), "buttons": rows[:60]}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def wf_get_transform(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
     """Route /workflow/transform/get."""
     params = _wf_params(body, kwargs)
@@ -8576,6 +8639,8 @@ def _auto_patch_server() -> None:
         "wf_morph_editor":           wf_morph_editor,
         "wf_file_dialog_fill":       wf_file_dialog_fill,
         "wf_file_dialog_native":     wf_file_dialog_native,
+        "wf_timeline":               wf_timeline,
+        "wf_buttons":                wf_buttons,
         "wf_high_heels_open":        wf_high_heels_open,
         "wf_high_heels_state":       wf_high_heels_state,
         "wf_high_heels_set":         wf_high_heels_set,
@@ -8667,6 +8732,8 @@ def _auto_patch_server() -> None:
             "/workflow/morph/editor":       "wf_morph_editor",
             "/workflow/dialog/file_fill":   "wf_file_dialog_fill",
             "/workflow/dialog/native":      "wf_file_dialog_native",
+            "/workflow/timeline":           "wf_timeline",
+            "/workflow/buttons":            "wf_buttons",
             "/workflow/high_heels/open":    "wf_high_heels_open",
             "/workflow/high_heels/state":   "wf_high_heels_state",
             "/workflow/high_heels/set":     "wf_high_heels_set",
