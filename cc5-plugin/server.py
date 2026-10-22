@@ -641,6 +641,10 @@ class ReusableHTTPServer(HTTPServer):
 def start_server(port: int = 5101) -> threading.Thread:
     """Start the HTTP bridge server in a background daemon thread."""
     global _httpd
+    # cc5_api is imported at the top of this module, before ACTION_MAP exists, so its
+    # own _auto_patch_server() call is a no-op on a fresh start. Run it now so the
+    # /workflow/* routes are there without a /reload.
+    cc5_api._auto_patch_server()
     httpd = ReusableHTTPServer(("127.0.0.1", port), BridgeHandler)
     _httpd = httpd
 
