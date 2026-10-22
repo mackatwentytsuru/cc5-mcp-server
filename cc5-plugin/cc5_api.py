@@ -6597,6 +6597,23 @@ def _wf_morph_editor_parts(dlg: Any) -> dict[str, list]:
             "checks": ordered(QCheckBox), "buttons": ordered(QPushButton)}
 
 
+def _wf_morph_editor_all_buttons(dlg: Any) -> list:
+    """Every visible button of the panel with its place, class and tool tip (for browse)."""
+    from PySide2.QtWidgets import QAbstractButton
+    out = []
+    for b in dlg.findChildren(QAbstractButton):
+        try:
+            if not b.isVisible():
+                continue
+            pos = b.mapTo(dlg, b.rect().topLeft())
+            out.append({"x": pos.x(), "y": pos.y(), "cls": type(b).__name__,
+                        "name": b.objectName(), "text": b.text(), "tip": b.toolTip(),
+                        "enabled": b.isEnabled()})
+        except Exception:
+            continue
+    return sorted(out, key=lambda d: (d["y"], d["x"]))
+
+
 def wf_morph_editor(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
     """Route /workflow/morph/editor: read or fill Create > Morph Slider Editor from inside CC.
 
@@ -6624,26 +6641,24 @@ def wf_morph_editor(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[s
                                 "enabled": w.isEnabled()} for w in parts["radios"]],
                     "checks": [{"y": y(w), "text": w.text(), "checked": w.isChecked()}
                                for w in parts["checks"]],
-                    "buttons": [{"y": y(w), "text": w.text()} for w in parts["buttons"]]}
+                    "buttons": [{"y": y(w), "text": w.text()} for w in parts["buttons"]],
+                    "all_buttons": _wf_morph_editor_all_buttons(dlg)}
         if action == "browse":
-            # Click the folder button beside the source or target path box. The file
-            # dialog opens modally a moment later; fill it with /workflow/dialog/file_fill.
-            from PySide2.QtWidgets import QAbstractButton, QCheckBox, QRadioButton
-            files = [r for r in parts["radios"] if _wf_import_fbx_text(r) == "file"]
-            which = 0 if (params.get("which") or "target") == "source" else 1
-            if len(files) < 2:
-                return {"success": False, "error": "unexpected panel layout (run inspect)"}
-            edit = [x for x in parts["edits"] if y(x) > y(files[which])][0]
-            btns = [b for b in dlg.findChildren(QAbstractButton)
-                    if b.isVisible() and not isinstance(b, (QRadioButton, QCheckBox))
-                    and abs(y(b) - y(edit)) < 14 and not _wf_import_fbx_text(b)]
-            if not btns:
+            # Click the "Open Path" button of the source or target box (by object name).
+            # The file dialog opens modally a moment later; fill it with
+            # /workflow/dialog/file_fill (set /workflow/dialog/native false first).
+            from PySide2.QtWidgets import QToolButton
+            which = "Source" if (params.get("which") or "target") == "source" else "Target"
+            btn = dlg.findChild(QToolButton, "qt%sOpenFilePathToolButton" % which)
+            if btn is None or not btn.isVisible():
                 return {"success": False, "error": "browse button not found"}
-            btn = max(btns, key=lambda b: b.mapTo(dlg, b.rect().topLeft()).x())
             if not btn.isEnabled():
                 return {"success": False, "error": "browse button is disabled"}
-            _wf_qt_later(btn, "click", 150)
-            return {"success": True, "clicked": "browse " + ("source" if which == 0 else "target")}
+            # Queued: the click opens a modal dialog, which must not run inside this call.
+            from PySide2.QtCore import QMetaObject, Qt
+            ok = QMetaObject.invokeMethod(btn, "click", Qt.QueuedConnection)
+            _wf_import_trace("queued click on browse %s: %s" % (which.lower(), ok))
+            return {"success": bool(ok), "clicked": "browse " + which.lower()}
         if action != "fill":
             return {"success": False, "error": "action must be inspect, browse or fill"}
 
@@ -6690,9 +6705,28 @@ def wf_morph_editor(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[s
             ok = [b for b in parts["buttons"] if _wf_import_fbx_text(b) == "ok"]
             if not ok:
                 return {"success": False, "error": "no OK button", "state": state}
-            _wf_qt_later(ok[0], "click", 150)
-            state["pressed"] = "ok"
+            from PySide2.QtCore import QMetaObject, Qt
+            state["pressed"] = "ok" if QMetaObject.invokeMethod(ok[0], "click", Qt.QueuedConnection) else "failed"
         return state
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_file_dialog_native(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/dialog/native: {"enable": false} makes CC open Qt's own file dialogs.
+
+    Qt's own dialog has a file-name line edit that /workflow/dialog/file_fill can fill;
+    the Windows one only takes "/"-joined paths, which Windows rejects. Set it back to
+    true when done.
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        from PySide2.QtCore import Qt
+        from PySide2.QtWidgets import QApplication
+        app = QApplication.instance()
+        if "enable" in params:
+            app.setAttribute(Qt.AA_DontUseNativeDialogs, not bool(params["enable"]))
+        return {"success": True, "native": not app.testAttribute(Qt.AA_DontUseNativeDialogs)}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -6700,7 +6734,8 @@ def wf_morph_editor(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[s
 def wf_file_dialog_fill(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
     """Route /workflow/dialog/file_fill: fill the open Qt file dialog of CC and press Open.
 
-    Body: {"path": file to choose, "press": true}. Only a QFileDialog that is already
+    Body: {"path": file to choose, "save": false, "press": true}; "save": true allows a
+    new file name in an existing folder (never an existing file). Only a QFileDialog that is already
     open is touched; nothing is typed through the keyboard.
     """
     params = _wf_params(body, kwargs)
@@ -6713,18 +6748,29 @@ def wf_file_dialog_fill(body: dict[str, Any] | None = None, **kwargs: Any) -> di
         info = {"success": True, "open": True, "title": _wf_dialog_title(dlg)}
         if not params.get("path"):
             return info
-        if not os.path.isfile(path):
+        if params.get("save"):
+            if not os.path.isdir(os.path.dirname(path)):
+                return {"success": False, "error": "folder not found", **info}
+            if os.path.exists(path):
+                return {"success": False, "error": "file exists (choose a new name)", **info}
+        elif not os.path.isfile(path):
             return {"success": False, "error": "path not found", **info}
         try:
             dlg.setDirectory(os.path.dirname(path))
         except Exception:
             pass
-        dlg.selectFile(os.path.basename(path))
         edit = dlg.findChild(QLineEdit, "fileNameEdit")
         if edit is not None:
+            dlg.selectFile(os.path.basename(path))
             edit.setText(path)
+        else:
+            # A native dialog: a full path reaches Windows with "/" separators and is
+            # rejected ("file name is not valid"); press its Save button by UIA.
+            # setDirectory above already moved it to the folder, so give the bare name.
+            dlg.selectFile(os.path.basename(path))
+            info["native"] = True
         info["line_edit"] = edit is not None
-        if params.get("press", True):
+        if params.get("press", True) and edit is not None:
             btn = None
             box = dlg.findChild(QDialogButtonBox)
             if box is not None:
@@ -6734,11 +6780,13 @@ def wf_file_dialog_fill(body: dict[str, Any] | None = None, **kwargs: Any) -> di
                         if box.buttonRole(b) == QDialogButtonBox.AcceptRole:
                             btn = b
                             break
+            # Queued calls: _wf_qt_later's timer did not fire while a modal dialog ran (10-22).
+            from PySide2.QtCore import QMetaObject, Qt
             if btn is not None:
-                _wf_qt_later(btn, "click", 200)
+                QMetaObject.invokeMethod(btn, "click", Qt.QueuedConnection)
                 info["pressed"] = _wf_import_fbx_text(btn) or "accept button"
             else:
-                _wf_qt_later(dlg, "accept", 200)
+                QMetaObject.invokeMethod(dlg, "accept", Qt.QueuedConnection)
                 info["pressed"] = "accept()"
         return info
     except Exception as e:
@@ -8527,6 +8575,7 @@ def _auto_patch_server() -> None:
         "wf_load_texture":           wf_load_texture,
         "wf_morph_editor":           wf_morph_editor,
         "wf_file_dialog_fill":       wf_file_dialog_fill,
+        "wf_file_dialog_native":     wf_file_dialog_native,
         "wf_high_heels_open":        wf_high_heels_open,
         "wf_high_heels_state":       wf_high_heels_state,
         "wf_high_heels_set":         wf_high_heels_set,
@@ -8617,6 +8666,7 @@ def _auto_patch_server() -> None:
             "/workflow/material/load_texture": "wf_load_texture",
             "/workflow/morph/editor":       "wf_morph_editor",
             "/workflow/dialog/file_fill":   "wf_file_dialog_fill",
+            "/workflow/dialog/native":      "wf_file_dialog_native",
             "/workflow/high_heels/open":    "wf_high_heels_open",
             "/workflow/high_heels/state":   "wf_high_heels_state",
             "/workflow/high_heels/set":     "wf_high_heels_set",
