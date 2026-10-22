@@ -93,3 +93,11 @@ These lessons go into the cc5-agent skill. Every item was learned the hard way.
 - **Measure the lift from the upper body only** (z > 60 cm). A whole-body mean is skewed by posed feet and misread the front/back offset by 8 mm.
 - **Lift rule (verified 6 times):** the boot is bound relative to the body height just before the transfer and follows any lift change after it. So: set the prop offset to the lift measured from the upper body right before the transfer. Result 10-22 13:00: boot top within 2 mm, no skin, toe box clean.
 - **Toe-box bulge:** do not push out or line the forefoot. Use `v11_fit_part.py --exclude-front -0.02,0.10`, which skips y < −2 cm and z < 10 cm in posed-body space.
+
+## 10-22 午後: 顔の直し(鼻・唇・肌の絵)
+
+- 外からのキー入力(windows MCP の keyboard type)は、狙った欄が前面でないと CC5 本体にショートカットとして入る(カメラが寄る・再生が切り替わる)。CC5 の画面の欄は `/workflow/morph/editor` のように CC の中から埋める。
+- `CreateSlider`(RLPy)は状態コード 0 を返すのに、ファイルもモーフも作らない。画面の Morph Slider Editor でも、元の OBJ が今のキャラ(HD Neutral F)と別の段階の体だと「Source character is not a G6 character」「This version only supports CC Characters」で止まる。服なし・基本姿勢で、今のキャラから書き出した OBJ と .ObjKey が要る。
+- 肌の絵・凹凸の絵の差し替えは `/workflow/material/load_texture`(LoadImageToTexture)で効く。
+- 歯の先が唇から出たら Teeth Upper/Lower Depth(cc embed morphs/embed_cavity10 と 2)を + にすると奥へ下がる(- だと前に出る)。
+- 鼻の横の黒い点は、面が3つしか集まらない頂点のまわりの細い折れ目。ならすだけでは消えず、その頂点をまわりの平均へ寄せると消える。

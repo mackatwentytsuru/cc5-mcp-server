@@ -6459,6 +6459,292 @@ def wf_menu_trigger(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[s
         return {"success": False, "error": str(e)}
 
 
+def wf_create_morph_slider(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/morph/create: make a morph slider from a source and a target OBJ.
+
+    Body: {"name", "target_obj", "source_obj" (optional; else the current shape),
+    "category": "head"|"body", "axis": "yup"|"zup", "min": 0, "max": 1,
+    "output": path of the slider file to write, "apply": true}.
+    The same thing as Create > Morph Slider Editor with an OBJ target.
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        name = (params.get("name") or "").strip()
+        target = os.path.abspath((params.get("target_obj") or "").strip())
+        if not name or not os.path.isfile(target):
+            return {"success": False, "error": "name and an existing target_obj are required"}
+        source = (params.get("source_obj") or "").strip()
+        output = os.path.abspath((params.get("output") or "").strip() or
+                                 os.path.splitext(target)[0] + "_slider.ccSlider")
+        avatar = get_first_avatar()
+        if avatar is None:
+            return {"success": False, "error": "No avatar in the scene"}
+        st = RLPy.RMorphSliderSetting()
+        st.SetMorphName(name)
+        st.SetCategory(RLPy.ESetCategory_Head if (params.get("category") or "head") == "head"
+                       else RLPy.ESetCategory_Body)
+        st.SetMorphValueRange(float(params.get("min", 0.0)), float(params.get("max", 1.0)))
+        if params.get("slider_path"):
+            st.SetSliderPath(str(params["slider_path"]))
+        if source:
+            st.SetSourceBaseType(RLPy.EChooseBase_File)
+            st.SetSourceFilePath(os.path.abspath(source))
+        else:
+            st.SetSourceBaseType(RLPy.EChooseBase_Current)
+        st.SetTargetFilePath(target)
+        st.SetAxisSettingForObj(RLPy.EAxisSetting_ZUp if (params.get("axis") or "zup") == "zup"
+                                else RLPy.EAxisSetting_YUp)
+        st.SetAdjustBonesToFitMorph(False)
+        st.SetAutoApplyToCurrentCharacter(bool(params.get("apply", True)))
+        RLPy.RGlobal.BeginAction("wf_create_morph_slider")
+        try:
+            status = avatar.GetAvatarShapingComponent().CreateSlider(st, output)
+        finally:
+            RLPy.RGlobal.EndAction()
+        # CreateSlider returns [RStatus, written path]
+        st_obj = status[0] if isinstance(status, (list, tuple)) and status else status
+        written = status[1] if isinstance(status, (list, tuple)) and len(status) > 1 else output
+        ok, code = True, None
+        try:
+            ok = not st_obj.IsError()
+            code = st_obj.GetStatusCode()
+        except Exception:
+            pass
+        # Look for the new slider among the shaping morphs, by display name
+        found = []
+        try:
+            comp = avatar.GetAvatarShapingComponent()
+            for cat in comp.GetShapingMorphCatergoryNames():
+                for mid, disp in zip(comp.GetShapingMorphIDs(cat), comp.GetShapingMorphDisplayNames(cat)):
+                    if disp == name:
+                        found.append({"category": cat, "id": mid,
+                                      "weight": comp.GetShapingMorphWeight(mid)})
+        except Exception as e:
+            found = [{"error": str(e)}]
+        file_written = os.path.isfile(str(written))
+        return {"success": ok and (file_written or bool(found)), "name": name,
+                "output": str(written), "status_code": str(code),
+                "file_written": file_written, "found": found}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_load_texture(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/material/load_texture: load an image into one texture channel.
+
+    Body: {"mesh": "CC_Base_Body", "material": "Std_Skin_Head",
+    "channel": "diffuse"|"normal"|"roughness"|"ao"|..., "path": image file}.
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        mesh = (params.get("mesh") or "").strip()
+        mat = (params.get("material") or "").strip()
+        path = os.path.abspath((params.get("path") or "").strip())
+        chan = (params.get("channel") or "diffuse").strip().lower()
+        if not mesh or not mat or not os.path.isfile(path):
+            return {"success": False, "error": "mesh, material and an existing path are required"}
+        names = {"diffuse": "Diffuse", "normal": "Normal", "roughness": "Roughness",
+                 "ao": "AmbientOcclusion", "metallic": "Metallic", "opacity": "Opacity",
+                 "specular": "Specular", "glow": "Glow", "bump": "Bump"}
+        if chan not in names:
+            return {"success": False, "error": "unknown channel: %s" % chan}
+        enum = getattr(RLPy, "EMaterialTextureChannel_" + names[chan])
+        avatar = get_first_avatar()
+        if avatar is None:
+            return {"success": False, "error": "No avatar in the scene"}
+        comp = avatar.GetMaterialComponent()
+        if mat not in list(comp.GetMaterialNames(mesh)):
+            return {"success": False, "error": "material %s not on mesh %s" % (mat, mesh)}
+        RLPy.RGlobal.BeginAction("wf_load_texture")
+        try:
+            status = comp.LoadImageToTexture(mesh, mat, enum, path)
+        finally:
+            RLPy.RGlobal.EndAction()
+        ok = True
+        try:
+            ok = not status.IsError()
+        except Exception:
+            pass
+        return {"success": ok, "mesh": mesh, "material": mat, "channel": chan, "path": path}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def _wf_morph_editor() -> Any:
+    """The open, visible "Morph Slider Editor" window, else None."""
+    from PySide2.QtWidgets import QApplication
+    app = QApplication.instance()
+    if app is None:
+        return None
+    for w in app.topLevelWidgets():
+        try:
+            if w.isVisible() and _wf_dialog_title(w) == "morph slider editor":
+                return w
+        except Exception:
+            continue
+    return None
+
+
+def _wf_morph_editor_parts(dlg: Any) -> dict[str, list]:
+    """Line edits, radio buttons, check boxes and push buttons, top to bottom."""
+    from PySide2.QtWidgets import QCheckBox, QLineEdit, QPushButton, QRadioButton
+
+    def ordered(cls: Any) -> list:
+        items = [w for w in dlg.findChildren(cls) if w.isVisible()]
+        return sorted(items, key=lambda w: (w.mapTo(dlg, w.rect().topLeft()).y(),
+                                            w.mapTo(dlg, w.rect().topLeft()).x()))
+    return {"edits": ordered(QLineEdit), "radios": ordered(QRadioButton),
+            "checks": ordered(QCheckBox), "buttons": ordered(QPushButton)}
+
+
+def wf_morph_editor(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/morph/editor: read or fill Create > Morph Slider Editor from inside CC.
+
+    Body: {"action": "inspect"} lists the widgets. {"action": "fill", "name",
+    "source_obj" (optional; else Current Morph), "target_obj", "axis": "zup"|"yup",
+    "auto_apply": true, "press": "ok"|null} fills the panel; only the panel's own
+    widgets are touched (no keyboard input reaches the main window).
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        dlg = _wf_morph_editor()
+        if dlg is None:
+            return {"success": False, "error": "Morph Slider Editor is not open"}
+        parts = _wf_morph_editor_parts(dlg)
+        action = (params.get("action") or "inspect").strip().lower()
+
+        def y(w: Any) -> int:
+            return int(w.mapTo(dlg, w.rect().topLeft()).y())
+
+        if action == "inspect":
+            return {"success": True,
+                    "edits": [{"y": y(w), "text": w.text(), "read_only": w.isReadOnly(),
+                               "enabled": w.isEnabled()} for w in parts["edits"]],
+                    "radios": [{"y": y(w), "text": w.text(), "checked": w.isChecked(),
+                                "enabled": w.isEnabled()} for w in parts["radios"]],
+                    "checks": [{"y": y(w), "text": w.text(), "checked": w.isChecked()}
+                               for w in parts["checks"]],
+                    "buttons": [{"y": y(w), "text": w.text()} for w in parts["buttons"]]}
+        if action == "browse":
+            # Click the folder button beside the source or target path box. The file
+            # dialog opens modally a moment later; fill it with /workflow/dialog/file_fill.
+            from PySide2.QtWidgets import QAbstractButton, QCheckBox, QRadioButton
+            files = [r for r in parts["radios"] if _wf_import_fbx_text(r) == "file"]
+            which = 0 if (params.get("which") or "target") == "source" else 1
+            if len(files) < 2:
+                return {"success": False, "error": "unexpected panel layout (run inspect)"}
+            edit = [x for x in parts["edits"] if y(x) > y(files[which])][0]
+            btns = [b for b in dlg.findChildren(QAbstractButton)
+                    if b.isVisible() and not isinstance(b, (QRadioButton, QCheckBox))
+                    and abs(y(b) - y(edit)) < 14 and not _wf_import_fbx_text(b)]
+            if not btns:
+                return {"success": False, "error": "browse button not found"}
+            btn = max(btns, key=lambda b: b.mapTo(dlg, b.rect().topLeft()).x())
+            if not btn.isEnabled():
+                return {"success": False, "error": "browse button is disabled"}
+            _wf_qt_later(btn, "click", 150)
+            return {"success": True, "clicked": "browse " + ("source" if which == 0 else "target")}
+        if action != "fill":
+            return {"success": False, "error": "action must be inspect, browse or fill"}
+
+        edits, radios = parts["edits"], parts["radios"]
+        files = [r for r in radios if _wf_import_fbx_text(r) == "file"]
+        current = [r for r in radios if _wf_import_fbx_text(r) == "current morph"]
+        if len(files) < 2 or len(current) < 2 or len(edits) < 4:
+            return {"success": False, "error": "unexpected panel layout (run inspect)"}
+        name_edit = edits[0]
+        name_edit.setText(str(params.get("name") or "Custom Morph"))
+        name_edit.editingFinished.emit()
+        source = (params.get("source_obj") or "").strip()
+        target = os.path.abspath((params.get("target_obj") or "").strip())
+        if not os.path.isfile(target):
+            return {"success": False, "error": "target_obj not found"}
+
+        def path_edit_below(radio: Any) -> Any:
+            below = [e for e in edits if y(e) > y(radio)]
+            return below[0] if below else None
+
+        if source:
+            files[0].click()
+            e = path_edit_below(files[0])
+            e.setText(os.path.abspath(source)); e.editingFinished.emit()
+        else:
+            current[0].click()
+        files[1].click()
+        after = [x for x in edits if y(x) > y(files[1])]
+        after[0].setText(target); after[0].editingFinished.emit()
+        # the target's .ObjKey (checksum) sits in the next path box
+        key = (params.get("objkey") or "").strip() or os.path.splitext(target)[0] + ".ObjKey"
+        if len(after) > 1 and os.path.isfile(key):
+            after[1].setText(os.path.abspath(key)); after[1].editingFinished.emit()
+        axis = "z-up" if (params.get("axis") or "zup") == "zup" else "y-up"
+        for r in radios:
+            if _wf_import_fbx_text(r) == axis:
+                r.click()
+        want_apply = bool(params.get("auto_apply", True))
+        for c in parts["checks"]:
+            if "auto apply" in _wf_import_fbx_text(c) and c.isChecked() != want_apply:
+                c.click()
+        state = wf_morph_editor({"action": "inspect"})
+        if (params.get("press") or "").lower() == "ok":
+            ok = [b for b in parts["buttons"] if _wf_import_fbx_text(b) == "ok"]
+            if not ok:
+                return {"success": False, "error": "no OK button", "state": state}
+            _wf_qt_later(ok[0], "click", 150)
+            state["pressed"] = "ok"
+        return state
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_file_dialog_fill(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/dialog/file_fill: fill the open Qt file dialog of CC and press Open.
+
+    Body: {"path": file to choose, "press": true}. Only a QFileDialog that is already
+    open is touched; nothing is typed through the keyboard.
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        from PySide2.QtWidgets import QDialogButtonBox, QLineEdit
+        dlg = _wf_import_fbx_visible_file_dialog()
+        if dlg is None:
+            return {"success": True, "open": False}
+        path = os.path.abspath((params.get("path") or "").strip())
+        info = {"success": True, "open": True, "title": _wf_dialog_title(dlg)}
+        if not params.get("path"):
+            return info
+        if not os.path.isfile(path):
+            return {"success": False, "error": "path not found", **info}
+        try:
+            dlg.setDirectory(os.path.dirname(path))
+        except Exception:
+            pass
+        dlg.selectFile(os.path.basename(path))
+        edit = dlg.findChild(QLineEdit, "fileNameEdit")
+        if edit is not None:
+            edit.setText(path)
+        info["line_edit"] = edit is not None
+        if params.get("press", True):
+            btn = None
+            box = dlg.findChild(QDialogButtonBox)
+            if box is not None:
+                btn = box.button(QDialogButtonBox.Open)
+                if btn is None:
+                    for b in box.buttons():
+                        if box.buttonRole(b) == QDialogButtonBox.AcceptRole:
+                            btn = b
+                            break
+            if btn is not None:
+                _wf_qt_later(btn, "click", 200)
+                info["pressed"] = _wf_import_fbx_text(btn) or "accept button"
+            else:
+                _wf_qt_later(dlg, "accept", 200)
+                info["pressed"] = "accept()"
+        return info
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def wf_get_transform(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
     """Route /workflow/transform/get."""
     params = _wf_params(body, kwargs)
@@ -8237,6 +8523,10 @@ def _auto_patch_server() -> None:
         "wf_bone_rotation":          wf_bone_rotation,
         "wf_menu_find":              wf_menu_find,
         "wf_menu_trigger":           wf_menu_trigger,
+        "wf_create_morph_slider":    wf_create_morph_slider,
+        "wf_load_texture":           wf_load_texture,
+        "wf_morph_editor":           wf_morph_editor,
+        "wf_file_dialog_fill":       wf_file_dialog_fill,
         "wf_high_heels_open":        wf_high_heels_open,
         "wf_high_heels_state":       wf_high_heels_state,
         "wf_high_heels_set":         wf_high_heels_set,
@@ -8323,6 +8613,10 @@ def _auto_patch_server() -> None:
             "/workflow/bone/rotation":      "wf_bone_rotation",
             "/workflow/menu/find":          "wf_menu_find",
             "/workflow/menu/trigger":       "wf_menu_trigger",
+            "/workflow/morph/create":       "wf_create_morph_slider",
+            "/workflow/material/load_texture": "wf_load_texture",
+            "/workflow/morph/editor":       "wf_morph_editor",
+            "/workflow/dialog/file_fill":   "wf_file_dialog_fill",
             "/workflow/high_heels/open":    "wf_high_heels_open",
             "/workflow/high_heels/state":   "wf_high_heels_state",
             "/workflow/high_heels/set":     "wf_high_heels_set",
