@@ -5089,6 +5089,17 @@ _WF_IMPORT_FBX_SETTINGS_TITLES = ("import settings",)
 _WF_IMPORT_FBX_DENY = ("game base", "convert to game", "subdivision", "export")
 
 
+def _wf_import_trace(message: str) -> None:
+    """Append one line to %TEMP%/cc5_import_trace.log (flushed), so a silent exit still leaves the last step."""
+    try:
+        path = os.path.join(os.environ.get("TEMP", "."), "cc5_import_trace.log")
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(time.strftime("%H:%M:%S ") + message + "\n")
+            fh.flush()
+    except Exception:
+        pass
+
+
 def _wf_qt_valid(obj: Any) -> bool:
     """True while the C++ side of a PySide2 wrapper still exists."""
     if obj is None:
@@ -5111,7 +5122,9 @@ def _wf_qt_later(obj: Any, method: str, delay_ms: int = 100) -> None:
     def _run() -> None:
         try:
             if _wf_qt_valid(obj):
+                _wf_import_trace(f"deferred {method} on {type(obj).__name__} '{_wf_import_fbx_text(obj) or _wf_dialog_title(obj)}'")
                 getattr(obj, method)()
+                _wf_import_trace(f"deferred {method} returned")
         except Exception as e:
             print(f"[CC5 MCP Bridge] deferred {method} failed: {e}")
 
@@ -5493,6 +5506,10 @@ def wf_import_fbx_tick() -> None:
     if state["phase"] in ("done", "error", "idle"):
         _wf_import_fbx_cleanup()
         return
+    if state.get("_last_traced_notes", 0) != len(state["notes"]):
+        for note in state["notes"][state.get("_last_traced_notes", 0):]:
+            _wf_import_trace("note: " + note)
+        state["_last_traced_notes"] = len(state["notes"])
     if time.time() > state["deadline"]:
         phase = state["phase"]
         if phase == "file_dialog" and not state["accepted"]:
@@ -5708,6 +5725,12 @@ def wf_import_fbx_begin(body: dict[str, Any] | None = None, **kwargs: Any) -> di
         timer.start()
         state["timer"] = timer
         state["notes"].append(f"Menu scheduled: {action.text()}")
+        try:
+            parent_menu = action.parentWidget()
+            parent_title = parent_menu.title() if hasattr(parent_menu, "title") else type(parent_menu).__name__
+        except Exception:
+            parent_title = "?"
+        _wf_import_trace(f"begin {file_path} action='{action.text()}' in '{parent_title}'")
         _wf_qt_later(action, "trigger", 50)
 
         return {
@@ -6178,6 +6201,34 @@ def wf_set_transform(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[
                 "success": False,
                 "error": "Current transform is unreadable; pass move, rotate and scale explicitly",
             }
+
+        # Write the values through the Transform control's data block (the documented
+        # RLPy way for props). RTransform.T()/R()/S() are getters only, so building an
+        # RTransform from lists fails ("RTransform_T expected at most 1 arguments", 10-22).
+        given = {key: parsed[key] for key in ("move", "rotate", "scale") if params.get(key) is not None}
+        if given:
+            try:
+                block = obj.GetControl("Transform").GetDataBlock()
+                now = RLPy.RGlobal.GetTime()
+                RLPy.RGlobal.BeginAction("wf_set_transform")
+                try:
+                    for key, prefix, conv in (("move", "Position/Position", float),
+                                              ("rotate", "Rotation/Rotation", math.radians),
+                                              ("scale", "Scale/Scale", lambda v: float(v) / 100.0)):
+                        if key not in given:
+                            continue
+                        for axis, value in zip("XYZ", given[key]):
+                            block.SetData(prefix + axis, now, RLPy.RVariant(conv(value)))
+                finally:
+                    RLPy.RGlobal.EndAction()
+                try:
+                    RLPy.RGlobal.ObjectModified(obj, RLPy.EObjectModifiedType_Transform)
+                except Exception:
+                    pass
+                return {"success": True, "name": _wf_obj_name(obj), "method": "data block",
+                        **_wf_read_transform(obj)}
+            except Exception as exc:
+                print(f"[CC5 MCP Bridge] data-block transform failed, trying RTransform: {exc}")
 
         transform, build_error = _wf_make_transform(
             parsed["move"], parsed["rotate"], parsed["scale"]
