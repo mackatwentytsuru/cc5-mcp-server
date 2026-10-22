@@ -101,3 +101,6 @@ These lessons go into the cc5-agent skill. Every item was learned the hard way.
 - 肌の絵・凹凸の絵の差し替えは `/workflow/material/load_texture`(LoadImageToTexture)で効く。
 - 歯の先が唇から出たら Teeth Upper/Lower Depth(cc embed morphs/embed_cavity10 と 2)を + にすると奥へ下がる(- だと前に出る)。
 - 鼻の横の黒い点は、面が3つしか集まらない頂点のまわりの細い折れ目。ならすだけでは消えず、その頂点をまわりの平均へ寄せると消える。
+- モーフを作れた手順(14:05): File > Export > OBJ > Nude Character in Bind-Pose(Z-Up・Full Body)で今のキャラを書き出す → その OBJ の体の頂点に直しの分を足した OBJ を作り、同じ名前の .ObjKey を並べて置く → Create > Morph Slider Editor で元は Current Morph、直した形は File を「Open Path」ボタン(qtTargetOpenFilePathToolButton)から選ぶ → OK。欄に文字を入れるだけでは読み込まれず「not compatible」になる。
+- 保存・開くの小窓は Windows のものだと名前を中から入れられない(Qt が「/」区切りで渡し、Windows が「ファイル名は有効ではありません」と断る)。`/workflow/dialog/native {"enable": false}` で CC5 自前の小窓にしてから `/workflow/dialog/file_fill` で埋める。終わったら true に戻す。
+- 小窓が開いている間、`_wf_qt_later`(QTimer)の後回しの押しが動かないことがある。`QMetaObject.invokeMethod(..., Qt.QueuedConnection)` なら動く。
