@@ -115,3 +115,4 @@ These lessons go into the cc5-agent skill. Every item was learned the hard way.
 - 新しい CC5 の髪を当てると、髪として登録してあった自作の髪(beyon_hair)は置き換わる。部品の番号(id)は、CC5 を開き直すと変わる。
 - 帽子の矢印(ギズモ)が出ない(16:00): ピボットが帽子から 1.6m 離れたひざの高さにあり、ギズモが画面の外に出ていた。`/workflow/pivot {"action":"center"}`(RIAccessory/RIProp.SetPivot。向きは RVector3)で帽子の中心へ移すと出た。形と位置は変わらない。
 - 頭に付けた小物(帽子)は、モーションの途中のコマでは画面で動かしても入らない。0 コマ目にすると動かせる(`/workflow/timeline {"action":"set","frame":0}`)。
+- 読み込みで「This object contains N meshes. Would you like to break up the meshes into sub-props?」(Yes/No)が出ると、読み込みが時間切れまで止まる(16:00)。`/workflow/import_fbx` が自動で No を押すようにした(`split_sub_props: true` で Yes)。止まったときの失敗の文に、開いている小窓の文を入れた。直接 HTTP で呼ぶと MCP の「小窓が出ています」の知らせが付かないので、返事に `open_dialogs` を付けた(server.py。CC5 を開き直すと有効)。
