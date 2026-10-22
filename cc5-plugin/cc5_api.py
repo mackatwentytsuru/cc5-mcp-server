@@ -5414,6 +5414,59 @@ def _wf_import_fbx_visible_dialogs() -> list[Any]:
     return found
 
 
+def _wf_dialog_text(dlg: Any) -> str:
+    """All label text of a dialog, joined (for spotting questions like the sub-prop one)."""
+    try:
+        from PySide2.QtWidgets import QLabel
+        parts = [(l.text() or "").strip() for l in dlg.findChildren(QLabel) if l.isVisible()]
+        return " ".join(p for p in parts if p)
+    except Exception:
+        return ""
+
+
+def open_dialog_summary() -> list[dict[str, str]]:
+    """Visible CC dialogs other than the main window and the dock panels: title, text, buttons."""
+    from PySide2.QtWidgets import QAbstractButton, QApplication, QDialog, QMainWindow
+    out = []
+    app = QApplication.instance()
+    if app is None:
+        return out
+    for w in app.topLevelWidgets():
+        try:
+            if not w.isVisible() or isinstance(w, QMainWindow) or not isinstance(w, QDialog):
+                continue
+            title = (w.windowTitle() or "").strip()
+            text = _wf_dialog_text(w)
+            buttons = [_wf_import_fbx_text(b) for b in w.findChildren(QAbstractButton)
+                       if b.isVisible() and _wf_import_fbx_text(b)]
+            if text or buttons:
+                out.append({"title": title, "text": text[:300], "buttons": ", ".join(buttons[:8])})
+        except Exception:
+            continue
+    return out
+
+
+def _wf_import_fbx_answer_subprops(state: dict) -> bool:
+    """Answer CC's "break up the meshes into sub-props?" question (No by default).
+
+    Returns True when it clicked. A multi-mesh FBX (e.g. a corset with ruffles) shows it
+    after the Import Settings dialog; unanswered, the import hangs until the timeout.
+    """
+    from PySide2.QtCore import QMetaObject, Qt
+    from PySide2.QtWidgets import QAbstractButton
+    for dlg in _wf_import_fbx_visible_dialogs():
+        text = _wf_dialog_text(dlg).lower()
+        if "sub-prop" not in text:
+            continue
+        want = "yes" if state.get("split_sub_props") else "no"
+        for b in dlg.findChildren(QAbstractButton):
+            if b.isVisible() and _wf_import_fbx_text(b) == want:
+                QMetaObject.invokeMethod(b, "click", Qt.QueuedConnection)
+                state["notes"].append("Sub-props question answered: " + want)
+                return True
+    return False
+
+
 def _wf_import_fbx_diff() -> list[dict[str, Any]]:
     before = set(_WF_IMPORT_FBX_STATE["before_ids"])
     new_items = []
@@ -5522,13 +5575,17 @@ def wf_import_fbx_tick() -> None:
         elif phase == "settings_dialog":
             _wf_import_fbx_fail("needs GUI: Import Settings dialog")
         else:
-            _wf_import_fbx_fail("needs GUI: imported item did not appear")
+            open_dialogs = [t for t in (_wf_dialog_text(d) for d in _wf_import_fbx_visible_dialogs()) if t]
+            _wf_import_fbx_fail("needs GUI: imported item did not appear"
+                                + (" (open dialog: " + " | ".join(open_dialogs)[:300] + ")" if open_dialogs else ""))
         return
 
     try:
         denied = _wf_import_fbx_denied_dialog()
         if denied:
             _wf_import_fbx_fail(f"needs GUI: unexpected dialog '{denied}' (nothing clicked)")
+            return
+        if _wf_import_fbx_answer_subprops(state):
             return
         if state["phase"] == "file_dialog":
             dlg = _wf_import_fbx_visible_file_dialog()
@@ -5697,6 +5754,7 @@ def wf_import_fbx_begin(body: dict[str, Any] | None = None, **kwargs: Any) -> di
         now = time.time()
         state.update({
             "phase": "file_dialog",
+            "split_sub_props": bool(params.get("split_sub_props", False)),
             "file_path": file_path,
             "error": "",
             "notes": [],

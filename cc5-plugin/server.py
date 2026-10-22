@@ -409,6 +409,16 @@ def process_command_queue() -> None:
                 print(f"[CC5 MCP Bridge] Action '{action}' failed: {traceback.format_exc()}")
                 result = {"success": False, "error": str(e)}
 
+            # Tell direct HTTP callers about open dialogs too (the MCP tools add their own
+            # notice; plain curl callers missed a Yes/No question on 10-22).
+            if isinstance(result, dict):
+                try:
+                    dialogs = cc5_api.open_dialog_summary()
+                    if dialogs:
+                        result["open_dialogs"] = dialogs
+                except Exception:
+                    pass
+
             with _store_lock:
                 event = response_events.pop(cmd_id, None)
                 if event:
