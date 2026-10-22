@@ -6856,6 +6856,42 @@ def wf_buttons(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, A
         return {"success": False, "error": str(e)}
 
 
+def wf_pivot(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/pivot: {"item_name"|"item_id", "action": "get"|"center"|"set", "position": [x,y,z]}.
+
+    "center" moves the pivot to the middle of the item's bounding box, so the move gizmo
+    shows on the item (a pivot far from the mesh puts the gizmo off screen). The mesh
+    does not move.
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        obj, _kind, error = _wf_resolve(params.get("item_name"), params.get("item_id"))
+        if error:
+            return error
+        pos, ori = RLPy.RVector3(), RLPy.RVector3()   # orientation is a vector (Euler), not a quaternion
+        obj.GetPivot(pos, ori)
+        mx, ct, mn = RLPy.RVector3(), RLPy.RVector3(), RLPy.RVector3()
+        obj.GetBounds(mx, ct, mn)
+        v = lambda r: [round(r.x, 3), round(r.y, 3), round(r.z, 3)]
+        out = {"success": True, "pivot": v(pos), "bounds_center": v(ct), "bounds_min": v(mn), "bounds_max": v(mx)}
+        action = (params.get("action") or "get").lower()
+        if action in ("center", "set"):
+            if not hasattr(obj, "SetPivot"):
+                return {"success": False, "error": "this item has no SetPivot (props and accessories only)", **out}
+            target = ct if action == "center" else RLPy.RVector3(*[float(x) for x in params["position"]])
+            RLPy.RGlobal.BeginAction("wf_pivot")
+            try:
+                obj.SetPivot(target, ori)
+            finally:
+                RLPy.RGlobal.EndAction()
+            p2 = RLPy.RVector3()
+            obj.GetPivot(p2, RLPy.RVector3())
+            out["pivot_after"] = v(p2)
+        return out
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def wf_get_transform(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
     """Route /workflow/transform/get."""
     params = _wf_params(body, kwargs)
@@ -8641,6 +8677,7 @@ def _auto_patch_server() -> None:
         "wf_file_dialog_native":     wf_file_dialog_native,
         "wf_timeline":               wf_timeline,
         "wf_buttons":                wf_buttons,
+        "wf_pivot":                  wf_pivot,
         "wf_high_heels_open":        wf_high_heels_open,
         "wf_high_heels_state":       wf_high_heels_state,
         "wf_high_heels_set":         wf_high_heels_set,
@@ -8734,6 +8771,7 @@ def _auto_patch_server() -> None:
             "/workflow/dialog/native":      "wf_file_dialog_native",
             "/workflow/timeline":           "wf_timeline",
             "/workflow/buttons":            "wf_buttons",
+            "/workflow/pivot":              "wf_pivot",
             "/workflow/high_heels/open":    "wf_high_heels_open",
             "/workflow/high_heels/state":   "wf_high_heels_state",
             "/workflow/high_heels/set":     "wf_high_heels_set",
