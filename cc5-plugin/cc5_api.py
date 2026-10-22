@@ -23,7 +23,7 @@ import RLPy
 _ALLOWED_LOAD_EXTENSIONS = {
     ".iavatar", ".ccavatar", ".ccm", ".iclothes", ".ihair", ".iprop",
     ".ccfbx", ".iclothing", ".ishoe", ".iaccessory", ".ibody", ".iskin",
-    ".ccproject",
+    ".ccproject", ".rlhair", ".rlhairelement",
 }
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB
