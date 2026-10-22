@@ -35,6 +35,13 @@ function createWorkflowBridge() {
     wfAutoAdjustFootHeight: vi.fn(),
     wfRenderViewport: vi.fn(),
     wfCaptureViews4: vi.fn(),
+    wfPhysicsInfo: vi.fn(),
+    wfPhysicsActivate: vi.fn(),
+    wfPhysicsLoadWeightMap: vi.fn(),
+    wfPhysicsGetParams: vi.fn(),
+    wfPhysicsSetParams: vi.fn(),
+    wfPhysicsGetCollision: vi.fn(),
+    wfPhysicsSetCollision: vi.fn(),
   };
 }
 
@@ -84,11 +91,18 @@ const TOOL_NAMES = [
   "auto_adjust_foot_height",
   "render_viewport",
   "capture_views4",
+  "get_physics_info",
+  "set_physics_active",
+  "load_physics_weight_map",
+  "get_soft_physics_params",
+  "set_soft_physics_params",
+  "get_physics_collision",
+  "set_physics_collision",
 ];
 
 describe("registerWorkflowTools – registration", () => {
-  it("registers exactly 18 tools", () => {
-    expect(server.tool).toHaveBeenCalledTimes(18);
+  it("registers exactly 25 tools", () => {
+    expect(server.tool).toHaveBeenCalledTimes(25);
   });
 
   it.each(TOOL_NAMES)("registers %s", (name) => {
@@ -287,6 +301,152 @@ const CASES: ToolCase[] = [
       "perspective: persp.png",
     ],
   },
+  {
+    tool: "get_physics_info",
+    args: { item_name: "Skirt" },
+    method: "wfPhysicsInfo",
+    expectedArgs: [{ item_name: "Skirt" }],
+    success: {
+      success: true,
+      name: "Skirt",
+      kind: "cloth",
+      activate: true,
+      meshes: [{ mesh: "Skirt", materials: ["Skirt_Mat"] }],
+      properties: ["Mass", "Friction"],
+      weight_map_import: true,
+    },
+    successContains: [
+      "Physics for 'Skirt' (cloth): Activate Physics on",
+      "mesh Skirt: Skirt_Mat",
+      "Soft PhysX properties: Mass, Friction",
+    ],
+  },
+  {
+    tool: "set_physics_active",
+    args: { item_name: "Skirt", enable: false },
+    method: "wfPhysicsActivate",
+    expectedArgs: [{ item_name: "Skirt" }, false],
+    success: { success: true, name: "Skirt", activate: false, verified: true },
+    successContains: ["Activate Physics for 'Skirt' is now off"],
+  },
+  {
+    tool: "load_physics_weight_map",
+    args: {
+      item_name: "Skirt",
+      mesh_name: "Skirt",
+      material_name: "Skirt_Mat",
+      file_path: "C:/maps/skirt.png",
+    },
+    method: "wfPhysicsLoadWeightMap",
+    expectedArgs: [
+      { item_name: "Skirt" },
+      { mesh_name: "Skirt", material_name: "Skirt_Mat" },
+      "C:/maps/skirt.png",
+    ],
+    success: {
+      success: true,
+      name: "Skirt",
+      mesh: "Skirt",
+      material: "Skirt_Mat",
+      path: "C:/maps/skirt.png",
+      weight_map_present: true,
+    },
+    successContains: [
+      "Loaded weight map C:/maps/skirt.png into 'Skirt' mesh 'Skirt' material 'Skirt_Mat'",
+      "weight map present after loading",
+    ],
+  },
+  {
+    tool: "get_soft_physics_params",
+    args: { item_name: "Skirt", names: ["Mass", "Friction"] },
+    method: "wfPhysicsGetParams",
+    expectedArgs: [{ item_name: "Skirt" }, {}, ["Mass", "Friction"]],
+    success: {
+      success: true,
+      name: "Skirt",
+      mesh: "Skirt",
+      material: "Skirt_Mat",
+      params: { Mass: 1.5, Friction: 0.25 },
+    },
+    successContains: [
+      "Soft PhysX for 'Skirt' mesh 'Skirt' material 'Skirt_Mat'",
+      "Mass=1.5",
+      "Friction=0.25",
+    ],
+  },
+  {
+    tool: "set_soft_physics_params",
+    args: {
+      item_name: "Skirt",
+      material_name: "Skirt_Mat",
+      values: { Mass: 2, SelfCollision: true },
+    },
+    method: "wfPhysicsSetParams",
+    expectedArgs: [
+      { item_name: "Skirt" },
+      { material_name: "Skirt_Mat" },
+      { Mass: 2, SelfCollision: true },
+    ],
+    success: {
+      success: true,
+      name: "Skirt",
+      mesh: "Skirt",
+      material: "Skirt_Mat",
+      before: { Mass: 1, SelfCollision: 0 },
+      after: { Mass: 2, SelfCollision: 1 },
+    },
+    successContains: [
+      "Updated Soft PhysX for 'Skirt'",
+      "Mass=1, SelfCollision=0 -> Mass=2, SelfCollision=1",
+    ],
+  },
+  {
+    tool: "get_physics_collision",
+    args: { item_name: "Skirt", collision_names: ["CC_Base_Hip", "Nope"] },
+    method: "wfPhysicsGetCollision",
+    expectedArgs: [{ item_name: "Skirt" }, {}, ["CC_Base_Hip", "Nope"]],
+    success: {
+      success: true,
+      name: "Skirt",
+      mesh: "Skirt",
+      material: "Skirt_Mat",
+      shapes: [{ name: "CC_Base_Hip", enabled: true, value: 0.5 }],
+      probed: 2,
+      unknown: ["Nope"],
+    },
+    successContains: [
+      "1 found (2 name(s) checked)",
+      "CC_Base_Hip: on, value 0.5",
+      "Not found: Nope",
+    ],
+  },
+  {
+    tool: "set_physics_collision",
+    args: { item_name: "Skirt", shapes: [{ name: "CC_Base_Hip", enabled: false, value: 1 }] },
+    method: "wfPhysicsSetCollision",
+    expectedArgs: [
+      { item_name: "Skirt" },
+      {},
+      [{ name: "CC_Base_Hip", enabled: false, value: 1 }],
+    ],
+    success: {
+      success: true,
+      name: "Skirt",
+      mesh: "Skirt",
+      material: "Skirt_Mat",
+      shapes: [
+        {
+          name: "CC_Base_Hip",
+          before: { name: "CC_Base_Hip", enabled: true, value: 0.5 },
+          after: { name: "CC_Base_Hip", enabled: false, value: 1 },
+        },
+      ],
+    },
+    successContains: [
+      "Updated collision shapes for 'Skirt'",
+      "CC_Base_Hip: on, value 0.5 -> off, value 1",
+    ],
+  },
 ];
 
 describe("workflow tools – success", () => {
@@ -363,6 +523,13 @@ const SELECTOR_TOOLS: Array<{ tool: string; extra: Record<string, unknown> }> = 
   { tool: "conform_cloth", extra: {} },
   { tool: "get_transform", extra: {} },
   { tool: "set_transform", extra: { move: [0, 0, 0] } },
+  { tool: "get_physics_info", extra: {} },
+  { tool: "set_physics_active", extra: { enable: true } },
+  { tool: "load_physics_weight_map", extra: { file_path: "C:/maps/w.png" } },
+  { tool: "get_soft_physics_params", extra: {} },
+  { tool: "set_soft_physics_params", extra: { values: { Mass: 1 } } },
+  { tool: "get_physics_collision", extra: {} },
+  { tool: "set_physics_collision", extra: { shapes: [{ name: "CC_Base_Hip", enabled: true }] } },
 ];
 
 describe("item-selector validation", () => {
@@ -458,5 +625,142 @@ describe("workflow tools – defaults", () => {
     await call("export_obj", { file_path: "C:/work/hero.obj" });
 
     expect(bridge.wfExportObj).toHaveBeenCalledWith("C:/work/hero.obj", true, true);
+  });
+});
+
+// ── physics (Soft Cloth) specifics ────────────────────────────────────────────
+
+describe("physics tools", () => {
+  it("set_soft_physics_params rejects unknown property names before calling the bridge", async () => {
+    const result = await call("set_soft_physics_params", {
+      item_name: "Skirt",
+      values: { Mass: 1, Wobble: 3 },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Unknown Soft PhysX property: Wobble");
+    expect(result.content[0].text).toContain("TetherLimit");
+    expect(bridge.wfPhysicsSetParams).not.toHaveBeenCalled();
+  });
+
+  it("set_soft_physics_params rejects an empty values object", async () => {
+    const result = await call("set_soft_physics_params", { item_name: "Skirt", values: {} });
+
+    expect(result.isError).toBe(true);
+    expect(bridge.wfPhysicsSetParams).not.toHaveBeenCalled();
+  });
+
+  it("set_soft_physics_params shows before/after when the read-back differs", async () => {
+    bridge.wfPhysicsSetParams.mockResolvedValue({
+      success: false,
+      error: "read-back differs for Mass",
+      before: { Mass: 1 },
+      after: { Mass: 1 },
+    });
+
+    const result = await call("set_soft_physics_params", {
+      item_name: "Skirt",
+      values: { Mass: 5 },
+    });
+
+    expect(result.content[0].text).toContain("Failed: read-back differs for Mass");
+    expect(result.content[0].text).toContain("Values: Mass=1 -> Mass=1");
+  });
+
+  it("load_physics_weight_map rejects a non-PNG path", async () => {
+    const result = await call("load_physics_weight_map", {
+      item_name: "Skirt",
+      file_path: "C:/maps/skirt.jpg",
+    });
+
+    expect(result.isError).toBe(true);
+    expect(bridge.wfPhysicsLoadWeightMap).not.toHaveBeenCalled();
+  });
+
+  it("load_physics_weight_map tells the user to use the CC5 GUI when it is GUI-only", async () => {
+    bridge.wfPhysicsLoadWeightMap.mockResolvedValue({
+      success: false,
+      gui_only: true,
+      error: "SetPhysicsSoftColthWeightMap failed: boom",
+    });
+
+    const result = await call("load_physics_weight_map", {
+      item_name: "Skirt",
+      file_path: "C:/maps/skirt.png",
+    });
+
+    expect(result.content[0].text).toContain("Failed: SetPhysicsSoftColthWeightMap failed: boom");
+    expect(result.content[0].text).toContain("Modify panel > Physics > Weight Map");
+  });
+
+  it("describes the GUI fallback for weight maps", () => {
+    expect(descriptionOf("load_physics_weight_map")).toContain("画面で読み込む");
+  });
+
+  it("lists the soft-cloth meshes when the mesh name is missing", async () => {
+    bridge.wfPhysicsGetParams.mockResolvedValue({
+      success: false,
+      error: "mesh_name is required (the item has several soft-cloth meshes)",
+      meshes: [
+        { mesh: "Top", materials: ["Top_Mat"] },
+        { mesh: "Skirt", materials: ["Skirt_A", "Skirt_B"] },
+      ],
+    });
+
+    const result = await call("get_soft_physics_params", { item_name: "Dress" });
+
+    expect(result.content[0].text).toContain("mesh_name is required");
+    expect(result.content[0].text).toContain("Top [Top_Mat]");
+    expect(result.content[0].text).toContain("Skirt [Skirt_A, Skirt_B]");
+  });
+
+  it("set_physics_collision rejects a shape with neither enabled nor value", async () => {
+    const result = await call("set_physics_collision", {
+      item_name: "Skirt",
+      shapes: [{ name: "CC_Base_Hip" }],
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Each shape needs enabled and/or value.");
+    expect(bridge.wfPhysicsSetCollision).not.toHaveBeenCalled();
+  });
+
+  it("set_physics_collision lists per-shape problems on failure", async () => {
+    bridge.wfPhysicsSetCollision.mockResolvedValue({
+      success: false,
+      error: "CC_Base_Hip: enabled reads back as true",
+      shapes: [
+        {
+          name: "CC_Base_Hip",
+          before: { name: "CC_Base_Hip", enabled: true, value: 0.5 },
+          after: { name: "CC_Base_Hip", enabled: true, value: 0.5 },
+          errors: ["enabled reads back as true"],
+        },
+      ],
+    });
+
+    const result = await call("set_physics_collision", {
+      item_name: "Skirt",
+      shapes: [{ name: "CC_Base_Hip", enabled: false }],
+    });
+
+    expect(result.content[0].text).toContain("Failed: CC_Base_Hip: enabled reads back as true");
+    expect(result.content[0].text).toContain("on, value 0.5 -> on, value 0.5");
+  });
+
+  it("get_physics_info reports an unknown Activate Physics state", async () => {
+    bridge.wfPhysicsInfo.mockResolvedValue({
+      success: true,
+      name: "Cape",
+      activate: null,
+      meshes: [],
+      weight_map_import: false,
+    });
+
+    const result = await call("get_physics_info", { item_name: "Cape" });
+
+    expect(result.content[0].text).toContain("Activate Physics unknown");
+    expect(result.content[0].text).toContain("No soft-cloth meshes yet");
+    expect(result.content[0].text).toContain("Weight-map import is not available");
   });
 });

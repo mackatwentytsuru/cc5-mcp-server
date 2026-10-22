@@ -71,6 +71,14 @@ import type {
   WorkflowSimpleResult,
   WorkflowRenderResult,
   WorkflowViews4Result,
+  PhysicsMaterialTarget,
+  PhysicsInfoResult,
+  PhysicsActivateResult,
+  PhysicsWeightMapResult,
+  PhysicsParamsResult,
+  PhysicsCollisionGetResult,
+  PhysicsCollisionSetResult,
+  PhysicsCollisionUpdate,
 } from "./types.js";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:5101";
@@ -740,4 +748,84 @@ export class CC5Bridge {
     if (target !== undefined) body.target = target;
     return this.request<WorkflowViews4Result>("/workflow/views4", "POST", body);
   }
+
+  // --- Physics (Soft Cloth) routes ---
+
+  async wfPhysicsInfo(sel: WorkflowItemSelector): Promise<PhysicsInfoResult> {
+    return this.request<PhysicsInfoResult>("/workflow/physics/info", "POST", { ...sel });
+  }
+
+  async wfPhysicsActivate(
+    sel: WorkflowItemSelector,
+    enable: boolean
+  ): Promise<PhysicsActivateResult> {
+    return this.request<PhysicsActivateResult>("/workflow/physics/activate", "POST", {
+      ...sel,
+      enable,
+    });
+  }
+
+  async wfPhysicsLoadWeightMap(
+    sel: WorkflowItemSelector,
+    target: PhysicsMaterialTarget,
+    filePath: string
+  ): Promise<PhysicsWeightMapResult> {
+    return this.request<PhysicsWeightMapResult>("/workflow/physics/weight_map", "POST", {
+      ...sel,
+      ...physicsTargetBody(target),
+      file_path: filePath,
+    });
+  }
+
+  async wfPhysicsGetParams(
+    sel: WorkflowItemSelector,
+    target: PhysicsMaterialTarget,
+    names?: string[]
+  ): Promise<PhysicsParamsResult> {
+    const body: Record<string, unknown> = { ...sel, ...physicsTargetBody(target) };
+    if (names !== undefined) body.names = names;
+    return this.request<PhysicsParamsResult>("/workflow/physics/params/get", "POST", body);
+  }
+
+  async wfPhysicsSetParams(
+    sel: WorkflowItemSelector,
+    target: PhysicsMaterialTarget,
+    values: Record<string, number | boolean>
+  ): Promise<PhysicsParamsResult> {
+    return this.request<PhysicsParamsResult>("/workflow/physics/params/set", "POST", {
+      ...sel,
+      ...physicsTargetBody(target),
+      values,
+    });
+  }
+
+  async wfPhysicsGetCollision(
+    sel: WorkflowItemSelector,
+    target: PhysicsMaterialTarget,
+    collisionNames?: string[]
+  ): Promise<PhysicsCollisionGetResult> {
+    const body: Record<string, unknown> = { ...sel, ...physicsTargetBody(target) };
+    if (collisionNames !== undefined) body.collision_names = collisionNames;
+    return this.request<PhysicsCollisionGetResult>("/workflow/physics/collision/get", "POST", body);
+  }
+
+  async wfPhysicsSetCollision(
+    sel: WorkflowItemSelector,
+    target: PhysicsMaterialTarget,
+    shapes: PhysicsCollisionUpdate[]
+  ): Promise<PhysicsCollisionSetResult> {
+    return this.request<PhysicsCollisionSetResult>("/workflow/physics/collision/set", "POST", {
+      ...sel,
+      ...physicsTargetBody(target),
+      shapes,
+    });
+  }
+}
+
+/** Only send mesh_name / material_name when they were given. */
+function physicsTargetBody(target: PhysicsMaterialTarget): Record<string, string> {
+  const body: Record<string, string> = {};
+  if (target.mesh_name !== undefined) body.mesh_name = target.mesh_name;
+  if (target.material_name !== undefined) body.material_name = target.material_name;
+  return body;
 }
