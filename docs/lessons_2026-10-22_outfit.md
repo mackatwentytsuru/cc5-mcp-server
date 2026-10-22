@@ -104,3 +104,5 @@ These lessons go into the cc5-agent skill. Every item was learned the hard way.
 - モーフを作れた手順(14:05): File > Export > OBJ > Nude Character in Bind-Pose(Z-Up・Full Body)で今のキャラを書き出す → その OBJ の体の頂点に直しの分を足した OBJ を作り、同じ名前の .ObjKey を並べて置く → Create > Morph Slider Editor で元は Current Morph、直した形は File を「Open Path」ボタン(qtTargetOpenFilePathToolButton)から選ぶ → OK。欄に文字を入れるだけでは読み込まれず「not compatible」になる。
 - 保存・開くの小窓は Windows のものだと名前を中から入れられない(Qt が「/」区切りで渡し、Windows が「ファイル名は有効ではありません」と断る)。`/workflow/dialog/native {"enable": false}` で CC5 自前の小窓にしてから `/workflow/dialog/file_fill` で埋める。終わったら true に戻す。
 - 小窓が開いている間、`_wf_qt_later`(QTimer)の後回しの押しが動かないことがある。`QMetaObject.invokeMethod(..., Qt.QueuedConnection)` なら動く。
+- 髪を頭に固定し直す手順(14:10): 元の FBX を部品として読み込む → キャラ全体を今の姿勢で OBJ に書き出し、登録済みの髪と新しい部品の頂点(同じ並び)で回転と移動を求める(Kabsch)→ `/workflow/transform/set` に移動と回転(scipy の 'xyz' の角度、度)を入れる → `/workflow/attach` で CC_Base_Head に付ける。ずれ 0.003cm。
+- `ExportObjFile` の3つ目の引数は EExport3DFileOption(AxisYUp, ResetToBindPose など)。キャラに付いた部品(髪・小物)だけを書き出すことはできない。キャラ全体を書き出し、g の名前で取り出す。隠した部品も書き出される。
