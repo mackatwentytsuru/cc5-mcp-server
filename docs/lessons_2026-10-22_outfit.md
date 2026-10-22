@@ -109,3 +109,5 @@ These lessons go into the cc5-agent skill. Every item was learned the hard way.
 - 目の下の「くま」のような弓なりの線(14:42): essential head morphs/pack_eye206(目の下のふくらみ)が 0.44 で効いていた。-0.6 にすると線がやわらぐ(本人が選んだ)。Eye Bag Lower Depth を - にすると線は逆に濃くなる。Eye Bag Curve(head_04_fix_head)は頭全体の形が変わるので使わない。
 - 見比べは `/workflow/timeline`(再生の状態・止める・コマ合わせ)で同じコマにしてから撮る。`/workflow/buttons` で再生ボタンなどを tool tip で探して押せる(消す・買う・更新などは押さない)。
 - 目じりの外側の輪の線: Cheek Bone Upper Depth(2019-09-22-16-56-23)を -0.6(本人が選んだ)。比べるときは髪を隠し、目じりの下を大きく撮る。
+- 目じりの外側の輪の線(15:11): 正体は、眼球 4 倍で前へ押し出された下まぶたの厚い棚の段差。モーフ 100 以上・形のならしでは消えなかった。凹凸の絵で消せた: 帯をなめらかにした見本の顔から、今の顔へ Tangent の Normal を焼き写し(`J:/OTOLUME/parts/beyon/cc5_trial3/scripts/v18_eye_nmap.py`)、帯の型紙の所だけ今の Normal に差し込む。**CC5 の Normal は緑が逆(DirectX 式)**。Blender の焼き写し(OpenGL 式)は G を反転して使う。
+- CC5 の目は、上まぶたと下まぶたで別々の穴(ふちの輪)になっている。眼球 4 倍だと目の穴は横 8.8cm・縦 5.8cm。目の位置をふちから取るときは両方の輪を使い、口や涙のふちを外す。
