@@ -111,3 +111,5 @@ These lessons go into the cc5-agent skill. Every item was learned the hard way.
 - 目じりの外側の輪の線: Cheek Bone Upper Depth(2019-09-22-16-56-23)を -0.6(本人が選んだ)。比べるときは髪を隠し、目じりの下を大きく撮る。
 - 目じりの外側の輪の線(15:11): 正体は、眼球 4 倍で前へ押し出された下まぶたの厚い棚の段差。モーフ 100 以上・形のならしでは消えなかった。凹凸の絵で消せた: 帯をなめらかにした見本の顔から、今の顔へ Tangent の Normal を焼き写し(`J:/OTOLUME/parts/beyon/cc5_trial3/scripts/v18_eye_nmap.py`)、帯の型紙の所だけ今の Normal に差し込む。**CC5 の Normal は緑が逆(DirectX 式)**。Blender の焼き写し(OpenGL 式)は G を反転して使う。
 - CC5 の目は、上まぶたと下まぶたで別々の穴(ふちの輪)になっている。眼球 4 倍だと目の穴は横 8.8cm・縦 5.8cm。目の位置をふちから取るときは両方の輪を使い、口や涙のふちを外す。
+- CC5 の髪(15:46): Content の「Highlights bangs」は髪の形ではなく Material Plus(.iMtlPlus)。前髪の形 `Hair/Element/Hair/Hair Builder 2 - eGirl/Bangs/Highlight Bangs.rlHairElement` を先に読み込む(`/asset/load`、.rlHair/.rlHairElement を許可に追加)。髪の色は Digital_Human Hair の材質どうしで値を写す(`/material/shader/get` → `/material/shader/set`)。根元の黒は RootColor。
+- 新しい CC5 の髪を当てると、髪として登録してあった自作の髪(beyon_hair)は置き換わる。部品の番号(id)は、CC5 を開き直すと変わる。
