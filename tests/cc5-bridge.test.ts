@@ -1079,3 +1079,79 @@ describe("CC5Bridge.createActorMixer", () => {
     await expect(bridge.createActorMixer({ confirm_create: true })).rejects.toThrow("ECONNREFUSED");
   });
 });
+
+describe("CC5Bridge physics (Soft Cloth) routes", () => {
+  const ok = { result: { success: true } };
+
+  function sentBody(): Record<string, unknown> {
+    const call = vi.mocked(fetch).mock.calls[0];
+    return JSON.parse((call[1] as { body: string }).body) as Record<string, unknown>;
+  }
+
+  function sentUrl(): string {
+    return vi.mocked(fetch).mock.calls[0][0] as string;
+  }
+
+  it("wfPhysicsInfo posts the selector to /workflow/physics/info", async () => {
+    mockFetch(ok);
+    await bridge.wfPhysicsInfo({ item_name: "Skirt" });
+    expect(sentUrl()).toBe("http://localhost:5101/workflow/physics/info");
+    expect(sentBody()).toEqual({ item_name: "Skirt" });
+  });
+
+  it("wfPhysicsActivate sends enable", async () => {
+    mockFetch(ok);
+    await bridge.wfPhysicsActivate({ item_id: "7" }, false);
+    expect(sentUrl()).toBe("http://localhost:5101/workflow/physics/activate");
+    expect(sentBody()).toEqual({ item_id: "7", enable: false });
+  });
+
+  it("wfPhysicsLoadWeightMap sends mesh, material and file_path", async () => {
+    mockFetch(ok);
+    await bridge.wfPhysicsLoadWeightMap(
+      { item_name: "Skirt" },
+      { mesh_name: "Skirt", material_name: "Skirt_Mat" },
+      "C:/maps/skirt.png",
+    );
+    expect(sentUrl()).toBe("http://localhost:5101/workflow/physics/weight_map");
+    expect(sentBody()).toEqual({
+      item_name: "Skirt",
+      mesh_name: "Skirt",
+      material_name: "Skirt_Mat",
+      file_path: "C:/maps/skirt.png",
+    });
+  });
+
+  it("wfPhysicsGetParams omits unset mesh/material/names", async () => {
+    mockFetch(ok);
+    await bridge.wfPhysicsGetParams({ item_name: "Skirt" }, {});
+    expect(sentUrl()).toBe("http://localhost:5101/workflow/physics/params/get");
+    expect(sentBody()).toEqual({ item_name: "Skirt" });
+  });
+
+  it("wfPhysicsSetParams sends values", async () => {
+    mockFetch(ok);
+    await bridge.wfPhysicsSetParams({ item_name: "Skirt" }, { mesh_name: "M" }, { Mass: 2 });
+    expect(sentUrl()).toBe("http://localhost:5101/workflow/physics/params/set");
+    expect(sentBody()).toEqual({ item_name: "Skirt", mesh_name: "M", values: { Mass: 2 } });
+  });
+
+  it("wfPhysicsGetCollision sends collision_names when given", async () => {
+    mockFetch(ok);
+    await bridge.wfPhysicsGetCollision({ item_name: "Skirt" }, {}, ["CC_Base_Hip"]);
+    expect(sentUrl()).toBe("http://localhost:5101/workflow/physics/collision/get");
+    expect(sentBody()).toEqual({ item_name: "Skirt", collision_names: ["CC_Base_Hip"] });
+  });
+
+  it("wfPhysicsSetCollision sends shapes", async () => {
+    mockFetch(ok);
+    await bridge.wfPhysicsSetCollision({ item_name: "Skirt" }, {}, [
+      { name: "CC_Base_Hip", enabled: true, value: 0.5 },
+    ]);
+    expect(sentUrl()).toBe("http://localhost:5101/workflow/physics/collision/set");
+    expect(sentBody()).toEqual({
+      item_name: "Skirt",
+      shapes: [{ name: "CC_Base_Hip", enabled: true, value: 0.5 }],
+    });
+  });
+});

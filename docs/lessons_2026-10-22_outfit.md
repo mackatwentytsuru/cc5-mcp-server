@@ -57,3 +57,21 @@ These lessons go into the cc5-agent skill. Every item was learned the hard way.
 ## Model routing for CC5 work (owner, 10-22)
 - DeepSeek (`claude-oc`) and GLM (`claude-glm`): scripts, drafts, MCP tool calls through the text-only workflow tools.
 - Claude/Gemini: the visual verdict on the 4 images, Japanese for the owner, and final decisions.
+
+## 10-22 morning (boots / high heels)
+- `import_fbx` automation once opened the irreversible "Game Base UVs" convert dialog instead of the Import flow. It was cancelled by hand. Until fixed, the import automation must verify each dialog's title before pressing any button and abort on anything unexpected. Never press Convert in "Game Base UVs".
+- High-heel boots modelled in heel pose: rotate `CC_Base_L/R_Foot` X -37 and `ToeBase` X +37 at frame 0. The new route `/workflow/bone/rotation` does this through `skeleton.GetClip(0).GetControl("Layer", bone).GetDataBlock()`, with `Rotation/RotationX` in radians. Then import the boot as a Prop, attach it to the hip, and Transfer Skin Weights with Shoes. Converting a weighted boot back to an accessory binds it to the foot bone, so re-import it instead.
+- `foot_auto` (AutoAdjustFootHeight) crushed the heel-posed boots. Reopen the saved project to recover.
+- The High Heels dialog's Heel Height on flat feet only moved the shoe.
+- The import status can report "did not appear" while the prop still lands seconds later. Re-list the items after about 10 s.
+
+## 10-22 late morning (import fix, stale ids, lift)
+- **Stale ids crash CC5.** Item ids change whenever a project is reopened. `_wf_resolve` used to pass an unknown id to `RScene.QueryObjectByID`, and that is an access violation inside CharacterCreator.exe (crashes at 11:02 and 11:28). Fixed: ids are resolved from the current scan only. Rule: call `list_scene_items` again after every reopen or crash.
+- **Import automation fixed:**
+  - Buttons are clicked only inside dialogs titled "Import Fbx" or "Import Settings". The import aborts if a "Game Base…" or other unexpected dialog is visible.
+  - The app-wide event filter is gone.
+  - Deferred calls check that the Qt object is still alive.
+  - The file dialog is filled through its line edit, then its Open button is pressed.
+  - Live-tested twice (skirt and boots): done in about 20 s, no crash.
+- **Startup dialogs block everything** after a crash: "Unsaved project data found" (Cancel keeps the saved file), "Load Project" (Replace All + OK) and the DRM list (Close). Clear them before any workflow call.
+- **The avatar lifts after shoes and foot posing.** The whole body was 6.80 cm higher than in the 01:35 export. A newly imported prop lands at the unlifted height, so a boot or skirt fitted in Blender ends up 6.8 cm low and the calf pokes through. Before transferring weights, raise the prop by the lift; measure it by comparing the head or hair height of a fresh current-pose OBJ export with the source OBJ.

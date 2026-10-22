@@ -30,7 +30,16 @@ import type {
   WorkflowSimpleResult,
   WorkflowRenderResult,
   WorkflowViews4Result,
+  PhysicsInfoResult,
+  PhysicsActivateResult,
+  PhysicsWeightMapResult,
+  PhysicsParamsResult,
+  PhysicsCollisionGetResult,
+  PhysicsCollisionSetResult,
+  PhysicsMeshEntry,
+  PhysicsMaterialTarget,
 } from "../types.js";
+import { SOFT_PHYSX_PROPERTIES } from "../types.js";
 
 // ── Shared item selector ──────────────────────────────────────────────────────
 
@@ -135,6 +144,81 @@ function failed(error?: string, ...details: Array<string | undefined>): string {
 
 function failedItem(result: { error?: string; matches?: WorkflowItemRef[] }): string {
   return failed(result.error, matchesNote(result.matches));
+}
+
+// ── Physics (Soft Cloth) helpers ──────────────────────────────────────────────
+
+const physicsTargetFields = {
+  mesh_name: z
+    .string()
+    .min(1)
+    .max(256)
+    .optional()
+    .describe("Soft-cloth mesh name (see get_physics_info); optional when the item has only one"),
+  material_name: z
+    .string()
+    .min(1)
+    .max(256)
+    .optional()
+    .describe("Soft-cloth material name on that mesh; optional when the mesh has only one"),
+};
+
+function toPhysicsTarget(value: PhysicsMaterialTarget): PhysicsMaterialTarget {
+  const target: PhysicsMaterialTarget = {};
+  if (value.mesh_name !== undefined) target.mesh_name = value.mesh_name;
+  if (value.material_name !== undefined) target.material_name = value.material_name;
+  return target;
+}
+
+const SOFT_PHYSX_SET: ReadonlySet<string> = new Set(SOFT_PHYSX_PROPERTIES);
+
+const WEIGHT_MAP_GUI_HINT =
+  "If this cannot be done from a script, load it by hand in CC5 (画面で読み込む): select the item, Modify panel > Physics > Weight Map.";
+
+function meshesNote(meshes?: PhysicsMeshEntry[]): string | undefined {
+  if (!meshes || meshes.length === 0) return undefined;
+  return `Soft-cloth meshes: ${meshes
+    .map((m) => `${m.mesh} [${m.materials.join(", ") || "no materials listed"}]`)
+    .join("; ")}`;
+}
+
+function notesNote(notes?: string[]): string | undefined {
+  return notes && notes.length > 0 ? `Notes: ${notes.join(" ")}` : undefined;
+}
+
+function physicsLabel(
+  result: { name?: string; mesh?: string; material?: string },
+  fallback?: string,
+): string {
+  const item = result.name ?? fallback ?? "item";
+  return result.mesh || result.material
+    ? `'${item}' mesh '${result.mesh ?? "?"}' material '${result.material ?? "?"}'`
+    : `'${item}'`;
+}
+
+function physicsFailed(
+  result: {
+    error?: string;
+    matches?: WorkflowItemRef[];
+    meshes?: PhysicsMeshEntry[];
+    notes?: string[];
+  },
+  ...extra: Array<string | undefined>
+): string {
+  return failed(
+    result.error,
+    matchesNote(result.matches),
+    meshesNote(result.meshes),
+    ...extra,
+    notesNote(result.notes),
+  );
+}
+
+function shapeText(shape: { enabled: boolean | null; value: number | null } | null): string {
+  if (!shape) return "n/a";
+  const enabled = shape.enabled === null ? "?" : shape.enabled ? "on" : "off";
+  const value = shape.value === null ? "?" : num(shape.value);
+  return `${enabled}, value ${value}`;
 }
 
 // ── Tools ─────────────────────────────────────────────────────────────────────
@@ -500,5 +584,293 @@ export function registerWorkflowTools(server: McpServer, bridge: CC5Bridge): voi
           return lines.join("\n");
         },
       ),
+  );
+
+  // ── Physics (Soft Cloth) ──────────────────────────────────────────────────
+
+  server.tool(
+    "get_physics_info",
+    `Show an item's Activate Physics state, its soft-cloth meshes/materials and the Soft PhysX property names. Works for cloth, accessory, hair and avatar items (props have no physics component in RLPy). ${NO_GUI}`,
+    selectorShape({}),
+    async ({ item_name, item_id }) => {
+      const problem = selectorProblem({ item_name, item_id });
+      if (problem) return schemaFailure(problem);
+      return bridgeCall(
+        () => bridge.wfPhysicsInfo(toSelector({ item_name, item_id })),
+        (result: PhysicsInfoResult) => {
+          if (!result.success) return physicsFailed(result);
+          const state =
+            result.activate === null || result.activate === undefined
+              ? "unknown"
+              : result.activate
+                ? "on"
+                : "off";
+          const lines = [
+            `Physics for '${result.name ?? item_name ?? item_id}'${result.kind ? ` (${result.kind})` : ""}: Activate Physics ${state}`,
+          ];
+          const meshes = result.meshes ?? [];
+          if (meshes.length === 0) {
+            lines.push(
+              "  No soft-cloth meshes yet (load a weight map to make a material soft cloth).",
+            );
+          } else {
+            for (const mesh of meshes) {
+              lines.push(
+                `  - mesh ${mesh.mesh}: ${mesh.materials.join(", ") || "(no materials listed)"}`,
+              );
+            }
+          }
+          if (result.properties && result.properties.length > 0) {
+            lines.push(`  Soft PhysX properties: ${result.properties.join(", ")}`);
+          }
+          if (result.weight_map_import === false) {
+            lines.push(`  Weight-map import is not available in this RLPy. ${WEIGHT_MAP_GUI_HINT}`);
+          }
+          const notes = notesNote(result.notes);
+          if (notes) lines.push(`  ${notes}`);
+          return lines.join("\n");
+        },
+      );
+    },
+  );
+
+  server.tool(
+    "set_physics_active",
+    `Turn Activate Physics on or off for a cloth, accessory, hair or avatar item. RLPy has one switch per item, not per mesh or material. The value is read back after the change. ${NO_GUI}`,
+    selectorShape({
+      enable: z.boolean().describe("true turns Activate Physics on, false turns it off"),
+    }),
+    async ({ item_name, item_id, enable }) => {
+      const problem = selectorProblem({ item_name, item_id });
+      if (problem) return schemaFailure(problem);
+      return bridgeCall(
+        () => bridge.wfPhysicsActivate(toSelector({ item_name, item_id }), enable),
+        (result: PhysicsActivateResult) =>
+          result.success
+            ? `Activate Physics for '${result.name ?? item_name ?? item_id}' is now ${(result.activate ?? enable) ? "on" : "off"}${result.verified === false ? " (could not read it back)" : ""}`
+            : failedItem(result),
+      );
+    },
+  );
+
+  server.tool(
+    "load_physics_weight_map",
+    `Load a Soft Cloth weight map PNG for one mesh/material of an item (RLPy SetPhysicsSoftColthWeightMap). ${WEIGHT_MAP_GUI_HINT} ${NO_GUI}`,
+    selectorShape({
+      ...physicsTargetFields,
+      file_path: z.string().min(1).max(4096).describe("Full path of the weight map .png file"),
+    }),
+    async ({ item_name, item_id, mesh_name, material_name, file_path }) => {
+      const problem = selectorProblem({ item_name, item_id });
+      if (problem) return schemaFailure(problem);
+      if (!file_path.toLowerCase().endsWith(".png")) {
+        return schemaFailure("file_path must be a .png file.");
+      }
+      return bridgeCall(
+        () =>
+          bridge.wfPhysicsLoadWeightMap(
+            toSelector({ item_name, item_id }),
+            toPhysicsTarget({ mesh_name, material_name }),
+            file_path,
+          ),
+        (result: PhysicsWeightMapResult) => {
+          if (!result.success) {
+            return physicsFailed(
+              result,
+              result.gui_only
+                ? "This must be done by hand in the CC5 GUI (Modify panel > Physics > Weight Map)."
+                : undefined,
+            );
+          }
+          const check =
+            result.weight_map_present === true
+              ? " (weight map present after loading)"
+              : result.weight_map_present === false
+                ? " (warning: no weight map reads back)"
+                : "";
+          const notes = notesNote(result.notes);
+          return `Loaded weight map ${result.path ?? file_path} into ${physicsLabel(result, item_name ?? item_id)}${check}${notes ? `. ${notes}` : ""}`;
+        },
+      );
+    },
+  );
+
+  server.tool(
+    "get_soft_physics_params",
+    `Read Soft PhysX properties (${SOFT_PHYSX_PROPERTIES.join(", ")}) of one soft-cloth mesh/material. ${NO_GUI}`,
+    selectorShape({
+      ...physicsTargetFields,
+      names: z
+        .array(z.enum(SOFT_PHYSX_PROPERTIES))
+        .min(1)
+        .optional()
+        .describe("Property names to read; omit to read all of them"),
+    }),
+    async ({ item_name, item_id, mesh_name, material_name, names }) => {
+      const problem = selectorProblem({ item_name, item_id });
+      if (problem) return schemaFailure(problem);
+      return bridgeCall(
+        () =>
+          bridge.wfPhysicsGetParams(
+            toSelector({ item_name, item_id }),
+            toPhysicsTarget({ mesh_name, material_name }),
+            names,
+          ),
+        (result: PhysicsParamsResult) => {
+          if (!result.success) {
+            return physicsFailed(
+              result,
+              result.allowed ? `Allowed: ${result.allowed.join(", ")}` : undefined,
+            );
+          }
+          const lines = [
+            `Soft PhysX for ${physicsLabel(result, item_name ?? item_id)}: ${formatRecord(result.params)}`,
+          ];
+          if (result.unreadable && Object.keys(result.unreadable).length > 0) {
+            lines.push(`  Unreadable: ${Object.keys(result.unreadable).join(", ")}`);
+          }
+          const notes = notesNote(result.notes);
+          if (notes) lines.push(`  ${notes}`);
+          return lines.join("\n");
+        },
+      );
+    },
+  );
+
+  server.tool(
+    "set_soft_physics_params",
+    `Set Soft PhysX properties of one soft-cloth mesh/material and read them back. Allowed names: ${SOFT_PHYSX_PROPERTIES.join(", ")}. SoftVsRigidCollision and SelfCollision are switches (true/false or 1/0). ${NO_GUI}`,
+    selectorShape({
+      ...physicsTargetFields,
+      values: z
+        .record(z.union([z.number().finite(), z.boolean()]))
+        .describe("Property name/value pairs, for example { Mass: 1.5, SelfCollision: true }"),
+    }),
+    async ({ item_name, item_id, mesh_name, material_name, values }) => {
+      const problem = selectorProblem({ item_name, item_id });
+      if (problem) return schemaFailure(problem);
+      const keys = Object.keys(values);
+      if (keys.length === 0) return schemaFailure("values must contain at least one property.");
+      const unknown = keys.filter((key) => !SOFT_PHYSX_SET.has(key));
+      if (unknown.length > 0) {
+        return schemaFailure(
+          `Unknown Soft PhysX property: ${unknown.join(", ")}. Allowed: ${SOFT_PHYSX_PROPERTIES.join(", ")}`,
+        );
+      }
+      return bridgeCall(
+        () =>
+          bridge.wfPhysicsSetParams(
+            toSelector({ item_name, item_id }),
+            toPhysicsTarget({ mesh_name, material_name }),
+            values,
+          ),
+        (result: PhysicsParamsResult) => {
+          const change = `${formatRecord(result.before)} -> ${formatRecord(result.after)}`;
+          if (!result.success) {
+            return physicsFailed(
+              result,
+              result.before || result.after ? `Values: ${change}` : undefined,
+              result.allowed ? `Allowed: ${result.allowed.join(", ")}` : undefined,
+            );
+          }
+          const notes = notesNote(result.notes);
+          return `Updated Soft PhysX for ${physicsLabel(result, item_name ?? item_id)}: ${change}${notes ? `. ${notes}` : ""}`;
+        },
+      );
+    },
+  );
+
+  server.tool(
+    "get_physics_collision",
+    `List collision shapes for one soft-cloth mesh/material with their on/off state and value (most likely the margin). RLPy cannot list shapes, so the given names, or every skin bone of the avatar, are probed. ${NO_GUI}`,
+    selectorShape({
+      ...physicsTargetFields,
+      collision_names: z
+        .array(z.string().min(1).max(256))
+        .min(1)
+        .max(500)
+        .optional()
+        .describe(
+          "Collision shape (bone) names to check, for example CC_Base_Spine02; omit to probe all skin bones",
+        ),
+    }),
+    async ({ item_name, item_id, mesh_name, material_name, collision_names }) => {
+      const problem = selectorProblem({ item_name, item_id });
+      if (problem) return schemaFailure(problem);
+      return bridgeCall(
+        () =>
+          bridge.wfPhysicsGetCollision(
+            toSelector({ item_name, item_id }),
+            toPhysicsTarget({ mesh_name, material_name }),
+            collision_names,
+          ),
+        (result: PhysicsCollisionGetResult) => {
+          if (!result.success) return physicsFailed(result);
+          const shapes = result.shapes ?? [];
+          const lines = [
+            `Collision shapes for ${physicsLabel(result, item_name ?? item_id)}: ${shapes.length} found${result.probed !== undefined ? ` (${result.probed} name(s) checked)` : ""}`,
+          ];
+          for (const shape of shapes) {
+            lines.push(`  - ${shape.name}: ${shapeText(shape)}`);
+          }
+          if (result.unknown && result.unknown.length > 0) {
+            lines.push(`  Not found: ${result.unknown.join(", ")}`);
+          }
+          const notes = notesNote(result.notes);
+          if (notes) lines.push(`  ${notes}`);
+          return lines.join("\n");
+        },
+      );
+    },
+  );
+
+  server.tool(
+    "set_physics_collision",
+    `Turn collision shapes on/off and/or set their value (most likely the margin) for one soft-cloth mesh/material; every shape is read back. ${NO_GUI}`,
+    selectorShape({
+      ...physicsTargetFields,
+      shapes: z
+        .array(
+          z.object({
+            name: z.string().min(1).max(256).describe("Collision shape (bone) name"),
+            enabled: z.boolean().optional().describe("true to use this shape, false to ignore it"),
+            value: z.number().finite().optional().describe("New collision value (margin)"),
+          }),
+        )
+        .min(1)
+        .max(200)
+        .describe("Shapes to change; each needs enabled and/or value"),
+    }),
+    async ({ item_name, item_id, mesh_name, material_name, shapes }) => {
+      const problem = selectorProblem({ item_name, item_id });
+      if (problem) return schemaFailure(problem);
+      if (shapes.some((shape) => shape.enabled === undefined && shape.value === undefined)) {
+        return schemaFailure("Each shape needs enabled and/or value.");
+      }
+      return bridgeCall(
+        () =>
+          bridge.wfPhysicsSetCollision(
+            toSelector({ item_name, item_id }),
+            toPhysicsTarget({ mesh_name, material_name }),
+            shapes,
+          ),
+        (result: PhysicsCollisionSetResult) => {
+          const rows = (result.shapes ?? []).map(
+            (shape) =>
+              `  - ${shape.name}: ${shapeText(shape.before)} -> ${shapeText(shape.after)}${shape.errors ? ` (${shape.errors.join("; ")})` : ""}`,
+          );
+          if (!result.success) {
+            const base = physicsFailed(result);
+            return rows.length > 0 ? `${base}\n${rows.join("\n")}` : base;
+          }
+          const notes = notesNote(result.notes);
+          return [
+            `Updated collision shapes for ${physicsLabel(result, item_name ?? item_id)}:`,
+            ...rows,
+            ...(notes ? [`  ${notes}`] : []),
+          ].join("\n");
+        },
+      );
+    },
   );
 }

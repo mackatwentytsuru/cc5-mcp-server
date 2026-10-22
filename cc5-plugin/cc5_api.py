@@ -4629,21 +4629,13 @@ def _wf_resolve(item_name: str | None = None, item_id: Any = None):
 
     scan = _wf_scan()
     if item_id is not None and str(item_id) != "":
-        # Prefer the typed object from the scan (RIAccessory/RICloth/...): QueryObjectByID returns a
-        # generic proxy without TransferSkinWeight etc. (live 10-22). Fall back to it only if the scan misses.
+        # Only ids from the current scan are used. Never pass an unknown id to
+        # RScene.QueryObjectByID: ids change when a project is reopened, and a stale id
+        # crashed CC5 twice (access violation, live 10-22). The scan also yields the
+        # typed object (RIAccessory/RICloth/...) that QueryObjectByID would not.
         typed = [(o, e) for o, e in scan if str(e["id"]) == str(item_id)]
         if len(typed) == 1:
             return typed[0][0], typed[0][1]["kind"], None
-        candidates: list[Any] = [str(item_id)]
-        if str(item_id).lstrip("-").isdigit():
-            candidates.append(int(str(item_id)))
-        for candidate in candidates:
-            try:
-                obj = RLPy.RScene.QueryObjectByID(candidate)
-            except Exception:
-                obj = None
-            if obj is not None:
-                return obj, _wf_kind_of(obj), None
 
     if item_id is not None and str(item_id) != "":
         wanted = str(item_id)
@@ -5065,7 +5057,7 @@ def wf_remove_item(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[st
         return {"success": False, "error": str(e)}
 
 
-_WF_IMPORT_FBX_TIMEOUT = 20.0
+_WF_IMPORT_FBX_TIMEOUT = 60.0
 
 _WF_IMPORT_FBX_STATE: dict[str, Any] = {
     "phase": "idle",  # idle | file_dialog | prop_dialog | settings_dialog | settling | done | error
@@ -5080,11 +5072,67 @@ _WF_IMPORT_FBX_STATE: dict[str, Any] = {
     "timer": None,
     "dialogs": [],
     "accepted": [],
+    "file_dialog_seen_at": 0.0,
+    "file_dialog_retry": False,
     "non_native_dialog": False,
     "prior_attr": None,
     "prior_attr_set": False,
     "steps": {},
 }
+
+
+# Dialog titles the import flow may touch. Anything else is never clicked; a visible
+# title from _WF_IMPORT_FBX_DENY aborts the import (10-22: a stray "Convert" in the main
+# window opened the irreversible "Game Base UVs" conversion).
+_WF_IMPORT_FBX_PROP_TITLES = ("import fbx",)
+_WF_IMPORT_FBX_SETTINGS_TITLES = ("import settings",)
+_WF_IMPORT_FBX_DENY = ("game base", "convert to game", "subdivision", "export")
+
+
+def _wf_qt_valid(obj: Any) -> bool:
+    """True while the C++ side of a PySide2 wrapper still exists."""
+    if obj is None:
+        return False
+    try:
+        import shiboken2  # type: ignore[import-not-found]
+        return bool(shiboken2.isValid(obj))
+    except Exception:
+        try:
+            obj.objectName()
+            return True
+        except Exception:
+            return False
+
+
+def _wf_qt_later(obj: Any, method: str, delay_ms: int = 100) -> None:
+    """Call obj.method() after delay_ms, only if obj is still alive (no dangling calls)."""
+    from PySide2.QtCore import QTimer
+
+    def _run() -> None:
+        try:
+            if _wf_qt_valid(obj):
+                getattr(obj, method)()
+        except Exception as e:
+            print(f"[CC5 MCP Bridge] deferred {method} failed: {e}")
+
+    QTimer.singleShot(delay_ms, _run)
+
+
+def _wf_dialog_title(widget: Any) -> str:
+    try:
+        win = widget.window()
+        return (win.windowTitle() or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def _wf_import_fbx_denied_dialog() -> str:
+    """Title of a visible dialog the import must never continue past, else ''."""
+    for dlg in _wf_import_fbx_visible_dialogs():
+        title = _wf_dialog_title(dlg)
+        if any(word in title for word in _WF_IMPORT_FBX_DENY):
+            return title
+    return ""
 
 
 def _wf_import_fbx_text(widget: Any) -> str:
@@ -5222,7 +5270,7 @@ def _wf_import_fbx_install_filter(file_path: str) -> Any:
                     if obj not in state["dialogs"]:
                         state["dialogs"].append(obj)
                     state["notes"].append("File dialog filled through Qt (event filter)")
-                    QTimer.singleShot(150, obj.accept)
+                    _wf_qt_later(obj, "accept", 150)
             except Exception as e:
                 print(f"[CC5 MCP Bridge] import file filter failed: {e}")
             return False
@@ -5301,6 +5349,10 @@ def _wf_import_fbx_find_button(kind: str) -> Any:
                 continue
             if _wf_import_fbx_is_file_dialog_button(w):
                 continue
+            title = _wf_dialog_title(w)
+            wanted = _WF_IMPORT_FBX_PROP_TITLES if kind == "prop" else _WF_IMPORT_FBX_SETTINGS_TITLES
+            if title not in wanted:
+                continue                    # never a button of the main window or another dialog
             text = _wf_import_fbx_text(w)
             try:
                 obj_name = (w.objectName() or "").strip().lower()
@@ -5391,8 +5443,8 @@ def _wf_import_fbx_cleanup() -> None:
             continue
         seen.add(id(dlg))
         try:
-            if dlg.isVisible() and QTimer is not None:
-                QTimer.singleShot(0, dlg.reject)
+            if _wf_qt_valid(dlg) and dlg.isVisible():
+                dlg.reject()
         except Exception:
             pass
     _wf_import_fbx_restore_attr()
@@ -5423,7 +5475,19 @@ def _wf_import_fbx_finish(new_items: list[dict[str, Any]]) -> None:
 def wf_import_fbx_tick() -> None:
     """QTimer step of the GUI import: file -> Prop -> Convert All -> diff."""
     from PySide2.QtCore import QTimer
-    from PySide2.QtWidgets import QFileDialog
+    from PySide2.QtWidgets import QDialog, QDialogButtonBox, QFileDialog, QLineEdit
+
+    def _wf_qt_later_done(obj: Any, delay_ms: int = 200) -> None:
+        """Defer obj.done(QDialog.Accepted); _wf_qt_later cannot pass arguments."""
+
+        def _run() -> None:
+            try:
+                if _wf_qt_valid(obj):
+                    obj.done(QDialog.Accepted)
+            except Exception as e:
+                print(f"[CC5 MCP Bridge] deferred done(Accepted) failed: {e}")
+
+        QTimer.singleShot(delay_ms, _run)
 
     state = _WF_IMPORT_FBX_STATE
     if state["phase"] in ("done", "error", "idle"):
@@ -5445,6 +5509,10 @@ def wf_import_fbx_tick() -> None:
         return
 
     try:
+        denied = _wf_import_fbx_denied_dialog()
+        if denied:
+            _wf_import_fbx_fail(f"needs GUI: unexpected dialog '{denied}' (nothing clicked)")
+            return
         if state["phase"] == "file_dialog":
             dlg = _wf_import_fbx_visible_file_dialog()
             if dlg is not None:
@@ -5454,12 +5522,87 @@ def wf_import_fbx_tick() -> None:
                             dlg.setOption(QFileDialog.DontUseNativeDialog, True)
                         except Exception:
                             pass
-                    dlg.selectFile(state["file_path"])
+                    path = state["file_path"]
+                    try:
+                        dlg.setDirectory(os.path.dirname(path))
+                    except Exception:
+                        pass
+                    # selectFile alone does not reach the file-name line edit of an
+                    # already-visible dialog (live 10-22), so fill the edit directly.
+                    dlg.selectFile(os.path.basename(path))
+                    edit = None
+                    try:
+                        edit = dlg.findChild(QLineEdit, "fileNameEdit")
+                        if edit is None:
+                            for candidate in dlg.findChildren(QLineEdit):
+                                try:
+                                    if candidate.isVisible():
+                                        edit = candidate
+                                        break
+                                except Exception:
+                                    continue
+                    except Exception:
+                        edit = None
+                    if edit is not None:
+                        try:
+                            edit.setText(path)
+                        except Exception:
+                            edit = None
+                    # Click the Open / Accept button; accept() would re-validate the edit.
+                    btn = None
+                    btn_text = ""
+                    try:
+                        box = dlg.findChild(QDialogButtonBox)
+                        if box is not None:
+                            try:
+                                btn = box.button(QDialogButtonBox.Open)
+                            except Exception:
+                                btn = None
+                            if btn is None:
+                                for candidate in box.buttons():
+                                    try:
+                                        if box.buttonRole(candidate) == QDialogButtonBox.AcceptRole:
+                                            btn = candidate
+                                            break
+                                    except Exception:
+                                        continue
+                    except Exception:
+                        btn = None
+                    if btn is not None:
+                        btn_text = _wf_import_fbx_text(btn)
+                        _wf_qt_later(btn, "click", 200)
+                    else:
+                        _wf_qt_later(dlg, "accept", 200)
+                    state["notes"].append(
+                        f"File dialog filled: line edit {'yes' if edit is not None else 'no'}, "
+                        f"button '{btn_text or 'accept()'}'"
+                    )
                     state["accepted"].append(id(dlg))
                     if dlg not in state["dialogs"]:
                         state["dialogs"].append(dlg)
-                    state["notes"].append("File dialog filled through Qt (timer)")
-                    QTimer.singleShot(150, dlg.accept)
+                    state["file_dialog_seen_at"] = time.time()
+                    return
+                # Same dialog still up 2.5 s after we filled it: the click did not
+                # take. Record what it holds, then force done(Accepted) once.
+                if (
+                    not state["file_dialog_retry"]
+                    and state["file_dialog_seen_at"]
+                    and time.time() - state["file_dialog_seen_at"] > 2.5
+                ):
+                    state["file_dialog_retry"] = True
+                    text = ""
+                    try:
+                        edit = dlg.findChild(QLineEdit, "fileNameEdit")
+                        if edit is not None:
+                            text = edit.text() or ""
+                    except Exception:
+                        text = ""
+                    try:
+                        selected = [str(p) for p in dlg.selectedFiles()]
+                    except Exception:
+                        selected = []
+                    state["notes"].append(f"File dialog retry: text='{text}' selected={selected}")
+                    _wf_qt_later_done(dlg)
                 return
             if state["accepted"]:
                 state["phase"] = "prop_dialog"
@@ -5472,7 +5615,7 @@ def wf_import_fbx_tick() -> None:
                     if dlg not in state["dialogs"]:
                         state["dialogs"].append(dlg)
                 state["notes"].append("Prop button clicked")
-                QTimer.singleShot(100, prop_btn.click)
+                _wf_qt_later(prop_btn, "click", 100)
                 state["phase"] = "settings_dialog"
                 return
             # Some FBX builds go straight to Import Settings.
@@ -5482,7 +5625,7 @@ def wf_import_fbx_tick() -> None:
                     if dlg not in state["dialogs"]:
                         state["dialogs"].append(dlg)
                 state["notes"].append("No Prop choice; Convert clicked")
-                QTimer.singleShot(100, convert_btn.click)
+                _wf_qt_later(convert_btn, "click", 100)
                 state["phase"] = "settling"
             return
 
@@ -5493,7 +5636,7 @@ def wf_import_fbx_tick() -> None:
                     if dlg not in state["dialogs"]:
                         state["dialogs"].append(dlg)
                 state["notes"].append("Import Settings: Convert clicked")
-                QTimer.singleShot(100, convert_btn.click)
+                _wf_qt_later(convert_btn, "click", 100)
                 state["phase"] = "settling"
             return
 
@@ -5548,13 +5691,16 @@ def wf_import_fbx_begin(body: dict[str, Any] | None = None, **kwargs: Any) -> di
             "timer": None,
             "dialogs": [],
             "accepted": [],
+            "file_dialog_seen_at": 0.0,
+            "file_dialog_retry": False,
             "non_native_dialog": False,
             "prior_attr": None,
             "prior_attr_set": False,
             "steps": {},
         })
         state["non_native_dialog"] = _wf_import_fbx_force_non_native()
-        _wf_import_fbx_install_filter(file_path)
+        # The app-wide event filter that filled the dialog on Show crashed Qt5Widgets
+        # on 10-22; the 200 ms timer below fills it instead.
 
         timer = QTimer()
         timer.setInterval(200)
@@ -5562,7 +5708,7 @@ def wf_import_fbx_begin(body: dict[str, Any] | None = None, **kwargs: Any) -> di
         timer.start()
         state["timer"] = timer
         state["notes"].append(f"Menu scheduled: {action.text()}")
-        QTimer.singleShot(50, action.trigger)
+        _wf_qt_later(action, "trigger", 50)
 
         return {
             "success": True,
@@ -5913,6 +6059,81 @@ def wf_conform_cloth(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[
         elif values and not applied:
             result["warning"] = "none of the requested values matched a readable conform key"
         return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def _wf_find_skin_bone(avatar: Any, name: str) -> Any:
+    """Skin bone of the avatar with exactly this name, or None."""
+    skeleton = avatar.GetSkeletonComponent()
+    for bone in skeleton.GetSkinBones() or []:
+        try:
+            if bone.GetName() == name:
+                return bone
+        except Exception:
+            continue
+    return None
+
+
+def _wf_bone_rotation_deg(block: Any, time: Any) -> list[float]:
+    out = []
+    for axis in "XYZ":
+        value = block.GetData("Rotation/Rotation" + axis, time)
+        out.append(round(math.degrees(value.ToFloat()), 4))
+    return out
+
+
+def wf_bone_rotation(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/bone/rotation: read, and optionally set, bone local rotations at frame 0.
+
+    Body: {"bones": {"CC_Base_L_Foot": [x, y, z] | null, ...}} in degrees. null only reads.
+    This is the pose CC's shoe guide uses to fit feet to high-heel shoes (rotate Foot/ToeBase
+    at frame 0, then transfer skin weights).
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        bones = params.get("bones")
+        if not isinstance(bones, dict) or not bones:
+            return {"success": False, "error": "bones must be an object of bone name -> [x,y,z] or null"}
+        parsed: dict[str, list[float] | None] = {}
+        for name, rot in bones.items():
+            if rot is None:
+                parsed[str(name)] = None
+                continue
+            if not isinstance(rot, (list, tuple)) or len(rot) != 3:
+                return {"success": False, "error": f"{name}: rotation must be 3 numbers (degrees)"}
+            try:
+                parsed[str(name)] = [float(v) for v in rot]
+            except (TypeError, ValueError):
+                return {"success": False, "error": f"{name}: rotation must be 3 numbers (degrees)"}
+        avatar = get_first_avatar()
+        if avatar is None:
+            return {"success": False, "error": "No avatar in the scene"}
+        time = RLPy.RTime.FromValue(0)
+        result: dict[str, Any] = {}
+        missing = [n for n in parsed if _wf_find_skin_bone(avatar, n) is None]
+        if missing:
+            return {"success": False, "error": "Unknown bone(s): " + ", ".join(missing)}
+        skeleton = avatar.GetSkeletonComponent()
+        if skeleton.GetClipCount() == 0:
+            skeleton.AddClip(time)
+        clip = skeleton.GetClip(0)
+        RLPy.RGlobal.BeginAction("wf_bone_rotation")
+        try:
+            for name, rot in parsed.items():
+                block = clip.GetControl("Layer", _wf_find_skin_bone(avatar, name)).GetDataBlock()
+                before = _wf_bone_rotation_deg(block, time)
+                if rot is not None:
+                    for axis, deg in zip("XYZ", rot):
+                        block.SetData("Rotation/Rotation" + axis, time, RLPy.RVariant(math.radians(deg)))
+                result[name] = {"before": before, "after": _wf_bone_rotation_deg(block, time)}
+        finally:
+            RLPy.RGlobal.EndAction()
+        try:
+            RLPy.RGlobal.ObjectModified(avatar, RLPy.EObjectModifiedType_Transform)
+        except Exception:
+            pass
+        return {"success": True, "frame": 0, "bones": result}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -6808,6 +7029,738 @@ def wf_load_cloth_fbx(body: dict[str, Any] | None = None, **kwargs: Any) -> dict
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+
+# --- Physics (Soft Cloth) routes (see docs/contract_workflow_routes.md) ---
+#
+# Not tried in a live CC5 yet, so every RLPy call is guarded. Only methods that
+# exist in CC5's RLPy.py are used:
+#   RICloth / RIAccessory / RIHair / RIAvatar .GetPhysicsComponent()
+#       (RIProp has no GetPhysicsComponent)
+#   RIPhysicsComponent:
+#     GetSoftPhysicsMeshNameList()
+#     GetSoftPhysicsMaterialNameList(strMeshName)
+#     IsActivatePhysicsEnable() / SetActivatePhysicsEnable(bActivate)
+#         -- one switch for the whole item; there is no per-mesh/material switch
+#     GetSoftPhysXProperty(strMeshName, strMaterialName, strPropertyName)
+#     SetSoftPhysXProperty(strMeshName, strMaterialName, strPropertyName, fValue)
+#     GetSoftPhysXCollisionEnable(strMeshName, strMaterialName, strCollisionName)
+#     GetSoftPhysXCollisionValue(strMeshName, strMaterialName, strCollisionName)
+#     SetSoftPhysXCollisionEnable(strMeshName, strMaterialName, strCollisionName, bEnable)
+#     SetSoftPhysXCollisionValue(strMeshName, strMaterialName, strCollisionName, fValue)
+#     SetPhysicsSoftColthWeightMap(*args)  -- overloads (_RLPy.pyd):
+#         (wstring mesh, wstring material, wstring filePath) and
+#         (wstring mesh, wstring material, RIImagePtr image)
+#     GetPhysicsSoftColthWeightMap(strMeshName, strMaterialName)
+#
+# RLPy.py does not document the property names. This is the soft-cloth key
+# table found in CharacterCreator.exe (CC5), in its order. SoftVsRigidCollision
+# and SelfCollision are on/off switches; they are written as 1.0 / 0.0.
+_WF_SOFT_PHYSX_PROPERTIES = (
+    "Mass",
+    "Friction",
+    "SolverFrequency",
+    "Damping",
+    "TetherLimit",
+    "Drag",
+    "Elasticity",
+    "Stretch",
+    "Bending",
+    "Inertia",
+    "SoftVsRigidCollisionMargin",
+    "SelfCollisionMargin",
+    "SoftVsRigidCollision",
+    "SelfCollision",
+)
+
+_WF_PHYSICS_GUI_HINT = (
+    "Do it by hand in CC5 instead: select the item, then Modify panel > Physics."
+)
+
+_WF_WEIGHT_MAP_GUI_HINT = (
+    "Load the weight map by hand in CC5 (画面で読み込む): select the item, open "
+    "Modify panel > Physics > Weight Map, choose the mesh/material and load the PNG."
+)
+
+
+def _wf_physics_norm(name: str) -> str:
+    return "".join(ch for ch in str(name).lower() if ch.isalnum())
+
+
+_WF_SOFT_PHYSX_BY_NORM = {_wf_physics_norm(n): n for n in _WF_SOFT_PHYSX_PROPERTIES}
+
+
+def _wf_physics_canonical(names: Any) -> tuple[list[str], list[str]]:
+    """Map requested property names to RLPy keys. Returns (canonical, unknown)."""
+    canonical: list[str] = []
+    unknown: list[str] = []
+    for name in names or []:
+        key = _WF_SOFT_PHYSX_BY_NORM.get(_wf_physics_norm(name))
+        if key is None:
+            unknown.append(str(name))
+        elif key not in canonical:
+            canonical.append(key)
+    return canonical, unknown
+
+
+def _wf_physics_strs(value: Any) -> list[str]:
+    try:
+        return [str(v) for v in (value or [])]
+    except Exception:
+        return []
+
+
+def _wf_physics_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and value == value  # not NaN
+        and value not in (float("inf"), float("-inf"))
+    )
+
+
+def _wf_physics_component(obj, kind: str | None):
+    """Return (RIPhysicsComponent, error_dict_or_None) for a resolved item."""
+    name = _wf_obj_name(obj)
+    getter = getattr(obj, "GetPhysicsComponent", None)
+    if getter is None:
+        hint = ""
+        if kind == "prop":
+            hint = (
+                " Props have no physics component in RLPy; turn the prop into cloth or "
+                "an accessory first (for example with transfer_skin_weights)."
+            )
+        return None, {
+            "success": False,
+            "error": (
+                f"'{name}' ({kind}) has no GetPhysicsComponent in RLPy; only cloth, "
+                f"accessory, hair and avatar items have one.{hint}"
+            ),
+        }
+    try:
+        comp = getter()
+    except Exception as e:
+        return None, {"success": False, "error": f"GetPhysicsComponent failed for '{name}': {e}"}
+    if comp is None:
+        return None, {
+            "success": False,
+            "error": f"'{name}' has no physics component (GetPhysicsComponent returned None)",
+        }
+    return comp, None
+
+
+def _wf_physics_meshes(comp) -> tuple[dict[str, list[str]] | None, str | None]:
+    """Soft-cloth mesh -> material names, or (None, reason) when unreadable."""
+    if not hasattr(comp, "GetSoftPhysicsMeshNameList"):
+        return None, "RLPy has no GetSoftPhysicsMeshNameList"
+    try:
+        meshes = _wf_physics_strs(comp.GetSoftPhysicsMeshNameList())
+    except Exception as e:
+        return None, f"GetSoftPhysicsMeshNameList failed: {e}"
+    result: dict[str, list[str]] = {}
+    for mesh in meshes:
+        materials: list[str] = []
+        if hasattr(comp, "GetSoftPhysicsMaterialNameList"):
+            try:
+                materials = _wf_physics_strs(comp.GetSoftPhysicsMaterialNameList(mesh))
+            except Exception as e:
+                print(f"[CC5 MCP Bridge] GetSoftPhysicsMaterialNameList({mesh!r}) failed: {e}")
+        result[mesh] = materials
+    return result, None
+
+
+def _wf_physics_mesh_list(meshes: dict[str, list[str]] | None) -> list[dict[str, Any]]:
+    return [{"mesh": m, "materials": list(mats)} for m, mats in (meshes or {}).items()]
+
+
+def _wf_physics_target(params: dict[str, Any], strict: bool = True):
+    """Resolve item + physics component + mesh/material.
+
+    Returns (ctx, error). ctx has obj, name, comp, mesh, material, notes.
+    With strict=False an unknown mesh/material is only noted (the weight-map
+    load may be what turns soft cloth on for that material).
+    """
+    obj, kind, error = _wf_resolve(params.get("item_name"), params.get("item_id"))
+    if error:
+        return None, error
+    name = _wf_obj_name(obj)
+    comp, error = _wf_physics_component(obj, kind)
+    if error:
+        return None, error
+
+    notes: list[str] = []
+    mesh = str(params.get("mesh_name") or "").strip()
+    material = str(params.get("material_name") or "").strip()
+    meshes, list_error = _wf_physics_meshes(comp)
+
+    if meshes is None:
+        if not mesh or not material:
+            return None, {
+                "success": False,
+                "error": (
+                    "mesh_name and material_name are required (the soft-cloth mesh list "
+                    f"could not be read: {list_error})"
+                ),
+            }
+        notes.append(f"Soft-cloth mesh list unavailable ({list_error}); names were not checked.")
+    else:
+        listing = _wf_physics_mesh_list(meshes)
+        if not mesh:
+            if len(meshes) == 1:
+                mesh = next(iter(meshes))
+            elif not meshes:
+                return None, {
+                    "success": False,
+                    "error": (
+                        f"'{name}' has no soft-cloth meshes yet, so mesh_name and "
+                        "material_name must be given (see get_material_info). Soft cloth "
+                        "is set up per material by loading a weight map."
+                    ),
+                    "meshes": listing,
+                }
+            else:
+                return None, {
+                    "success": False,
+                    "error": "mesh_name is required (the item has several soft-cloth meshes)",
+                    "meshes": listing,
+                }
+        if mesh not in meshes:
+            message = f"Mesh {mesh!r} has no soft-cloth physics on '{name}'"
+            if strict:
+                return None, {"success": False, "error": message, "meshes": listing}
+            notes.append(message + " yet.")
+        materials = meshes.get(mesh, [])
+        if not material:
+            if len(materials) == 1:
+                material = materials[0]
+            else:
+                return None, {
+                    "success": False,
+                    "error": f"material_name is required for mesh {mesh!r}",
+                    "meshes": listing,
+                }
+        if materials and material not in materials:
+            message = f"Material {material!r} on mesh {mesh!r} has no soft-cloth physics"
+            if strict:
+                return None, {"success": False, "error": message, "meshes": listing}
+            notes.append(message + " yet.")
+        elif mesh in meshes and not materials:
+            notes.append(f"No soft-cloth material list for mesh {mesh!r}; material name not checked.")
+
+    return {
+        "obj": obj,
+        "name": name,
+        "comp": comp,
+        "mesh": mesh,
+        "material": material,
+        "notes": notes,
+    }, None
+
+
+def _wf_physics_activate_state(comp) -> bool | None:
+    if not hasattr(comp, "IsActivatePhysicsEnable"):
+        return None
+    try:
+        return bool(comp.IsActivatePhysicsEnable())
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] IsActivatePhysicsEnable failed: {e}")
+        return None
+
+
+def _wf_physics_read_props(comp, mesh: str, material: str, names: list[str]):
+    """Read SoftPhysX properties. Returns (values, unreadable)."""
+    values: dict[str, Any] = {}
+    unreadable: dict[str, str] = {}
+    for key in names:
+        try:
+            raw = comp.GetSoftPhysXProperty(mesh, material, key)
+        except Exception as e:
+            unreadable[key] = str(e)
+            continue
+        if raw is None:
+            unreadable[key] = "returned None"
+            continue
+        values[key] = _wf_jsonable(raw)
+    return values, unreadable
+
+
+def _wf_physics_probe(comp, mesh: str, material: str, name: str) -> dict[str, Any] | None:
+    """Read one collision shape; None when neither getter gives a value."""
+    entry: dict[str, Any] = {"name": name, "enabled": None, "value": None}
+    found = False
+    if hasattr(comp, "GetSoftPhysXCollisionEnable"):
+        try:
+            raw = comp.GetSoftPhysXCollisionEnable(mesh, material, name)
+            if raw is not None:
+                entry["enabled"] = bool(raw)
+                found = True
+        except Exception:
+            pass
+    if hasattr(comp, "GetSoftPhysXCollisionValue"):
+        try:
+            raw = comp.GetSoftPhysXCollisionValue(mesh, material, name)
+            if raw is not None:
+                entry["value"] = _wf_jsonable(raw)
+                found = True
+        except Exception:
+            pass
+    return entry if found else None
+
+
+def _wf_physics_bone_names(obj) -> list[str]:
+    """Skin bone names of the avatar that owns obj (default collision candidates)."""
+    avatar = _wf_owner_avatar(obj)
+    if avatar is None:
+        try:
+            avatar = get_first_avatar()
+        except Exception:
+            avatar = None
+    if avatar is None:
+        return []
+    try:
+        bones = avatar.GetSkeletonComponent().GetSkinBones() or []
+    except Exception as e:
+        print(f"[CC5 MCP Bridge] collision bone list failed: {e}")
+        return []
+    names: list[str] = []
+    for bone in bones:
+        try:
+            bone_name = bone.GetName()
+        except Exception:
+            continue
+        if bone_name and bone_name not in names:
+            names.append(bone_name)
+    return names
+
+
+def _wf_physics_close(a: Any, b: Any) -> bool:
+    try:
+        a, b = float(a), float(b)
+    except Exception:
+        return False
+    return abs(a - b) <= 1e-3 * max(1.0, abs(b))
+
+
+def _wf_physics_reply(ctx: dict[str, Any], **extra: Any) -> dict[str, Any]:
+    reply: dict[str, Any] = {
+        "success": True,
+        "name": ctx["name"],
+        "mesh": ctx["mesh"],
+        "material": ctx["material"],
+    }
+    reply.update(extra)
+    if ctx["notes"]:
+        reply["notes"] = list(ctx["notes"])
+    return reply
+
+
+def wf_physics_info(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/physics/info: Activate Physics state and soft-cloth meshes/materials."""
+    params = _wf_params(body, kwargs)
+    try:
+        obj, kind, error = _wf_resolve(params.get("item_name"), params.get("item_id"))
+        if error:
+            return error
+        comp, error = _wf_physics_component(obj, kind)
+        if error:
+            return error
+        meshes, list_error = _wf_physics_meshes(comp)
+        reply: dict[str, Any] = {
+            "success": True,
+            "name": _wf_obj_name(obj),
+            "kind": kind,
+            "activate": _wf_physics_activate_state(comp),
+            "meshes": _wf_physics_mesh_list(meshes),
+            "properties": list(_WF_SOFT_PHYSX_PROPERTIES),
+            "weight_map_import": hasattr(comp, "SetPhysicsSoftColthWeightMap"),
+        }
+        if list_error:
+            reply["notes"] = [list_error]
+        return reply
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_physics_activate(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/physics/activate: turn Activate Physics on/off for a whole item."""
+    params = _wf_params(body, kwargs)
+    try:
+        enable = params.get("enable")
+        if not isinstance(enable, bool):
+            return {"success": False, "error": "enable (true or false) is required"}
+        obj, kind, error = _wf_resolve(params.get("item_name"), params.get("item_id"))
+        if error:
+            return error
+        comp, error = _wf_physics_component(obj, kind)
+        if error:
+            return error
+        name = _wf_obj_name(obj)
+        if not hasattr(comp, "SetActivatePhysicsEnable"):
+            return {
+                "success": False,
+                "error": f"RLPy has no SetActivatePhysicsEnable. {_WF_PHYSICS_GUI_HINT}",
+            }
+        RLPy.RGlobal.BeginAction("wf_physics_activate")
+        try:
+            status = comp.SetActivatePhysicsEnable(enable)
+        finally:
+            RLPy.RGlobal.EndAction()
+        ok, desc = _describe_rlpy_status(status)
+        if ok is False:
+            return {"success": False, "error": f"CC5 refused SetActivatePhysicsEnable ({desc})"}
+        after = _wf_physics_activate_state(comp)
+        if after is not None and after != enable:
+            return {
+                "success": False,
+                "error": f"Activate Physics is still {after} after setting it to {enable}",
+                "activate": after,
+            }
+        return {
+            "success": True,
+            "name": name,
+            "activate": enable if after is None else after,
+            "verified": after is not None,
+            "notes": [
+                "Activate Physics is one switch for the whole item; RLPy has no "
+                "per-mesh or per-material switch."
+            ],
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_physics_load_weight_map(
+    body: dict[str, Any] | None = None, **kwargs: Any
+) -> dict[str, Any]:
+    """Route /workflow/physics/weight_map: load a soft-cloth weight map PNG for one material."""
+    params = _wf_params(body, kwargs)
+    try:
+        file_path = str(params.get("file_path") or "").strip()
+        if not file_path:
+            return {"success": False, "error": "file_path is required"}
+        path_error = _validate_path(file_path, {".png"})
+        if path_error:
+            return {"success": False, "error": path_error}
+        if not os.path.isfile(file_path):
+            return {"success": False, "error": f"File not found: {file_path}"}
+        ctx, error = _wf_physics_target(params, strict=False)
+        if error:
+            return error
+        comp = ctx["comp"]
+        setter = getattr(comp, "SetPhysicsSoftColthWeightMap", None)
+        if setter is None:
+            return {
+                "success": False,
+                "gui_only": True,
+                "error": (
+                    "This CC5 build's RLPy has no SetPhysicsSoftColthWeightMap, so the "
+                    f"weight map cannot be loaded from a script. {_WF_WEIGHT_MAP_GUI_HINT}"
+                ),
+            }
+        RLPy.RGlobal.BeginAction("wf_physics_load_weight_map")
+        try:
+            status = setter(ctx["mesh"], ctx["material"], file_path)
+        except Exception as e:
+            return {
+                "success": False,
+                "gui_only": True,
+                "error": f"SetPhysicsSoftColthWeightMap failed: {e}. {_WF_WEIGHT_MAP_GUI_HINT}",
+            }
+        finally:
+            RLPy.RGlobal.EndAction()
+        ok, desc = _describe_rlpy_status(status)
+        if ok is False:
+            return {
+                "success": False,
+                "gui_only": True,
+                "error": f"CC5 refused the weight map ({desc}). {_WF_WEIGHT_MAP_GUI_HINT}",
+            }
+        present = None
+        if hasattr(comp, "GetPhysicsSoftColthWeightMap"):
+            try:
+                present = comp.GetPhysicsSoftColthWeightMap(ctx["mesh"], ctx["material"]) is not None
+            except Exception as e:
+                ctx["notes"].append(f"GetPhysicsSoftColthWeightMap failed: {e}")
+        return _wf_physics_reply(
+            ctx,
+            path=file_path,
+            status=desc,
+            weight_map_present=present,
+        )
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_physics_get_params(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/physics/params/get: read Soft PhysX properties of one material."""
+    params = _wf_params(body, kwargs)
+    try:
+        requested = params.get("names")
+        if requested is not None and not isinstance(requested, list):
+            return {"success": False, "error": "names must be a list of property names"}
+        names, unknown = _wf_physics_canonical(requested or _WF_SOFT_PHYSX_PROPERTIES)
+        if unknown:
+            return {
+                "success": False,
+                "error": f"Unknown Soft PhysX property: {', '.join(unknown)}",
+                "allowed": list(_WF_SOFT_PHYSX_PROPERTIES),
+            }
+        ctx, error = _wf_physics_target(params)
+        if error:
+            return error
+        comp = ctx["comp"]
+        if not hasattr(comp, "GetSoftPhysXProperty"):
+            return {
+                "success": False,
+                "error": f"RLPy has no GetSoftPhysXProperty. {_WF_PHYSICS_GUI_HINT}",
+            }
+        values, unreadable = _wf_physics_read_props(comp, ctx["mesh"], ctx["material"], names)
+        if not values and unreadable:
+            return {
+                "success": False,
+                "error": "No Soft PhysX property could be read",
+                "unreadable": unreadable,
+            }
+        reply = _wf_physics_reply(ctx, params=values)
+        if unreadable:
+            reply["unreadable"] = unreadable
+        return reply
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_physics_set_params(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/physics/params/set: write Soft PhysX properties, then read them back."""
+    params = _wf_params(body, kwargs)
+    try:
+        raw_values = params.get("values")
+        if not isinstance(raw_values, dict) or not raw_values:
+            return {"success": False, "error": "values must be a non-empty object {name: number}"}
+        wanted: dict[str, float] = {}
+        unknown: list[str] = []
+        for raw_name, raw_value in raw_values.items():
+            key = _WF_SOFT_PHYSX_BY_NORM.get(_wf_physics_norm(raw_name))
+            if key is None:
+                unknown.append(str(raw_name))
+                continue
+            if isinstance(raw_value, bool):
+                wanted[key] = 1.0 if raw_value else 0.0
+            elif _wf_physics_number(raw_value):
+                wanted[key] = float(raw_value)
+            else:
+                return {"success": False, "error": f"Value for {raw_name} must be a number or boolean"}
+        if unknown:
+            return {
+                "success": False,
+                "error": f"Unknown Soft PhysX property: {', '.join(unknown)}",
+                "allowed": list(_WF_SOFT_PHYSX_PROPERTIES),
+            }
+        ctx, error = _wf_physics_target(params)
+        if error:
+            return error
+        comp = ctx["comp"]
+        if not hasattr(comp, "SetSoftPhysXProperty"):
+            return {
+                "success": False,
+                "error": f"RLPy has no SetSoftPhysXProperty. {_WF_PHYSICS_GUI_HINT}",
+            }
+        keys = list(wanted)
+        can_read = hasattr(comp, "GetSoftPhysXProperty")
+        before = _wf_physics_read_props(comp, ctx["mesh"], ctx["material"], keys)[0] if can_read else {}
+        failures: dict[str, str] = {}
+        RLPy.RGlobal.BeginAction("wf_physics_set_params")
+        try:
+            for key, value in wanted.items():
+                try:
+                    status = comp.SetSoftPhysXProperty(ctx["mesh"], ctx["material"], key, value)
+                except Exception as e:
+                    failures[key] = str(e)
+                    continue
+                ok, desc = _describe_rlpy_status(status)
+                if ok is False:
+                    failures[key] = f"refused ({desc})"
+        finally:
+            RLPy.RGlobal.EndAction()
+        after: dict[str, Any] = {}
+        if can_read:
+            after = _wf_physics_read_props(comp, ctx["mesh"], ctx["material"], keys)[0]
+        else:
+            ctx["notes"].append("RLPy has no GetSoftPhysXProperty; values were not read back.")
+        mismatched = {
+            key: {"wanted": value, "got": after[key]}
+            for key, value in wanted.items()
+            if key not in failures and key in after and not _wf_physics_close(after[key], value)
+        }
+        reply = _wf_physics_reply(ctx, before=before, after=after)
+        if failures or mismatched:
+            problems = []
+            if failures:
+                problems.append("write failed for " + ", ".join(failures))
+            if mismatched:
+                problems.append("read-back differs for " + ", ".join(mismatched))
+            reply["success"] = False
+            reply["error"] = "; ".join(problems)
+            if failures:
+                reply["failures"] = failures
+            if mismatched:
+                reply["mismatched"] = mismatched
+        return reply
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_physics_get_collision(
+    body: dict[str, Any] | None = None, **kwargs: Any
+) -> dict[str, Any]:
+    """Route /workflow/physics/collision/get: collision shapes for one soft-cloth material.
+
+    RLPy has no call that lists collision shapes, so names are probed: the given
+    collision_names, or every skin bone of the owning avatar.
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        requested = params.get("collision_names")
+        if requested is not None and not isinstance(requested, list):
+            return {"success": False, "error": "collision_names must be a list of names"}
+        ctx, error = _wf_physics_target(params)
+        if error:
+            return error
+        comp = ctx["comp"]
+        if not (
+            hasattr(comp, "GetSoftPhysXCollisionEnable")
+            or hasattr(comp, "GetSoftPhysXCollisionValue")
+        ):
+            return {
+                "success": False,
+                "error": f"RLPy has no GetSoftPhysXCollision* methods. {_WF_PHYSICS_GUI_HINT}",
+            }
+        explicit = bool(requested)
+        names = [str(n) for n in requested] if explicit else _wf_physics_bone_names(ctx["obj"])
+        if not names:
+            return {
+                "success": False,
+                "error": "No collision names to check: give collision_names (no avatar bones found)",
+            }
+        shapes: list[dict[str, Any]] = []
+        unknown: list[str] = []
+        for collision_name in names:
+            entry = _wf_physics_probe(comp, ctx["mesh"], ctx["material"], collision_name)
+            if entry is None:
+                unknown.append(collision_name)
+            else:
+                shapes.append(entry)
+        reply = _wf_physics_reply(ctx, shapes=shapes, probed=len(names))
+        if explicit and unknown:
+            reply["unknown"] = unknown
+        reply.setdefault("notes", []).append(
+            "RLPy cannot list collision shapes; names were probed. 'value' is the number "
+            "RLPy calls the collision value (most likely the margin)."
+        )
+        return reply
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_physics_set_collision(
+    body: dict[str, Any] | None = None, **kwargs: Any
+) -> dict[str, Any]:
+    """Route /workflow/physics/collision/set: enable/disable shapes and set their value."""
+    params = _wf_params(body, kwargs)
+    try:
+        shapes = params.get("shapes")
+        if not isinstance(shapes, list) or not shapes:
+            return {
+                "success": False,
+                "error": "shapes must be a non-empty list of {name, enabled?, value?}",
+            }
+        for shape in shapes:
+            if not isinstance(shape, dict) or not str(shape.get("name") or "").strip():
+                return {"success": False, "error": "every shape needs a name"}
+            if "enabled" not in shape and "value" not in shape:
+                return {
+                    "success": False,
+                    "error": f"shape {shape['name']!r} needs enabled and/or value",
+                }
+            if "enabled" in shape and not isinstance(shape["enabled"], bool):
+                return {"success": False, "error": f"enabled for {shape['name']!r} must be true/false"}
+            if "value" in shape and not _wf_physics_number(shape["value"]):
+                return {"success": False, "error": f"value for {shape['name']!r} must be a number"}
+        ctx, error = _wf_physics_target(params)
+        if error:
+            return error
+        comp = ctx["comp"]
+        mesh, material = ctx["mesh"], ctx["material"]
+        needs_enable = any("enabled" in s for s in shapes)
+        needs_value = any("value" in s for s in shapes)
+        if needs_enable and not hasattr(comp, "SetSoftPhysXCollisionEnable"):
+            return {
+                "success": False,
+                "error": f"RLPy has no SetSoftPhysXCollisionEnable. {_WF_PHYSICS_GUI_HINT}",
+            }
+        if needs_value and not hasattr(comp, "SetSoftPhysXCollisionValue"):
+            return {
+                "success": False,
+                "error": f"RLPy has no SetSoftPhysXCollisionValue. {_WF_PHYSICS_GUI_HINT}",
+            }
+
+        results: list[dict[str, Any]] = []
+        problems: list[str] = []
+        RLPy.RGlobal.BeginAction("wf_physics_set_collision")
+        try:
+            for shape in shapes:
+                collision_name = str(shape["name"]).strip()
+                before = _wf_physics_probe(comp, mesh, material, collision_name)
+                errors: list[str] = []
+                if "enabled" in shape:
+                    try:
+                        status = comp.SetSoftPhysXCollisionEnable(
+                            mesh, material, collision_name, shape["enabled"]
+                        )
+                        ok, desc = _describe_rlpy_status(status)
+                        if ok is False:
+                            errors.append(f"enable refused ({desc})")
+                    except Exception as e:
+                        errors.append(f"enable failed: {e}")
+                if "value" in shape:
+                    try:
+                        status = comp.SetSoftPhysXCollisionValue(
+                            mesh, material, collision_name, float(shape["value"])
+                        )
+                        ok, desc = _describe_rlpy_status(status)
+                        if ok is False:
+                            errors.append(f"value refused ({desc})")
+                    except Exception as e:
+                        errors.append(f"value failed: {e}")
+                after = _wf_physics_probe(comp, mesh, material, collision_name)
+                if after is not None:
+                    if (
+                        "enabled" in shape
+                        and after.get("enabled") is not None
+                        and after["enabled"] != shape["enabled"]
+                    ):
+                        errors.append(f"enabled reads back as {after['enabled']}")
+                    if (
+                        "value" in shape
+                        and after.get("value") is not None
+                        and not _wf_physics_close(after["value"], shape["value"])
+                    ):
+                        errors.append(f"value reads back as {after['value']}")
+                entry: dict[str, Any] = {"name": collision_name, "before": before, "after": after}
+                if errors:
+                    entry["errors"] = errors
+                    problems.append(f"{collision_name}: {'; '.join(errors)}")
+                results.append(entry)
+        finally:
+            RLPy.RGlobal.EndAction()
+
+        reply = _wf_physics_reply(ctx, shapes=results)
+        if problems:
+            reply["success"] = False
+            reply["error"] = " | ".join(problems)
+        return reply
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 # --- Auto-patch server ACTION_MAP on reload ---
 
 def _auto_patch_server() -> None:
@@ -6932,6 +7885,7 @@ def _auto_patch_server() -> None:
         "wf_cloth_to_accessory":     wf_cloth_to_accessory,
         "wf_conform_cloth":          wf_conform_cloth,
         "wf_get_transform":          wf_get_transform,
+        "wf_bone_rotation":          wf_bone_rotation,
         "wf_set_transform":          wf_set_transform,
         "wf_save_project":           wf_save_project,
         "wf_export_obj":             wf_export_obj,
@@ -6940,6 +7894,14 @@ def _auto_patch_server() -> None:
         "wf_auto_adjust_foot_height": wf_auto_adjust_foot_height,
         "wf_render_viewport":        wf_render_viewport,
         "wf_capture_views4":         wf_capture_views4,
+        # Physics (Soft Cloth) routes
+        "wf_physics_info":            wf_physics_info,
+        "wf_physics_activate":        wf_physics_activate,
+        "wf_physics_load_weight_map": wf_physics_load_weight_map,
+        "wf_physics_get_params":      wf_physics_get_params,
+        "wf_physics_set_params":      wf_physics_set_params,
+        "wf_physics_get_collision":   wf_physics_get_collision,
+        "wf_physics_set_collision":   wf_physics_set_collision,
     })
 
     # Also patch routes so new endpoints work after reload
@@ -7004,6 +7966,7 @@ def _auto_patch_server() -> None:
             "/workflow/cloth_to_accessory": "wf_cloth_to_accessory",
             "/workflow/conform":            "wf_conform_cloth",
             "/workflow/transform/get":      "wf_get_transform",
+            "/workflow/bone/rotation":      "wf_bone_rotation",
             "/workflow/transform/set":      "wf_set_transform",
             "/workflow/save":               "wf_save_project",
             "/workflow/export_obj":         "wf_export_obj",
@@ -7012,6 +7975,13 @@ def _auto_patch_server() -> None:
             "/workflow/foot_auto":          "wf_auto_adjust_foot_height",
             "/workflow/render":             "wf_render_viewport",
             "/workflow/views4":             "wf_capture_views4",
+            "/workflow/physics/info":           "wf_physics_info",
+            "/workflow/physics/activate":       "wf_physics_activate",
+            "/workflow/physics/weight_map":     "wf_physics_load_weight_map",
+            "/workflow/physics/params/get":     "wf_physics_get_params",
+            "/workflow/physics/params/set":     "wf_physics_set_params",
+            "/workflow/physics/collision/get":  "wf_physics_get_collision",
+            "/workflow/physics/collision/set":  "wf_physics_set_collision",
         })
     if hasattr(srv, "GET_ROUTES"):
         srv.GET_ROUTES.update({

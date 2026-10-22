@@ -541,3 +541,111 @@ export interface WorkflowViews4Result extends OperationResult {
   /** [front, side, top, perspective] */
   files?: string[];
 }
+
+// --- Physics (Soft Cloth) workflow routes (/workflow/physics/*) ---
+
+/**
+ * Soft PhysX property names accepted by /workflow/physics/params/*.
+ * RLPy does not document them; this is CC5's own soft-cloth key table.
+ * SoftVsRigidCollision and SelfCollision are on/off switches (1 / 0).
+ */
+export const SOFT_PHYSX_PROPERTIES = [
+  "Mass",
+  "Friction",
+  "SolverFrequency",
+  "Damping",
+  "TetherLimit",
+  "Drag",
+  "Elasticity",
+  "Stretch",
+  "Bending",
+  "Inertia",
+  "SoftVsRigidCollisionMargin",
+  "SelfCollisionMargin",
+  "SoftVsRigidCollision",
+  "SelfCollision",
+] as const;
+
+export type SoftPhysxProperty = (typeof SOFT_PHYSX_PROPERTIES)[number];
+
+/** Optional soft-cloth mesh/material target (auto-picked when the item has only one). */
+export interface PhysicsMaterialTarget {
+  mesh_name?: string;
+  material_name?: string;
+}
+
+export interface PhysicsMeshEntry {
+  mesh: string;
+  materials: string[];
+}
+
+/** Shared reply fields for routes that act on one soft-cloth material. */
+export interface PhysicsMaterialResult extends WorkflowItemResult {
+  mesh?: string;
+  material?: string;
+  notes?: string[];
+  /** Soft-cloth meshes, sent when the mesh/material was missing or unknown. */
+  meshes?: PhysicsMeshEntry[];
+}
+
+export interface PhysicsInfoResult extends WorkflowItemResult {
+  kind?: WorkflowItemKind;
+  /** Activate Physics state; null when it could not be read. */
+  activate?: boolean | null;
+  meshes?: PhysicsMeshEntry[];
+  properties?: string[];
+  weight_map_import?: boolean;
+  notes?: string[];
+}
+
+export interface PhysicsActivateResult extends WorkflowItemResult {
+  activate?: boolean;
+  verified?: boolean;
+  notes?: string[];
+}
+
+export interface PhysicsWeightMapResult extends PhysicsMaterialResult {
+  path?: string;
+  status?: string;
+  weight_map_present?: boolean | null;
+  /** True when the weight map must be loaded by hand in the CC5 GUI. */
+  gui_only?: boolean;
+}
+
+export interface PhysicsParamsResult extends PhysicsMaterialResult {
+  params?: Record<string, unknown>;
+  before?: Record<string, unknown>;
+  after?: Record<string, unknown>;
+  unreadable?: Record<string, string>;
+  failures?: Record<string, string>;
+  mismatched?: Record<string, { wanted: number; got: unknown }>;
+  allowed?: string[];
+}
+
+export interface PhysicsCollisionShape {
+  name: string;
+  enabled: boolean | null;
+  value: number | null;
+}
+
+/** One collision-shape change to apply; at least one of enabled/value is set. */
+export interface PhysicsCollisionUpdate {
+  name: string;
+  enabled?: boolean;
+  value?: number;
+}
+
+export interface PhysicsCollisionGetResult extends PhysicsMaterialResult {
+  shapes?: PhysicsCollisionShape[];
+  probed?: number;
+  unknown?: string[];
+}
+
+export interface PhysicsCollisionSetResult extends PhysicsMaterialResult {
+  shapes?: Array<{
+    name: string;
+    before: PhysicsCollisionShape | null;
+    after: PhysicsCollisionShape | null;
+    errors?: string[];
+  }>;
+}

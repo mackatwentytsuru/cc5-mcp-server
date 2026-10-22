@@ -18,9 +18,9 @@ The MCP server communicates with Claude via **stdio** transport and forwards com
 
 ## Features
 
-### MCP Tools (78)
+### MCP Tools (85)
 
-The MCP server provides 78 tools (registered in 18 modules under `src/tools/`) for controlling CC5. This list matches the code: there is one `server.tool(` call per tool in `src/tools/*.ts` (78 in total, all with unique names).
+The MCP server provides 85 tools (registered in 18 modules under `src/tools/`) for controlling CC5. This list matches the code: there is one `server.tool(` call per tool in `src/tools/*.ts` (85 in total, all with unique names).
 
 #### Scene & Avatar Management (8)
 | Tool | Description |
@@ -132,7 +132,7 @@ The MCP server provides 78 tools (registered in 18 modules under `src/tools/`) f
 |------|-------------|
 | `exec_python` | Execute Python code inside CC5's RLPy environment. **Off by default** -- works only when `CC5_ALLOW_EXEC=1` is set, see [Security](#security) |
 
-#### Text-only workflow tools (18)
+#### Text-only workflow tools (25)
 
 These tools drive the `/workflow/*` routes. They work without the GUI and are meant for text-only models; after every change, call `capture_views4` and check all 4 images (front X, side Y, top Z, perspective).
 
@@ -156,6 +156,13 @@ These tools drive the `/workflow/*` routes. They work without the GUI and are me
 | `auto_adjust_foot_height` | Automatically adjust foot height so the avatar stands on the floor |
 | `render_viewport` | Render the current viewport to a PNG file |
 | `capture_views4` | Save 4 check images (front, side, top, perspective) and put the camera back |
+| `get_physics_info` | Show Activate Physics, the soft-cloth meshes/materials and the Soft PhysX property names of a cloth/accessory/hair/avatar item |
+| `set_physics_active` | Turn Activate Physics on/off for a whole item (RLPy has no per-material switch) |
+| `load_physics_weight_map` | Load a Soft Cloth weight map PNG for one mesh/material (if this fails, load it by hand: Modify > Physics > Weight Map) |
+| `get_soft_physics_params` | Read Soft PhysX properties (Mass, Friction, SolverFrequency, Damping, TetherLimit, Drag, Elasticity, Stretch, Bending, Inertia, SoftVsRigidCollisionMargin, SelfCollisionMargin, SoftVsRigidCollision, SelfCollision) |
+| `set_soft_physics_params` | Set Soft PhysX properties and read them back |
+| `get_physics_collision` | List collision shapes (probed by bone name) with on/off state and value |
+| `set_physics_collision` | Turn collision shapes on/off and/or set their value, with read-back |
 
 ### MCP Resources
 
@@ -325,7 +332,7 @@ cc5-mcp-server/
 │   ├── cc5-bridge.ts       # HTTP client for CC5 bridge
 │   ├── types.ts            # Type definitions
 │   ├── util.ts             # Shared utilities (bridgeCall wrapper)
-│   ├── tools/              # MCP tool definitions (18 files, 78 tools total)
+│   ├── tools/              # MCP tool definitions (18 files, 85 tools total)
 │   │   ├── morph.ts        # Morph search, adjust, reset (5 tools)
 │   │   ├── scene.ts        # Scene/avatar management, viewport, subdivision (7 tools)
 │   │   ├── asset.ts        # Asset loading / FBX export (2 tools)
@@ -342,7 +349,7 @@ cc5-mcp-server/
 │   │   ├── facial-profile.ts # Facial profile detect + convert (2 tools)
 │   │   ├── scripting.ts    # Python execution (1 tool)
 │   │   ├── metahuman.ts    # MetaHuman export (2 tools)
-│   │   └── workflow.ts     # Text-only workflow routes (18 tools)
+│   │   └── workflow.ts     # Text-only workflow routes (25 tools)
 │   └── resources/
 │       └── morphs.ts       # Morph catalog & avatar state resources
 ├── cc5-plugin/             # CC5 Python plugin
