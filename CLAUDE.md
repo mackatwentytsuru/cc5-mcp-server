@@ -3,6 +3,10 @@
 ## 概要
 Reallusion Character Creator 5 (CC5) を Claude などの LLM から自然言語で操作するための MCP サーバー。
 
+最終目標: トリポなどで作った 3D モデルを、CC5 で簡単にキャラクター・衣装・靴として使えるようにすること。
+合わせ込みの多くはブレンダーで行うので、**ブレンダーには CC/iC Blender Tools アドオンを必ず入れる**
+（`scripts/install-blender-addon.ps1`）。ブレンダーを LLM から直接動かす Blender MCP も入れることをすすめる。
+
 ## アーキテクチャ
 
 ```
@@ -209,7 +213,22 @@ npm install && npm run build
 powershell -ExecutionPolicy Bypass -File install-plugin.ps1
 ```
 
-### 3. Claude Code への MCP 登録
+### 3. ブレンダーに CC/iC Blender Tools を入れる（必須）
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-blender-addon.ps1
+```
+- soupday/cc_blender_tools（Reallusion 公式の CC/iC Tools）の決めた版を GitHub から落とし、
+  ブレンダーのユーザーアドオンに `cc_blender_tools` として入れて有効にする。
+- これがないと CC5 ⇄ ブレンダーの往復ができない。CC5 の書き出しを正しい元の姿勢で読めず、
+  ブレンダーの結果を FbxKey 付きで CC5 に戻せない（CC5 が「Characterize」を聞いてきて、
+  アバターが壊れた `RootNode` に置きかわる）。
+- 往復の手順（靴・ハイヒールのブーツで確認済み）は README の
+  「3. Install CC/iC Blender Tools in Blender」の表。CC5 側は `export_fbx` target_tool "Blender"、
+  `/workflow/import_blender`、`/workflow/dialog/table_combo`。
+- 背景実行（`blender -b`）では `read_factory_settings` を呼ばない（アドオンが外れる）。
+  Data Transfer モディファイアは `-b` で空の重みになるので、重みは最寄り頂点からコピーする。
+
+### 4. Claude Code への MCP 登録
 ```json
 "cc5": {
   "command": "node",
@@ -217,8 +236,10 @@ powershell -ExecutionPolicy Bypass -File install-plugin.ps1
   "env": { "CC5_BRIDGE_URL": "http://127.0.0.1:5101" }
 }
 ```
+すすめ: Blender MCP（ahujasid/blender-mcp）も登録する
+`"blender": {"command": "uvx", "args": ["blender-mcp"]}`（ブレンダー側にアドオン「MCP for Blender」）。
 
-### 4. CC5 起動 → 自動でブリッジ起動（手動操作不要）
+### 5. CC5 起動 → 自動でブリッジ起動（手動操作不要）
 
 ## 利用可能な MCP ツール (57個)
 

@@ -601,7 +601,7 @@ def export_fbx(
         output_path: .fbx destination. A bare filename (no directory component)
             is resolved under CC5_EXPORT_DIR (default ``D:\\CC5Export``).
         options_flags: Raw EExportFbxOptions bitmask. If 0, defaults are computed from named flags.
-        target_tool: "UE5" | "Default" | "Maya" | "Unity" — sets sensible base flag preset
+        target_tool: "UE5" | "Default" | "Maya" | "Unity" | "Blender" — sets sensible base flag preset
         sub_d_level: 0|1|2. HD Character Subdivision Level. Applied via
             RExportFbxSetting.SetExportLevel (no scene mutation). Falls back to
             set_subdivision_level only on the flag-less 2-arg export path.
@@ -689,6 +689,19 @@ def export_fbx(
         flags |= _safe_flag("EExportFbxOptions_AutoSkinRigidMesh")
         flags |= _safe_flag("EExportFbxOptions_MayaAdjustMaterial")
         notes.append("target_tool=Maya preset applied")
+    elif target_upper == "BLENDER":
+        # Same flags as the official CC/iC Blender Pipeline plug-in (btp/exporter.py), so
+        # CC/iC Blender Tools can import it and send it back with the FbxKey round trip.
+        flags |= _safe_flag("EExportFbxOptions_AutoSkinRigidMesh")
+        flags |= _safe_flag("EExportFbxOptions_RemoveAllUnused")
+        flags |= _safe_flag("EExportFbxOptions_ExportPbrTextureAsImageInFormatDirectory")
+        flags |= _safe_flag("EExportFbxOptions_FbxKey")
+        flags2 |= _safe_flag("EExportFbxOptions2_ResetBoneScale")
+        flags2 |= _safe_flag("EExportFbxOptions2_ResetSelfillumination")
+        flags2 |= _safe_flag("EExportFbxOptions2_RenameDuplicateMaterialName")
+        flags3 |= _safe_flag("EExportFbxOptions3_ExportJson")
+        flags3 |= _safe_flag("EExportFbxOptions3_ExportVertexColor")
+        notes.append("target_tool=Blender preset applied (CC/iC Blender Pipeline flags, FbxKey + json)")
     elif flags == 0:
         # Default fallback (preserve old behavior)
         flags = _safe_flag("EExportFbxOptions_AutoSkinRigidMesh") | _safe_flag("EExportFbxOptions_ExportRootMotion")
@@ -6789,6 +6802,83 @@ def wf_file_dialog_native(body: dict[str, Any] | None = None, **kwargs: Any) -> 
         return {"success": False, "error": str(e)}
 
 
+def wf_dialog_table_combo(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/dialog/table_combo: read, or set, the combo boxes of a table in an open dialog.
+
+    Body: {"window": "Asset Import Status Report", "row_starts": "beyon_boot", "column": 1,
+    "text": "Shoes"}. Without "text" it only lists the rows. Synthetic mouse input does not open
+    CC5's combo boxes, so this sets them directly (e.g. an imported boot's Type to Shoes).
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        from PySide2.QtWidgets import QApplication, QComboBox, QTableWidget
+
+        title = (params.get("window") or "").strip().lower()
+        if not title:
+            return {"success": False, "error": "window is required"}
+        want_row = (params.get("row_starts") or "").strip()
+        column = int(params.get("column", 1))
+        text = params.get("text")
+        dlg = None
+        for w in QApplication.instance().topLevelWidgets():
+            if w.isVisible() and (w.windowTitle() or "").strip().lower() == title:
+                dlg = w
+                break
+        if dlg is None:
+            return {"success": True, "open": False}
+
+        def combo_of(cw: Any) -> Any:
+            if isinstance(cw, QComboBox):
+                return cw
+            return cw.findChild(QComboBox) if cw is not None else None
+
+        rows, changed = [], []
+        for t in dlg.findChildren(QTableWidget):
+            for r in range(t.rowCount()):
+                item = t.item(r, 0)
+                name = item.text() if item else ""
+                combo = combo_of(t.cellWidget(r, column)) if column < t.columnCount() else None
+                rows.append({"row": name, "value": combo.currentText() if combo else None,
+                             "choices": [combo.itemText(i) for i in range(combo.count())] if combo else []})
+                if text is not None and want_row and name.startswith(want_row) and combo is not None:
+                    i = combo.findText(str(text))
+                    if i < 0:
+                        return {"success": False, "error": f"{name}: no choice {text!r}", "rows": rows}
+                    combo.setCurrentIndex(i)
+                    changed.append({"row": name, "value": combo.currentText()})
+        return {"success": True, "open": True, "changed": changed, "rows": rows}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_import_blender(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/import_blender: load a character sent back from CC/iC Blender Tools.
+
+    Same call as the official CC/iC Blender Pipeline plug-in (btp/importer.py): standard human +
+    the .fbxkey next to the FBX. It REPLACES the avatar in the scene, so save the project first.
+    Body: {"file_path": ".../name.fbx"}. An "Asset Import Status Report" dialog may follow
+    (answer it with /workflow/dialog/table_combo, then press OK).
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        file_path = os.path.abspath((params.get("file_path") or "").strip())
+        path_error = _validate_path(file_path, {".fbx"})
+        if path_error:
+            return {"success": False, "error": path_error}
+        if not os.path.isfile(file_path):
+            return {"success": False, "error": f"File not found: {file_path}"}
+        key = os.path.splitext(file_path)[0] + ".fbxkey"
+        args = RLPy.EImportFbxOption__None | RLPy.EImportFbxOption_StandardHumanCharacter
+        if os.path.isfile(key):
+            RLPy.RFileIO.LoadFbxFile(file_path, args, key, "", True)
+        else:
+            RLPy.RFileIO.LoadFbxFile(file_path, args)
+        return {"success": True, "fbxkey": os.path.isfile(key),
+                "avatars": [a.GetName() for a in RLPy.RScene.GetAvatars()]}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def wf_file_dialog_fill(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
     """Route /workflow/dialog/file_fill: fill the open Qt file dialog of CC and press Open.
 
@@ -8827,6 +8917,8 @@ def _auto_patch_server() -> None:
             "/workflow/morph/editor":       "wf_morph_editor",
             "/workflow/dialog/file_fill":   "wf_file_dialog_fill",
             "/workflow/dialog/native":      "wf_file_dialog_native",
+            "/workflow/dialog/table_combo": "wf_dialog_table_combo",
+            "/workflow/import_blender":     "wf_import_blender",
             "/workflow/timeline":           "wf_timeline",
             "/workflow/buttons":            "wf_buttons",
             "/workflow/pivot":              "wf_pivot",

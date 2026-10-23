@@ -145,12 +145,42 @@ The OBJ is CC5's "Character With Current Pose" export (Z-up, cm) with materials;
   dark green, removed in front of the face.
 - Lift the bangs off the eyes.
 
-### High heels (research, not yet tested)
+### High heels / stiletto boots (tested 2026-10-23, works)
 
-- Official route: fit boots to the FLAT foot, transfer as Shoes, go to T-pose, then
-  High Heels > Heel Height until the heel touches the floor.
-- Do not move the body up or down by hand. Toes poking through: tilt `CC_Base_L/R_Foot` and
-  `ToeBase` at frame 0, or widen the inside of the boot.
+- The manual route (fit to the FLAT foot → Shoes → High Heels) flattens and re-bends the shoe;
+  detailed heels/boots come out warped (forum + bug tracker agree). Rigid sole hinge or
+  "unposing" the boot by hand both failed (front of the boot opened).
+- REQUIRED: CC/iC Blender Tools in Blender (`cc5-mcp-server/scripts/install-blender-addon.ps1`).
+  Check first: `blender -b --python-expr "import bpy; print(hasattr(bpy.ops.cc3,'importer'))"`.
+  Blender MCP (ahujasid/blender-mcp) is recommended for driving Blender live. Helper scripts are
+  copied in `cc5-mcp-server/scripts/blender_pipeline/`.
+- Working route — bend the feet to the boot, never the boot to the feet (CC shoe guide):
+  1. Give the avatar any shoe with High Heels = the wanted height (100) so the feet are bent.
+  2. Export for CC/iC Blender Tools with the official pipeline flags (`scripts/cc5_export_for_blender.py`,
+     or bridge `export_fbx` target_tool "Blender" after the next CC5 start): FbxKey + json + current pose.
+  3. Blender: `bpy.ops.cc3.importer(param="IMPORT", no_build=True, no_rigify=True)` (do not call
+     read_factory_settings first — it unloads the add-on). Rest pose = heel feet, same as the CC scene.
+  4. Put the untouched boot on the feet (rigid move only), copy body weights by nearest leg
+     vertices (Data Transfer modifier gives empty groups in `-b`), `cc3.exporter(param="EXPORT_CC3")`
+     → `scripts/v29_boot_bt.py`.
+  5. CC5: `RFileIO.LoadFbxFile(fbx, EImportFbxOption_StandardHumanCharacter, key, "", True)`
+     (`scripts/cc5_import_from_blender.py`). File > Import "CC Avatar" instead asks to characterize —
+     cancel, it replaces the avatar with "RootNode". The import REPLACES the avatar: save first.
+  6. In "Asset Import Status Report" set the boot's Type to Shoes (`scripts/cc5_qt_dialog_probe.py`).
+  7. Skin poking through a tight boot: black out the leg skin inside the boot with an opacity
+     mask on `CC_Base_Body / Std_Skin_Leg` (UDIM tile 3, u%1), rasterised from body faces below the
+     boot rim − 1 cm. Boots then hold in bent-knee / pointed-foot poses.
+- Only one Shoes item per avatar: Transfer as Shoes with replace removes the old shoes and their heel.
+- `/workflow/high_heels/open` and mouse clicks on the High Heels button often do nothing; the owner can.
+- Do not move the body up or down by hand.
+
+### Running Python inside CC5 without exec_python
+
+- `/workflow/dialog/native {"enable": false}` → `/workflow/menu/trigger "Script > Load Python"` →
+  `/workflow/dialog/file_fill {path, press: true}` → set native back to true. Scripts write a
+  `*_done.txt` so the caller can wait. Works while a modal CC dialog is open.
+- Synthetic mouse/keyboard input does not open CC5 Qt combo boxes; set them from such a script.
+- Bridge JSON bodies must be UTF-8: Japanese paths from Git Bash curl fail — use ASCII file names.
 
 ### Big anime eyes
 
@@ -290,6 +320,7 @@ roughness scales. Always `get_shader_parameters` first, then set.
 
 ## GUI and automation pitfalls
 
+- Minimize other apps (Codex/ChatGPT window is always on top) only with the owner's OK.
 - Never type into Windows Open/Save file-name boxes (renames files). Navigate Open dialogs by
   double-clicking; to save under a new name, copy the file with the shell.
 - CC5 Save-As/Export dialogs create a folder with the typed name and wait for a second name.
