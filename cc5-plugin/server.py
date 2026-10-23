@@ -671,3 +671,12 @@ def stop_server() -> None:
         _httpd.shutdown()
         _httpd.server_close()  # release the listening socket (frees the port)
         _httpd = None
+
+
+# cc5_api is imported at the top of this module, before ACTION_MAP / POST_ROUTES exist, so its
+# _auto_patch_server() found nothing to patch and the /workflow/* routes only appeared after a
+# /reload. Patch once more now that the tables are defined.
+try:
+    cc5_api._auto_patch_server()
+except Exception as _e:  # pragma: no cover - only runs inside CC5
+    print(f"[CC5 MCP Bridge] route patch at startup failed: {_e}")
