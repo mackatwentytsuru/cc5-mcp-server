@@ -318,6 +318,18 @@ roughness scales. Always `get_shader_parameters` first, then set.
   CC3+ base has none — clean error). `set_eye_color` may not visibly change the iris (texture-
   driven); a real change needs a texture swap / SkinGen. Use `set_skin_color` for uniform tone.
 
+## When stuck — check the forum and the official docs first
+
+- After two failed tries at the same thing, stop guessing and search before trying again:
+  Reallusion forum (forum.reallusion.com), the official manual (manual.reallusion.com — CC5 pages
+  first, CC4 when CC5 has none), Reallusion wiki / developer whitepapers (wiki.reallusion.com,
+  developer.reallusion.com), the Feedback Tracker (known bugs), and the official add-on/plug-in
+  sources on GitHub (soupday/cc_blender_tools, soupday/CCiC-Blender-Pipeline-Plugin — read their code
+  for the exact RLPy calls and flags).
+- Example: the high-heel boot was solved only after the forum + shoe guide said "bend the feet to the
+  shoe, don't flatten the shoe", and the pipeline plug-in's code gave the export/import flags.
+- Tell the owner what the sources say (with links) before switching approach.
+
 ## GUI and automation pitfalls
 
 - Minimize other apps (Codex/ChatGPT window is always on top) only with the owner's OK.
