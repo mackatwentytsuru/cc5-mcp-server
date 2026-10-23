@@ -2132,7 +2132,8 @@ def set_material_specular(mesh_name: str, material_name: str, specular: float) -
         key.SetTime(time)
         try:
             RLPy.RGlobal.BeginAction("Set Material Specular")
-            mat_comp.AddSpecularKey(key, mesh_name, material_name, specular)
+            # CC5 keeps specular as 0-100 (GetSpecularWeight returns 25 for 25 %); the tool takes 0-1
+            mat_comp.AddSpecularKey(key, mesh_name, material_name, specular * 100.0)
             RLPy.RGlobal.ObjectModified(avatar, _EOMTYPE_MATERIAL)
         finally:
             RLPy.RGlobal.EndAction()
