@@ -237,7 +237,10 @@ export function registerWorkflowTools(server: McpServer, bridge: CC5Bridge): voi
           if (items.length === 0) return "Scene has no items.";
           const lines = [`Found ${items.length} item(s):`];
           for (const item of items) {
-            const extras = [item.visible ? "visible" : "hidden"];
+            // Cloth and hair have no visibility getter in RLPy; the bridge sends null for them (10-24).
+            const extras = [
+              item.visible === true ? "visible" : item.visible === false ? "hidden" : "visibility unknown",
+            ];
             if (item.parent) extras.push(`parent: ${item.parent}`);
             if (item.cloth_type) extras.push(`cloth: ${item.cloth_type}`);
             if (item.hair_type) extras.push(`hair: ${item.hair_type}`);

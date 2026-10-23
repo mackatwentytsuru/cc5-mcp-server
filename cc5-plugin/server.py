@@ -415,7 +415,11 @@ def process_command_queue() -> None:
                 try:
                     dialogs = cc5_api.open_dialog_summary()
                     if dialogs:
-                        result["open_dialogs"] = dialogs
+                        # First key of the reply, so a curl caller cannot miss it (10-24).
+                        first = dialogs[0]
+                        warn = "DIALOG OPEN - do not send the next call: %s: %s" % (
+                            first.get("title", ""), str(first.get("text", ""))[:160])
+                        result = {"DIALOG_OPEN": warn, **result, "open_dialogs": dialogs}
                 except Exception:
                     pass
 
