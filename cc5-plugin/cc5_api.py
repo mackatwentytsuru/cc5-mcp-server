@@ -7207,6 +7207,237 @@ def wf_set_transform(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[
         return {"success": False, "error": str(e)}
 
 
+def wf_probe(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/probe: read-only. {"path": "RLPy.RFileIO"} returns dir() of that RLPy name.
+
+    Only names under RLPy are followed, nothing is called. Enum values are shown as
+    "name=value" when the name starts with E (e.g. "RLPy.ESaveFileType_Character").
+    Optional "filter": substring to keep in the listing.
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        path = (params.get("path") or "RLPy").strip()
+        parts = path.split(".")
+        if parts[0] != "RLPy" or any((not p) or p.startswith("_") for p in parts):
+            return {"success": False, "error": "path must be RLPy.<name>... without underscores"}
+        obj: Any = RLPy
+        for part in parts[1:]:
+            obj = getattr(obj, part)
+        needle = (params.get("filter") or "").lower()
+        names = [n for n in dir(obj) if not n.startswith("_") and needle in n.lower()]
+        out: dict[str, Any] = {"success": True, "path": path, "type": type(obj).__name__, "names": names[:400]}
+        if parts[-1].startswith("E") or isinstance(obj, (int, float, str)):
+            out["value"] = str(obj)
+        doc = getattr(obj, "__doc__", None)
+        if doc and params.get("doc"):
+            out["doc"] = str(doc)[:1500]
+        return out
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_select(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/select: select one scene item by id/name (clears the selection first).
+
+    Needed before menu actions that work on the selection, e.g. File > Export > Selected Content.
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        obj, kind, error = _wf_resolve(params.get("item_name"), params.get("item_id"))
+        if error:
+            return error
+        RLPy.RScene.ClearSelectObjects()
+        RLPy.RScene.SelectObject(obj)
+        return {"success": True, "selected": _wf_obj_name(obj), "kind": kind}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+_WF_CONTENT_ROOT = "C:/Users/Public/Documents/Reallusion/Reallusion Custom"
+# kind -> (RLPy save type name, file extension, folder under Reallusion Custom)
+_WF_CONTENT_KINDS: dict[str, tuple[str, str, str]] = {
+    "character": ("ESaveFileType_Character", ".ccavatar", "Actor/Character"),
+    "head_morph_skin": ("ESaveFileType_AvatarPresetAll", ".ccavatarpreset", "Avatar Preset/Head Morph Skin"),
+    "head_morph": ("ESaveFileType_AvatarPresetAll", ".ccavatarpreset", "Avatar Preset/Head Morph"),
+    "full_body_morph_skin": ("ESaveFileType_AvatarPresetAll", ".ccavatarpreset", "Avatar Preset/Full Body Morph Skin"),
+}
+
+
+_WF_AUTO_OK_TEXTS = ("please create a morph slider before saving character preset",)
+
+
+class _WfAutoOk:
+    """Context manager: while a blocking RLPy call runs, press OK on known harmless notices.
+
+    SaveFile of a character preset raises a modal notice ("Please create a morph slider
+    before saving character preset...") inside the call, and the bridge is stuck until
+    someone presses OK. A repeating QTimer (runs inside the nested event loop) presses OK
+    only for texts in _WF_AUTO_OK_TEXTS. Anything else is left open and reported.
+    """
+
+    def __init__(self) -> None:
+        self.pressed: list[str] = []
+        self._timer: Any = None
+
+    def _tick(self) -> None:
+        try:
+            from PySide2.QtWidgets import QAbstractButton, QApplication, QDialog
+            for w in QApplication.instance().topLevelWidgets():
+                if not (isinstance(w, QDialog) and w.isVisible()):
+                    continue
+                text = _wf_dialog_text(w).lower()
+                if any(t in text for t in _WF_AUTO_OK_TEXTS):
+                    for b in w.findChildren(QAbstractButton):
+                        if (b.text() or "").replace("&", "").strip().lower() == "ok":
+                            self.pressed.append(text[:80])
+                            b.click()
+                            return
+        except Exception:
+            pass
+
+    def __enter__(self) -> "_WfAutoOk":
+        try:
+            from PySide2.QtCore import QTimer
+            self._timer = QTimer()
+            self._timer.setInterval(300)
+            self._timer.timeout.connect(self._tick)
+            self._timer.start()
+        except Exception:
+            self._timer = None
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        if self._timer is not None:
+            try:
+                self._timer.stop()
+            except Exception:
+                pass
+
+
+def _wf_content_avatar(params: dict[str, Any]):
+    """The avatar a content route works on: item_id / item_name, else the first avatar."""
+    if params.get("item_id") is not None or params.get("item_name"):
+        obj, kind, err = _wf_resolve(params.get("item_name"), params.get("item_id"))
+        if err:
+            return None, err
+        if kind != "avatar":
+            return None, {"success": False, "error": "item is not an avatar (kind %s)" % kind}
+        return obj, None
+    avatar = get_first_avatar()
+    if avatar is None:
+        return None, {"success": False, "error": "no avatar in the scene"}
+    return avatar, None
+
+
+_WF_CONTENT_APPLY_EXTS = {".ccavatarpreset", ".ccavatar", ".ccshoes", ".cccloth", ".ccaccessory", ".ccacc",
+                          ".cchair", ".ccgloves", ".cccustomslider", ".ccfacialprofile"}
+
+
+def wf_content_apply(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/content/apply: apply a content preset file to an avatar (RFileIO.LoadFile).
+
+    Body: {"file_path": ".ccAvatarPreset" | ".ccAvatar" | ".ccShoes" | ..., "item_id"|"item_name": avatar
+    (default: the first avatar)}. The avatar is selected first, as the Content panel's Apply does.
+    A .ccAvatar (character) can REPLACE the scene's avatar; use it only on purpose.
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        file_path = (params.get("file_path") or "").strip().replace(chr(92), "/")
+        if not file_path:
+            return {"success": False, "error": "file_path is required"}
+        path_error = _validate_path(file_path, _WF_CONTENT_APPLY_EXTS)
+        if path_error:
+            return {"success": False, "error": path_error}
+        if not os.path.isfile(file_path):
+            return {"success": False, "error": "file not found", "path": file_path}
+        avatar, err = _wf_content_avatar(params)
+        if err:
+            return err
+        RLPy.RScene.ClearSelectObjects()
+        RLPy.RScene.SelectObject(avatar)
+        before = {str(entry["id"]): entry["name"] for _, entry in _wf_scan()}
+        RLPy.RGlobal.BeginAction("wf_content_apply")
+        try:
+            with _WfAutoOk() as auto:
+                status = RLPy.RFileIO.LoadFile(file_path)
+        finally:
+            RLPy.RGlobal.EndAction()
+        _invalidate_caches()
+        after = {str(entry["id"]): entry["name"] for _, entry in _wf_scan()}
+        # LoadFile can return without error and still add nothing (10-24: a .ccGloves and a
+        # .ccAccessory "loaded" with no new item), so report what really changed.
+        out = {"success": True, "path": file_path, "avatar": _wf_obj_name(avatar),
+               "added": [after[i] for i in after if i not in before],
+               "removed": [before[i] for i in before if i not in after]}
+        try:
+            out["status_error"] = bool(status.IsError())
+            out["status_code"] = _wf_jsonable(status.GetStatusCode())
+        except Exception:
+            out["status"] = str(status)
+        if out.get("status_error") and not out["added"]:
+            out["success"] = False
+            out["error"] = ("LoadFile failed and nothing was added. Accessories must be .ccAcc "
+                            "(not .ccAccessory); a .ccGloves loads only from the Content panel.")
+        if auto.pressed:
+            out["auto_ok"] = auto.pressed
+        return out
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+_WF_CONTENT_EXT_CASE = {".ccavatar": ".ccAvatar", ".ccavatarpreset": ".ccAvatarPreset"}
+
+
+def wf_content_save(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/content/save: save the avatar as a Custom content preset through RLPy.
+
+    Body: {"kind": "character"|"head_morph_skin"|..., "file_path": "...", "name": "..."
+    (alternative to file_path: the file goes to the Reallusion Custom folder of that kind),
+    "save_type": "ESaveFileType_..." (optional override for probing)}.
+    Never overwrites an existing file. Returns the saved path or the reason.
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        kind = (params.get("kind") or "character").strip().lower()
+        if kind not in _WF_CONTENT_KINDS:
+            return {"success": False, "error": "kind must be one of %s" % sorted(_WF_CONTENT_KINDS)}
+        type_name, ext, folder = _WF_CONTENT_KINDS[kind]
+        type_name = params.get("save_type") or type_name
+        file_path = (params.get("file_path") or "").strip()
+        if not file_path:
+            name = (params.get("name") or "").strip()
+            if not name:
+                return {"success": False, "error": "file_path or name is required"}
+            file_path = "%s/%s/%s%s" % (_WF_CONTENT_ROOT, folder, name, _WF_CONTENT_EXT_CASE[ext])
+        file_path = file_path.replace("\\", "/")
+        path_error = _validate_path(file_path, {ext})
+        if path_error:
+            return {"success": False, "error": path_error}
+        if os.path.exists(file_path):
+            return {"success": False, "error": "file exists (choose a new name)", "path": file_path}
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        avatar, err = _wf_content_avatar(params)
+        if err:
+            return err
+        RLPy.RScene.ClearSelectObjects()
+        RLPy.RScene.SelectObject(avatar)
+        setting = RLPy.RSaveFileSetting()
+        setting.SetSaveType(getattr(RLPy, type_name))
+        with _WfAutoOk() as auto:
+            status = RLPy.RFileIO.SaveFile(avatar, setting, file_path)
+        exists = os.path.isfile(file_path)
+        out = {"success": bool(exists), "auto_ok": auto.pressed, "path": file_path, "kind": kind, "save_type": type_name,
+               "status": str(status), "avatar": _wf_obj_name(avatar)}
+        if exists:
+            out["bytes"] = os.path.getsize(file_path)
+        else:
+            out["error"] = "SaveFile wrote no file (status %s)" % status
+            out["open_dialogs"] = open_dialog_summary()
+        return out
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def wf_save_project(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
     """Route /workflow/save."""
     params = _wf_params(body, kwargs)
@@ -7706,6 +7937,90 @@ def _wf_camera_persp_pose(
             return transform
         except Exception:
             return None
+
+
+_WF_ORBIT_MAX_VIEWS = 16
+
+
+def _wf_rot_z_get(block) -> float:
+    return float(block.GetData("Rotation/RotationZ", RLPy.RGlobal.GetTime()).ToFloat())
+
+
+def _wf_rot_z_set(obj, block, radians: float) -> None:
+    block.SetData("Rotation/RotationZ", RLPy.RGlobal.GetTime(), RLPy.RVariant(float(radians)))
+    try:
+        RLPy.RGlobal.ObjectModified(obj, RLPy.EObjectModifiedType_Transform)
+    except Exception:
+        pass
+
+
+def wf_capture_orbit(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/views_orbit: images of the avatar from many angles.
+
+    Body: {"folder", "prefix", "yaws": [0, 30, 45, 60, 90, 180], "top": true, "bottom": true,
+    "camera": "front"|"face"}. The camera transform is not writable on this CC5 build (10-22),
+    so the AVATAR is turned about Z by each yaw in front of the Front preset (yaw 90 shows the
+    character's left side) and turned back afterwards; "top"/"bottom" add the Top/Bottom presets.
+    The avatar is selected first so the presets frame the whole body, not the last picked item.
+    Files: <prefix>_y<yaw>.png, <prefix>_top.png, <prefix>_bottom.png.
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        folder = (params.get("folder") or "").strip()
+        prefix = (params.get("prefix") or "").strip()
+        yaws = params.get("yaws") or [0]
+        if not folder or not prefix:
+            return {"success": False, "error": "folder and prefix are required"}
+        if "\x00" in folder or ".." in folder or "\x00" in prefix or "/" in prefix or "\\" in prefix:
+            return {"success": False, "error": "Invalid folder or prefix"}
+        if not isinstance(yaws, list) or len(yaws) > _WF_ORBIT_MAX_VIEWS:
+            return {"success": False, "error": "yaws must be a list of at most %d" % _WF_ORBIT_MAX_VIEWS}
+        avatar, err = _wf_content_avatar(params)
+        if err:
+            return err
+        camera = RLPy.RScene.GetCurrentCamera()
+        if camera is None:
+            return {"success": False, "error": "No camera in scene"}
+        block = avatar.GetControl("Transform").GetDataBlock()
+        original = _wf_rot_z_get(block)
+        saved = _wf_camera_save(camera)
+        os.makedirs(folder, exist_ok=True)
+        shots = [("y%03d" % (int(round(float(y))) % 360), float(y), "front") for y in yaws]
+        if params.get("top"):
+            shots.append(("top", 0.0, "top"))
+        if params.get("bottom"):
+            shots.append(("bottom", 0.0, "bottom"))
+        files: list[str] = []
+        failed: list[str] = []
+        RLPy.RScene.ClearSelectObjects()
+        RLPy.RScene.SelectObject(avatar)
+        RLPy.RGlobal.BeginAction("wf_capture_orbit")
+        try:
+            for name, yaw, preset in shots:
+                _wf_rot_z_set(avatar, block, original + math.radians(yaw))
+                enum = getattr(RLPy, _WF_VIEW4_CAMERA.get(preset, "") or "", None) or getattr(
+                    RLPy, "ECameraLocationType_" + preset.capitalize(), None)
+                if enum is None:
+                    failed.append(name + ": no camera preset " + preset)
+                    continue
+                camera.SetCameraLocation(enum)
+                if hasattr(RLPy.RGlobal, "ForceViewportUpdate"):
+                    RLPy.RGlobal.ForceViewportUpdate()
+                out_path = os.path.join(folder, "%s_%s.png" % (prefix, name))
+                render_error = _wf_render_png(out_path)
+                if render_error:
+                    failed.append("%s: %s" % (name, render_error))
+                else:
+                    files.append(out_path)
+        finally:
+            _wf_rot_z_set(avatar, block, original)
+            restored = _wf_restore_camera(camera, saved)
+            RLPy.RGlobal.EndAction()
+        back = _wf_rot_z_get(block)
+        return {"success": bool(files) and not failed, "files": files, "failed": failed,
+                "avatar_rotation_restored": abs(back - original) < 1e-4, "camera_restored": restored}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 def wf_capture_views4(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
@@ -8827,6 +9142,10 @@ def _auto_patch_server() -> None:
         "wf_timeline":               wf_timeline,
         "wf_buttons":                wf_buttons,
         "wf_pivot":                  wf_pivot,
+        "wf_probe":                  wf_probe,
+        "wf_select":                 wf_select,
+        "wf_content_save":           wf_content_save,
+        "wf_content_apply":          wf_content_apply,
         "wf_high_heels_open":        wf_high_heels_open,
         "wf_high_heels_state":       wf_high_heels_state,
         "wf_high_heels_set":         wf_high_heels_set,
@@ -8838,6 +9157,7 @@ def _auto_patch_server() -> None:
         "wf_auto_adjust_foot_height": wf_auto_adjust_foot_height,
         "wf_render_viewport":        wf_render_viewport,
         "wf_capture_views4":         wf_capture_views4,
+        "wf_capture_orbit":          wf_capture_orbit,
         # Physics (Soft Cloth) routes
         "wf_physics_info":            wf_physics_info,
         "wf_physics_activate":        wf_physics_activate,
@@ -8928,12 +9248,17 @@ def _auto_patch_server() -> None:
             "/workflow/high_heels/set":     "wf_high_heels_set",
             "/workflow/transform/set":      "wf_set_transform",
             "/workflow/save":               "wf_save_project",
+            "/workflow/probe":              "wf_probe",
+            "/workflow/select":             "wf_select",
+            "/workflow/content/save":       "wf_content_save",
+            "/workflow/content/apply":      "wf_content_apply",
             "/workflow/export_obj":         "wf_export_obj",
             "/workflow/floor_contact/get":  "wf_get_floor_contact",
             "/workflow/floor_contact/set":  "wf_set_floor_contact",
             "/workflow/foot_auto":          "wf_auto_adjust_foot_height",
             "/workflow/render":             "wf_render_viewport",
             "/workflow/views4":             "wf_capture_views4",
+            "/workflow/views_orbit":        "wf_capture_orbit",
             "/workflow/physics/info":           "wf_physics_info",
             "/workflow/physics/activate":       "wf_physics_activate",
             "/workflow/physics/weight_map":     "wf_physics_load_weight_map",

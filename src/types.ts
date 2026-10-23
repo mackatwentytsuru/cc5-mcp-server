@@ -427,7 +427,7 @@ export interface WorkflowItemRef {
 
 /** Scene item as returned by list_scene_items. */
 export interface WorkflowItem extends WorkflowItemRef {
-  visible: boolean;
+  visible: boolean | null;
   parent: string | null;
   cloth_type?: string;
   hair_type?: string;

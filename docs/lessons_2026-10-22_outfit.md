@@ -119,3 +119,15 @@ These lessons go into the cc5-agent skill. Every item was learned the hard way.
 - 新しい服(実写ふうコルセット)の入れ方(16:05): 0 コマ目の姿勢が元の立ち姿と同じことを確かめる(全身 OBJ と比べ、まっすぐ 15.08cm 上がっているだけ)→ `/workflow/import_fbx` → `/workflow/transform/set move [0,0,15.08]` → `/workflow/attach` CC_Base_Hip → `/workflow/transfer_weights default`。Tripo の FBX の色の絵は拡張子なし(tripo_image_<id>_0)で CC5 が読めない。拡張子を付けた写しを `/workflow/material/load_texture` で材質(tripo_mat_<id>)ごとに入れる。服の重みを写すと「Failed to record undo/redo step」が出るが、OK で閉じてよい(処理は終わっている)。
 - 目の絵(16:48): Digital_Human Eye の見た目は CC_Base_Eye の **Std_Cornea_L/R の Diffuse** で決まる。Std_Eye_L/R だけ入れ替えても変わらない。
 - つなぎの `/workflow/*` が起動直後に「Not found」になっていた: server.py が cc5_api を読み込む時点ではまだ ACTION_MAP が無く、`_auto_patch_server()` が何もしていなかった。start_server で呼ぶように直した。古いつなぎのままのときは、Script > Load Python で `_auto_patch_server()` を呼ぶ台本を開けば、起動し直さずに使える。
+
+## 10-24 未明: 新しい顔に金剛の服を着せた(v49)
+
+- 顔を服の側へ移す(Head Morph & Skin プリセット)は失敗した。Headshot 3 の MESH で作った顔の形はプリセットに入らない。**服を顔の側へ持ってくる**のが正しい向き。
+- 服を部品ファイルにする: `/workflow/select {item_id}` → `/workflow/dialog/native {"enable": false}` → `/workflow/menu/trigger "File > Export > Selected Content"` → `/workflow/dialog/file_fill {path, save: true}` → 終わったら native を true に戻す。服は .ccCloth、髪は .ccHair、**小物は .ccAcc**(.ccAccessory という名前で保存すると LoadFile が status 1 で失敗する)。
+- 着せる: `/workflow/content/apply {file_path}`(RFileIO.LoadFile、アバターを選んでから)。返事の `added`/`removed` で本当に増えたかを見る(LoadFile はエラーでも例外を出さない)。
+- **.ccGloves は LoadFile では入らない**(status 1)。Content パネルの Custom > Cloth > Gloves に置き、サムネイルをダブルクリックすると入った。
+- 髪は .ccHair を2つ読むと後のものが前のものと入れ替わる。前髪(Chunky Highlights Bangs)は Hair Builder の要素なので、`/asset/load` で `Highlight Bangs.rlHairElement` を足し、`/material/shader/get`→`set` で本体の髪(Hair_L_Transparency)の値を Hair_T/Hair_B に写す。
+- 頭に付けた帽子は、頭の形が変わると浮く。`/workflow/transform/set move` で局所の Y を下げる(v49 は 10.5 → 4.5)。
+- `list_scene_items` の cloth/hair の「hidden」は誤り(RLPy に可視の読み取りが無い)。「visibility unknown」と出すようにした。本当の表示は Scene パネルの目のアイコンで見る。
+- カメラの位置はこの版では書き込めない(views4 の perspective が Back になるのはこのため)。**`/workflow/views_orbit`** を足した: アバターを Z 軸で回して Front プリセットで撮り、最後に元の向きへ戻す(yaws: [0,30,45,60,90,180]、top/bottom)。アバターを選んでから撮るので全身が入る。1回に6枚以上頼むとつなぎが時間切れを返すことがある(処理は続く)。3〜4枚ずつ頼む。
+- 足を開いた基本姿勢(A ポーズ)では、スカート v22w の後ろの内側の布が足の間に平らに張る。立ち姿のモーションでは出ない(v47 と同じ)。
