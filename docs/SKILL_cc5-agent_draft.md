@@ -170,6 +170,12 @@ The OBJ is CC5's "Character With Current Pose" export (Z-up, cm) with materials;
   7. Skin poking through a tight boot: black out the leg skin inside the boot with an opacity
      mask on `CC_Base_Body / Std_Skin_Leg` (UDIM tile 3, u%1), rasterised from body faces below the
      boot rim − 1 cm. Boots then hold in bent-knee / pointed-foot poses.
+  8. Save as custom content: select the boot (`/workflow/high_heels/open` selects it), dialogs
+     non-native, menu `File > Export > Selected Content`, `/workflow/dialog/file_fill
+     {"path": ".../Reallusion Custom/Cloth/Shoes/<name>.ccShoes", "save": true, "press": true}`.
+     `RFileIO.SaveFile(item, RSaveFileSetting(ESaveFileType_Shoes), path)` only says "Failed to save file".
+  9. The .ccShoes carries the bent feet: `RFileIO.LoadFile(ccShoes)` on another character (tested on
+     CC4 Camila) keeps the heel shape and walks the Catwalk motion; standing foot ~0.6 cm into the floor.
 - Only one Shoes item per avatar: Transfer as Shoes with replace removes the old shoes and their heel.
 - `/workflow/high_heels/open` and mouse clicks on the High Heels button often do nothing; the owner can.
 - Do not move the body up or down by hand.
@@ -179,7 +185,11 @@ The OBJ is CC5's "Character With Current Pose" export (Z-up, cm) with materials;
 - `/workflow/dialog/native {"enable": false}` → `/workflow/menu/trigger "Script > Load Python"` →
   `/workflow/dialog/file_fill {path, press: true}` → set native back to true. Scripts write a
   `*_done.txt` so the caller can wait. Works while a modal CC dialog is open.
-- Synthetic mouse/keyboard input does not open CC5 Qt combo boxes; set them from such a script.
+- Mouse clicks: with CC5 maximized at 125 % DPI, click at (screenshot x × 0.8, y × 0.8). Clicks at the
+  raw screenshot position miss (that is why combo boxes "did not open"). Re-check after each click.
+- Combo boxes in dialog tables can also be set from a script / `/workflow/dialog/table_combo`.
+- Motions: `RFileIO.LoadFile(".rlMotion")` with the avatar selected, e.g. Reallusion Templates/
+  Animation/Motion/2.Human Female/Move/Catwalk_2Loop.rlMotion (`scripts/cc5_load_motion.py`).
 - Bridge JSON bodies must be UTF-8: Japanese paths from Git Bash curl fail — use ASCII file names.
 
 ### Big anime eyes
