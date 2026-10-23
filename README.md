@@ -176,6 +176,14 @@ These tools drive the `/workflow/*` routes. They work without the GUI and are me
 - **Node.js** 18+ and npm
 - **Reallusion Character Creator 5** (CC5)
 - **Windows** (CC5 is Windows-only)
+- **Blender** 4.5+ (tested with 5.2) **with the CC/iC Blender Tools add-on — required** (step 3 below).
+  The goal of this project is to turn 3D models made in Tripo (and similar) into CC5 characters and
+  outfits with little hand work; much of that fitting happens in Blender, and every CC5 ⇄ Blender
+  round trip (custom shoes, high-heel boots, re-weighted clothes) goes through this add-on.
+- **Blender MCP — recommended** ([ahujasid/blender-mcp](https://github.com/ahujasid/blender-mcp)):
+  lets the LLM drive Blender directly next to this server. Install its `addon.py` in Blender
+  ("MCP for Blender") and add `{"blender": {"command": "uvx", "args": ["blender-mcp"]}}` to
+  `mcpServers`. Background scripts (`blender -b --python ...`) also work without it.
 
 ## Quick Start
 
@@ -198,7 +206,34 @@ powershell -ExecutionPolicy Bypass -File install-plugin.ps1
 
 This copies the files of `cc5-plugin/` into CC5's `OpenPlugin\CC5_MCP_Bridge` directory (replacing an older install). Restart CC5 afterwards.
 
-### 3. Configure Claude Code
+### 3. Install CC/iC Blender Tools in Blender (required)
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-blender-addon.ps1
+```
+
+Downloads the pinned release of [soupday/cc_blender_tools](https://github.com/soupday/cc_blender_tools)
+(Reallusion's own CC/iC Tools add-on), copies it into Blender's user add-on folder as
+`cc_blender_tools`, enables it and checks that `bpy.ops.cc3.importer` exists. Use `-Version` for
+another tag and `-Blender` when Blender is not under `C:\Program Files\Blender Foundation`.
+Do not skip this: without it CC5 exports cannot be read back with their bind pose, and Blender
+results cannot be sent to CC5 with the FbxKey (CC5 then asks to "characterize" and replaces the
+avatar with a broken `RootNode`).
+
+The round trip used for shoes and high-heel boots:
+
+| Step | Where | How |
+|------|-------|-----|
+| Export the avatar for Blender | CC5 | `POST /export/fbx {"target_tool": "Blender", "include_current_pose": true}` (same flags as the official CC/iC Blender Pipeline plug-in: FbxKey + json) |
+| Import | Blender | `bpy.ops.cc3.importer(param="IMPORT", filepath=..., no_build=True, no_rigify=True)` — do not call `read_factory_settings` first, it unloads the add-on |
+| Fit / weight the new mesh, export | Blender | parent to the armature with body weights, then `bpy.ops.cc3.exporter(param="EXPORT_CC3", filepath=...)` |
+| Load back | CC5 | `POST /workflow/import_blender {"file_path": ...}` (replaces the avatar — save first) |
+| Set the item type | CC5 | `POST /workflow/dialog/table_combo {"window": "Asset Import Status Report", "row_starts": "<mesh>", "column": 1, "text": "Shoes"}`, then press OK |
+
+For high heels: give the avatar a shoe with the wanted High Heels height first, so the feet in the
+export are already bent; put the untouched boot on those feet in Blender (never flatten the boot).
+
+### 4. Configure Claude Code
 
 Add to your `~/.claude.json` under `mcpServers` (a ready-made snippet is in `claude-mcp-config.json`):
 
@@ -218,13 +253,13 @@ Replace `<path-to-project>` with the absolute path to this repository.
 
 `exec_python` and the silent Export Head routes are off by default. To use them, see [Security](#security).
 
-### 4. Start the Bridge
+### 5. Start the Bridge
 
 **Option A: Automatic (recommended)** -- Launch CC5. The plugin loads automatically from `OpenPlugin/CC5_MCP_Bridge/`. Enable it in Plugin Manager if needed.
 
 **Option B: Manual** -- In CC5, go to Script > Load Python and select `start_bridge.py`.
 
-### 5. Verify Connection
+### 6. Verify Connection
 
 Ask Claude: *"Check if CC5 is connected"* -- it will call `check_cc5_connection` and report the status.
 
