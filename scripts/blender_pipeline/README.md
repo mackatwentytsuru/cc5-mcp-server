@@ -14,3 +14,9 @@ Paths inside the scripts point at the beyon project (`D:\OTOLUME\beyon_cc5`); ch
 To run a script in CC5 without the GUI: `/workflow/dialog/native {"enable": false}` →
 `/workflow/menu/trigger "Script > Load Python"` → `/workflow/dialog/file_fill {"path": ..., "press": true}`
 → native back to true.
+| `cc5_load_motion.py` | CC5 | put a template motion (path in `cc5_load_motion.txt`) on the avatar, e.g. Catwalk_2Loop. |
+| `cc5_try_shoes_on.py` | CC5 | load another character and a saved `.ccShoes` on it (paths in `cc5_try_shoes_on.txt`). |
+
+Save the finished boot as custom content with `File > Export > Selected Content` (boot selected) into
+`Reallusion Custom/Cloth/Shoes/<name>.ccShoes`. The .ccShoes keeps the bent feet: tested on CC4 Camila
+with the Catwalk motion (2026-10-23).
