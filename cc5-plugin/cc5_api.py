@@ -594,6 +594,9 @@ def export_fbx(
     motion_range: list | None = None,
     convert_image_format: bool = False,
     texture_size: int | None = None,
+    bone_structure: str = "",
+    basic_bind_pose: bool | None = None,
+    reset_skin_pose: bool = True,
 ) -> dict[str, Any]:
     """Export the current avatar as FBX, mirroring the CC5 "Export FBX" dialog.
 
@@ -617,6 +620,12 @@ def export_fbx(
         motion_range: [start, end] frame range. None/"all" leaves the dialog default ("All").
         convert_image_format: "Convert Image Format" — add EExportFbxOptions_ConvertTifToPNG.
         texture_size: "Max Texture Size" in pixels (0 = original).
+        bone_structure: "UE5" | "UE4" | "" — Unreal skeleton layout (RExportFbxSetting.SetUnrealBoneStructure).
+            "UE5" gives the UE5 Mannequin names (spine_01..05, neck_01/02, *_metacarpal_*, ik_* bones,
+            lowercase cc_base_*) that the BeyondCC5 project's C++ and ABPs expect (10-24).
+        basic_bind_pose: RExportFbxSetting.EnableBasicBindPose(True/False); None leaves the default.
+        reset_skin_pose: keep ResetSkinPose in the UE5 preset (default). False keeps the avatar's
+            current pose as the bind pose (an HD Neutral body otherwise binds in T-pose, 10-24).
     """
     # Defense-in-depth path validation
     _decoded_out = urllib.parse.unquote(output_path)
@@ -679,6 +688,9 @@ def export_fbx(
         # 11/14 meshes invalid without these; 14/14 valid at 1e-6 with them).
         flags2 |= _safe_flag("EExportFbxOptions2_ResetSkinPose")
         flags2 |= _safe_flag("EExportFbxOptions2_ResetBoneScale")
+        if not reset_skin_pose:
+            flags2 &= ~_safe_flag("EExportFbxOptions2_ResetSkinPose")
+            notes.append("ResetSkinPose removed (bind pose = current pose)")
         notes.append("target_tool=UE5 preset applied (incl. ExportJson + ResetSkinPose/ResetBoneScale)")
     elif target_upper == "UNITY":
         flags |= _safe_flag("EExportFbxOptions_AutoSkinRigidMesh")
@@ -817,6 +829,32 @@ def export_fbx(
                         applied_texture_size = int(texture_size)
                     except Exception as e:
                         notes.append(f"WARNING: SetTextureSize failed: {e}")
+
+                if bone_structure:
+                    enum_name = {"UE5": "EUnrealBoneStructure_UE5_BoneStructure",
+                                 "UE4": "EUnrealBoneStructure_UE4_BoneStructure"}.get(bone_structure.upper())
+                    if enum_name is None:
+                        notes.append(f"WARNING: unknown bone_structure {bone_structure!r}; left default")
+                    else:
+                        try:
+                            setting.SetUnrealBoneStructure(getattr(RLPy, enum_name))
+                            notes.append(f"SetUnrealBoneStructure({enum_name}) applied")
+                            if enum_name.endswith("UE5_BoneStructure"):
+                                # The UE5 layout of the CC5 UI also lowercases the CC bones and adds
+                                # the ik_* bones (beyon_current_20260720 has both).
+                                extra2 = (_safe_flag("EExportFbxOptions2_RenameBoneToLowerCase")
+                                          | _safe_flag("EExportFbxOptions2_UnrealIkBone"))
+                                setting.SetOption2(setting.GetOption2() | extra2)
+                                notes.append("UE5 layout: RenameBoneToLowerCase + UnrealIkBone added")
+                        except Exception as e:
+                            notes.append(f"WARNING: SetUnrealBoneStructure failed: {e}")
+
+                if basic_bind_pose is not None:
+                    try:
+                        setting.EnableBasicBindPose(bool(basic_bind_pose))
+                        notes.append(f"EnableBasicBindPose({bool(basic_bind_pose)}) applied")
+                    except Exception as e:
+                        notes.append(f"WARNING: EnableBasicBindPose failed: {e}")
 
                 export_status = RLPy.RFileIO.ExportFbxFile(avatar, output_path, setting)
                 used_setting_object = True
@@ -9042,6 +9080,9 @@ def _auto_patch_server() -> None:
             embed_textures=bool(p.get("embed_textures", False)),
             export_motion=bool(p.get("export_motion", True)),
             fps=(int(p["fps"]) if p.get("fps") is not None else None),
+            bone_structure=str(p.get("bone_structure", "") or ""),
+            basic_bind_pose=(bool(p["basic_bind_pose"]) if p.get("basic_bind_pose") is not None else None),
+            reset_skin_pose=bool(p.get("reset_skin_pose", True)),
             motion_range=p.get("motion_range"),
             convert_image_format=bool(p.get("convert_image_format", False)),
             texture_size=(int(p["texture_size"]) if p.get("texture_size") is not None else None),
