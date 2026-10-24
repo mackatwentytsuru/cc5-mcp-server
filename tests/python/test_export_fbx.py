@@ -133,5 +133,67 @@ class ExportFbxVerificationTests(unittest.TestCase):
         self.assertTrue(result["success"], result)
 
 
+TEXTURE_FLAG = 1 << 20
+TEXTURE_SIZES = {
+    "EExportTextureSize_Original": "size-original",
+    "EExportTextureSize_Size_2048": "size-2048",
+    "EExportTextureSize_Size_4096": "size-4096",
+}
+
+
+def write_fbx(avatar, path, *rest):
+    with open(path, "wb") as f:
+        f.write(b"fbx")
+    return FakeStatus(False)
+
+
+class ExportFbxTextureTests(unittest.TestCase):
+    """UE exports must carry the skin/hair detail maps (10-25: v58b/v59/Ariana lost
+    roughness, SSS, micro-normal and wrinkle maps and were capped at 2048)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.out = os.path.join(self._tmp.name, "ue", "char.fbx")
+        patch = mock.patch.object(cc5_api, "get_first_avatar", return_value=object())
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.rlpy = make_rlpy(write_fbx)
+        self.rlpy.EExportFbxOptions_ExportPbrTextureAsImageInFormatDirectory = TEXTURE_FLAG
+        for name, value in TEXTURE_SIZES.items():
+            setattr(self.rlpy, name, value)
+        self.setting = self.rlpy.RExportFbxSetting.return_value
+
+    def run_export(self, **kwargs) -> dict:
+        with mock.patch.object(cc5_api, "RLPy", self.rlpy):
+            return cc5_api.export_fbx(self.out, export_motion=False, sub_d_level=0, **kwargs)
+
+    def test_ue5_preset_writes_all_textures_as_image_files(self) -> None:
+        result = self.run_export(target_tool="UE5")
+        self.assertTrue(result["success"], result)
+        flags = self.setting.SetOption.call_args.args[0]
+        self.assertTrue(flags & TEXTURE_FLAG)
+
+    def test_ue5_preset_keeps_original_texture_size_by_default(self) -> None:
+        result = self.run_export(target_tool="UE5")
+        self.setting.SetTextureSize.assert_called_once_with("size-original")
+        self.assertEqual(result["texture_size"], 0)
+
+    def test_texture_size_is_passed_as_the_cc5_enum(self) -> None:
+        result = self.run_export(target_tool="UE5", texture_size=4096)
+        self.setting.SetTextureSize.assert_called_once_with("size-4096")
+        self.assertEqual(result["texture_size"], 4096)
+
+    def test_unsupported_texture_size_is_reported_not_applied(self) -> None:
+        result = self.run_export(target_tool="UE5", texture_size=3000)
+        self.setting.SetTextureSize.assert_not_called()
+        self.assertNotIn("texture_size", result)
+        self.assertTrue(any("3000" in n for n in result["notes"]))
+
+    def test_default_preset_leaves_texture_size_alone(self) -> None:
+        self.run_export(target_tool="Default")
+        self.setting.SetTextureSize.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

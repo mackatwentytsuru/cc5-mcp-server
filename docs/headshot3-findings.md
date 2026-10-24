@@ -221,12 +221,19 @@ comp.SetShapingMorphWeight(morph_id, value)
 ### UE5 プリセットが立てるフラグ(実測)
 
 ```
-flags : AutoSkinRigidMesh, ExportRootMotion, RemoveAllUnused, TPoseOnMotionFirstFrame
+flags : AutoSkinRigidMesh, ExportRootMotion, RemoveAllUnused, TPoseOnMotionFirstFrame,
+        ExportPbrTextureAsImageInFormatDirectory(10-25 追加)
 flags2: UnrealPreset, UnrealEngine4BoneAxis, YUp, ResetSkinPose, ResetBoneScale
 flags3: ExportJson
 ```
 
 ### なぜ必要か(2026-07-02 の実測記録)
+
+- `ExportPbrTextureAsImageInFormatDirectory` が無いと、肌のつや・透け・細かい凹凸・表情のしわ、髪の根元・流れの画像が
+  書き出されず(json のパスが空)、UE の肌がのっぺり見える(10-25、v58b/v59/Ariana で確認)。
+  あわせて UE5 プリセットは `texture_size` 未指定なら元の大きさ(`EExportTextureSize_Original`)で書き出す
+  (指定しないと 2048 に縮んでいた)。`SetTextureSize` は画素数ではなく `EExportTextureSize_*` を受け取る。
+
 
 - `EExportFbxOptions3_ExportJson` が無いと、UE の `UCCFbxFactory` が
   `Array index out of bounds` でクラッシュする
