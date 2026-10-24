@@ -13,9 +13,11 @@ import type {
   DeleteAvatarResult,
   CaptureResult,
   MorphSetRequest,
+  AvatarPartsResult,
   CameraInfo,
   CameraDollyResult,
   CameraListResult,
+  RemoveAvatarPartResult,
   FocalLengthResult,
   LightInfo,
   LightColorResult,
@@ -543,6 +545,17 @@ export class CC5Bridge {
   async removeSceneItem(itemName: string): Promise<RemoveItemResult> {
     return this.request<RemoveItemResult>("/item/remove", "POST", {
       item_name: itemName,
+    });
+  }
+
+  async listAvatarParts(): Promise<AvatarPartsResult> {
+    return this.request<AvatarPartsResult>("/avatar/parts");
+  }
+
+  async removeAvatarPart(name?: string, type?: string): Promise<RemoveAvatarPartResult> {
+    return this.request<RemoveAvatarPartResult>("/avatar/part/remove", "POST", {
+      ...(name ? { name } : {}),
+      ...(type ? { type } : {}),
     });
   }
 

@@ -96,6 +96,8 @@ The MCP server provides 85 tools (registered in 18 modules under `src/tools/`) f
 | `frame_camera` | Move the viewport camera to a preset view (face close-up, home, ...) |
 | `list_cameras` | List cameras with position, focal length, angle of view and whether scripts can move them (the Preview Camera cannot) |
 | `dolly_camera` | Move the viewport camera toward/away from the subject like the mouse wheel (15 cm per notch at the face view), without moving the user's mouse |
+| `list_avatar_parts` | List brows, eyelashes, beard, eyes, teeth and other avatar parts (HD brows are parts, not hairs) |
+| `remove_avatar_part` | Remove brow or beard parts by name or type |
 
 #### Lighting (9)
 | Tool | Description |

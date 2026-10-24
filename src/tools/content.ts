@@ -71,6 +71,35 @@ export function registerContentTools(server: McpServer, bridge: CC5Bridge) {
   );
 
   server.tool(
+    "list_avatar_parts",
+    "List the avatar's parts: brows, eyelashes, beard, eyes, teeth, tongue, eye occlusion and tear line. HD brows loaded from Hair/Group/Eyebrows are parts, not hairs, so list_hair does not show them. Loading another brow replaces the current one.",
+    {},
+    async () => bridgeCall(
+      () => bridge.listAvatarParts(),
+      (result) => {
+        if (!result.success) return `Failed: ${result.error}`;
+        const lines = (result.parts ?? []).map((p) => `- ${p.type}: ${p.name}${p.removable ? " (removable)" : ""}`);
+        return `Avatar ${result.avatar ?? ""} parts:\n${lines.join("\n")}`;
+      },
+    )
+  );
+
+  server.tool(
+    "remove_avatar_part",
+    "Remove brow or beard parts from the avatar, by part name or by type (all brows). Base parts such as eyelashes, eyes and teeth cannot be removed.",
+    {
+      name: z.string().max(256).optional().describe("Part name from list_avatar_parts"),
+      type: z.enum(["Brow", "Beard"]).optional().describe("Remove every part of this type"),
+    },
+    async ({ name, type }) => bridgeCall(
+      () => bridge.removeAvatarPart(name, type),
+      (result) => result.success
+        ? `Removed: ${(result.removed ?? []).map((r) => `${r.type} ${r.name}`).join(", ")}`
+        : `Failed: ${result.error}`,
+    )
+  );
+
+  server.tool(
     "browse_content",
     "Browse available CC5 content files by category. Returns file paths that can be loaded with load_asset. Wearables: cloth_upper, cloth_lower, cloth, shoes, accessory_head, accessory_body. Scene/animation: pose, motion, expression, props, light, camera, character (pose/motion may be empty on a base install without content packs).",
     {
