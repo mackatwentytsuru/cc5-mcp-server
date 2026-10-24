@@ -91,5 +91,34 @@ class LoadAnswersTest(unittest.TestCase):
         self.assertEqual(auto.pressed, [])
 
 
+class MaterialOwnerTest(unittest.TestCase):
+    """Material routes key the item that owns the mesh, not the avatar (10-25)."""
+
+    def _scene(self):
+        avatar = mock.MagicMock(name="avatar")
+        cloth = mock.MagicMock(name="corset")
+        cloth.GetName.return_value = "Corset_low"
+        cloth.GetMeshNames.return_value = ["Corset_low"]
+        avatar.GetClothes.return_value = [cloth]
+        avatar.GetHairs.return_value = []
+        avatar.GetAccessories.return_value = []
+        avatar.GetMeshNames.return_value = ["CC_Base_Body", "Corset_low"]
+        for obj in (avatar, cloth):
+            obj.GetMaterialComponent.return_value.GetMaterialNames.return_value = ["corset_satin", "Std_Skin_Body"]
+        return avatar, cloth
+
+    def test_cloth_mesh_uses_the_cloth_component(self) -> None:
+        avatar, cloth = self._scene()
+        comp, err = cc5_api._get_valid_mesh_material(avatar, "Corset_low", "corset_satin")
+        self.assertIsNone(err)
+        self.assertIs(comp, cloth.GetMaterialComponent.return_value)
+
+    def test_body_mesh_uses_the_avatar_component(self) -> None:
+        avatar, _cloth = self._scene()
+        comp, err = cc5_api._get_valid_mesh_material(avatar, "CC_Base_Body", "Std_Skin_Body")
+        self.assertIsNone(err)
+        self.assertIs(comp, avatar.GetMaterialComponent.return_value)
+
+
 if __name__ == "__main__":
     unittest.main()
