@@ -12,7 +12,7 @@ const ALLOWED_ASSET_EXTENSIONS = new Set([
   ".iavatar", ".ccavatar", ".ccproject", ".ccm",
   ".iclothes", ".ihair", ".iprop", ".ccfbx",
   ".iclothing", ".ishoe", ".iaccessory", ".ibody", ".iskin",
-  ".rlhair", ".rlhairelement", ".rlhairstyle", ".rleyelashelement",
+  ".rlhair", ".rlhairelement", ".rlhairstyle", ".rleyelashelement", ".rlmotion",
 ]);
 
 function validateAssetPath(filePath: string): string | null {
