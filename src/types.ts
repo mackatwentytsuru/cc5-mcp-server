@@ -62,6 +62,9 @@ export interface DeleteAvatarResult extends OperationResult {
 export interface CaptureResult extends OperationResult {
   path?: string;
   base64?: string;
+  /** Set when the image is not a clean render (e.g. a window screenshot fallback). */
+  warning?: string;
+  fallback?: "window_screenshot";
 }
 
 export interface CameraInfo {
@@ -73,6 +76,30 @@ export interface CameraInfo {
 
 export interface FocalLengthResult extends OperationResult {
   focal_length?: number;
+}
+
+export interface CameraState {
+  name: string;
+  position?: [number, number, number];
+  focal_length?: number;
+  /** Vertical angle of view in degrees. */
+  angle_of_view?: number;
+  /** False on the Preview Camera: scripts cannot set its position. */
+  transform_writable?: boolean;
+  current?: boolean;
+}
+
+export interface CameraListResult extends OperationResult {
+  current?: string;
+  cameras?: CameraState[];
+}
+
+export interface CameraDollyResult extends OperationResult {
+  method?: string;
+  notches?: number;
+  moved_cm?: number;
+  before?: [number, number, number];
+  after?: [number, number, number];
 }
 
 export interface LightInfo {

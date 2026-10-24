@@ -11,6 +11,8 @@ Character Creator 5 + Headshot 3 + this repository's MCP bridge (HTTP 127.0.0.1:
 - Operate CC5 through the `cc5` MCP tools / bridge HTTP. Do not type into Windows file dialogs: put images on the clipboard (PowerShell `-STA`, `[System.Windows.Forms.Clipboard]::SetImage`) and press Ctrl+V on the Headshot photo slot.
 - Never press purchase / trial (Buy, Pack), Hub update, or "Game Base UVs" Convert buttons. List dialogs with `list_dialogs` and ask the user.
 - AI Image Generator spends points (shown next to the button, e.g. front 30 / side 30 / body 15). Confirm with the user first.
+- If bought content shows as trial (watermark, export refused, or captures turn into a screenshot of the whole CC5 window), run **Help > Activate Purchased Items** and press **OK** on "Activate Purchased Items Finished.", then reload the bridge. `capture_viewport` now reports `fallback: "window_screenshot"` with a warning when this happens.
+- Delete the per-step measurement images after a run; keep the JSON, logs and the sheets you show the user.
 
 ## 1. Make the reference images with CC5's AI Image Generator
 - Images made elsewhere, or even CC5 images pasted back from a file, can make Headshot stop with **"Failed to detect facial landmarks in the reference image."** Images handed over with **APPLY IMAGES** from the AI Image Generator went through.
@@ -31,6 +33,12 @@ Character Creator 5 + Headshot 3 + this repository's MCP bridge (HTTP 127.0.0.1:
 - A body made from a photo gives a **CC3_Base_Plus** base. If the target engine expects CC5 HD facial curves, convert the facial profile to CC5 HD before export.
 
 ## 3. Measure and tune
+
+### 3-0. Match the reference's camera and lighting first
+- CC5's Preview Camera cannot be moved or re-lensed by scripts (no Transform control; CC5 cannot create cameras). From the `face` view, `dolly_camera` (bridge `/camera/dolly`, a wheel message to the viewport; the user's mouse does not move) moves it 15 cm per notch along the view axis. Compare face-landmark overlap against the reference at several distances to estimate the reference's camera distance.
+- Capture the side with the SAME camera by rotating the avatar −90°; measure.py's `--scale render` divides side lengths by the front IPD, which is only valid with one camera.
+- Try lighting presets (`Stage/Atmosphere/*.iAtm` via load_asset) and pick the one whose skin color, brightness and shading are closest to the reference (let the user decide). Save the project first: loading a preset replaces the scene lights.
+
 Scripts are in `scripts/`. Run them with a Python that has `mediapipe opencv-python pillow numpy`.
 Download the MediaPipe face model once:
 `curl -L -o scripts/hs3_fit/face_landmarker.task https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`
