@@ -14,6 +14,8 @@ import type {
   CaptureResult,
   MorphSetRequest,
   CameraInfo,
+  CameraDollyResult,
+  CameraListResult,
   FocalLengthResult,
   LightInfo,
   LightColorResult,
@@ -312,6 +314,14 @@ export class CC5Bridge {
     view: string,
   ): Promise<{ success: boolean; view?: string; camera?: string; error?: string }> {
     return this.request("/camera/frame", "POST", { view });
+  }
+
+  async listCameras(): Promise<CameraListResult> {
+    return this.request<CameraListResult>("/camera/list");
+  }
+
+  async dollyCamera(notches: number): Promise<CameraDollyResult> {
+    return this.request<CameraDollyResult>("/camera/dolly", "POST", { notches });
   }
 
   // --- Lights ---

@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { registerCameraTools } from "../../src/tools/camera.js";
 import { createMockBridge, SUCCESS, FAILURE } from "../helpers/mock-bridge.js";
 import type { MockBridge } from "../helpers/mock-bridge.js";
-import type { CameraInfo, FocalLengthResult } from "../../src/types.js";
+import type { CameraInfo, CameraDollyResult, CameraListResult, FocalLengthResult } from "../../src/types.js";
 import { createMockServer } from "../helpers/mock-server.js";
 
 // ── setup ─────────────────────────────────────────────────────────────────────
@@ -26,8 +26,8 @@ beforeEach(() => {
 // ── tool registration ─────────────────────────────────────────────────────────
 
 describe("registerCameraTools – registration", () => {
-  it("registers exactly 3 tools", () => {
-    expect(server.tool).toHaveBeenCalledTimes(3);
+  it("registers exactly 5 tools", () => {
+    expect(server.tool).toHaveBeenCalledTimes(5);
   });
 
   it("registers frame_camera", () => {
@@ -169,5 +169,80 @@ describe("set_camera_focal_length handler", () => {
     const handler = server.getRegisteredTool("set_camera_focal_length");
     const result = await handler({ focal_length: 35 });
     expect(result.content[0].text).toBe("Camera focal length set to 35mm");
+  });
+});
+
+// ── list_cameras ──────────────────────────────────────────────────────────────
+
+describe("list_cameras handler", () => {
+  const sample: CameraListResult = {
+    success: true,
+    current: "Preview Camera",
+    cameras: [{
+      name: "Preview Camera", position: [0, -145.7, 161.1], focal_length: 100,
+      angle_of_view: 13.69, transform_writable: false, current: true,
+    }],
+  };
+
+  it("is registered", () => {
+    expect(server.tool).toHaveBeenCalledWith("list_cameras", expect.any(String), expect.any(Object), expect.any(Function));
+  });
+
+  it("lists each camera with position, focal length, angle of view and writability", async () => {
+    bridge.listCameras.mockResolvedValue(sample);
+    const result = await server.getRegisteredTool("list_cameras")({});
+    const text = result.content[0].text;
+    expect(text).toContain("Preview Camera (current)");
+    expect(text).toContain("(0.0, -145.7, 161.1)");
+    expect(text).toContain("100mm");
+    expect(text).toContain("13.69");
+    expect(text).toContain("read-only");
+  });
+
+  it("returns the failure message", async () => {
+    bridge.listCameras.mockResolvedValue({ success: false, error: "No camera" });
+    const result = await server.getRegisteredTool("list_cameras")({});
+    expect(result.content[0].text).toBe("Failed: No camera");
+  });
+
+  it("returns bridge error text when bridge throws", async () => {
+    bridge.listCameras.mockRejectedValue(new Error("bridge down"));
+    const result = await server.getRegisteredTool("list_cameras")({});
+    expect(result.content[0].text).toContain("CC5 bridge error: bridge down");
+  });
+});
+
+// ── dolly_camera ──────────────────────────────────────────────────────────────
+
+describe("dolly_camera handler", () => {
+  it("is registered", () => {
+    expect(server.tool).toHaveBeenCalledWith("dolly_camera", expect.any(String), expect.any(Object), expect.any(Function));
+  });
+
+  it("passes the notch count to the bridge and reports the move", async () => {
+    const moved: CameraDollyResult = {
+      success: true, method: "qt", notches: 3, moved_cm: 45,
+      before: [0, -145.7, 161.1], after: [0, -190.7, 161.1],
+    };
+    bridge.dollyCamera.mockResolvedValue(moved);
+    const result = await server.getRegisteredTool("dolly_camera")({ notches: 3 });
+    expect(bridge.dollyCamera).toHaveBeenCalledWith(3);
+    expect(result.content[0].text).toContain("45.0 cm");
+    expect(result.content[0].text).toContain("(0.0, -190.7, 161.1)");
+  });
+
+  it("returns the failure message when the camera did not move", async () => {
+    bridge.dollyCamera.mockResolvedValue({ success: false, error: "the camera did not move" });
+    const result = await server.getRegisteredTool("dolly_camera")({ notches: -2 });
+    expect(result.content[0].text).toBe("Failed: the camera did not move");
+  });
+
+  it("rejects 0 and out-of-range notches in the schema", () => {
+    const call = server.tool.mock.calls.find((c: unknown[]) => c[0] === "dolly_camera");
+    const schema = call[2].notches;
+    expect(schema.safeParse(0).success).toBe(false);
+    expect(schema.safeParse(201).success).toBe(false);
+    expect(schema.safeParse(1.5).success).toBe(false);
+    expect(schema.safeParse(-4).success).toBe(true);
   });
 });

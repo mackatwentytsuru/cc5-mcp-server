@@ -1092,23 +1092,28 @@ def capture_viewport(output_path: str = "", width: int = 1280, height: int = 720
                 _render_image_broken = True
 
         # Fallback: Windows screenshot of CC5 viewport
+        warnings: list[str] = []
         if not os.path.exists(output_path):
             try:
                 _capture_window_screenshot(output_path)
+                # Seen 10-24: content treated as trial makes RenderImage fail; the fallback
+                # is then a grab of the whole CC5 window, not the requested size.
+                warnings.append(
+                    "RenderImage failed, so this is a screenshot of the CC5 window, not a "
+                    f"{width}x{height} render. If content shows as trial, run Help > Activate "
+                    "Purchased Items (OK on 'Finished'), then load an asset or reopen the project.")
             except Exception as e:
                 print(f"[CC5 MCP Bridge] _capture_window_screenshot failed: {e}")
 
         if os.path.exists(output_path):
             file_size = os.path.getsize(output_path)
+            extra = {"warning": " ".join(warnings), "fallback": "window_screenshot"} if warnings else {}
             if file_size > MAX_IMAGE_BYTES:
-                return {
-                    "success": True,
-                    "path": output_path,
-                    "warning": f"Image too large to embed ({file_size} bytes). Read from path directly.",
-                }
+                warnings.insert(0, f"Image too large to embed ({file_size} bytes). Read from path directly.")
+                return {"success": True, "path": output_path, **extra, "warning": " ".join(warnings)}
             with open(output_path, "rb") as f:
                 image_data = base64.b64encode(f.read()).decode("utf-8")
-            return {"success": True, "path": output_path, "base64": image_data}
+            return {"success": True, "path": output_path, "base64": image_data, **extra}
 
         return {"success": False, "error": f"RenderImage did not create file at {output_path}"}
     except Exception as e:
@@ -1320,6 +1325,178 @@ def frame_camera(view: str = "face") -> dict[str, Any]:
         return {"success": True, "view": key, "camera": cam.GetName()}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+# --- Camera inspection and dolly ---
+# The Preview Camera has no Transform control and CC5 cannot create scene cameras, so
+# scripts cannot set its position or focal length (live 10-24). It can be read, and moved
+# along its view axis the way the viewport's mouse wheel does (camera_dolly).
+
+
+def _camera_state(cam) -> dict[str, Any]:
+    """Position (cm), rotation (degrees, data block), focal length and angle of view."""
+    time = RLPy.RGlobal.GetTime()
+    out: dict[str, Any] = {"name": cam.GetName()}
+    try:
+        pos = cam.WorldTransform().T()
+        out["position"] = [round(pos.x, 3), round(pos.y, 3), round(pos.z, 3)]
+    except Exception as e:
+        out["position_error"] = str(e)
+    control = cam.GetControl("Transform")  # None on the Preview Camera
+    out["transform_writable"] = control is not None
+    if control is not None:
+        try:
+            block = control.GetDataBlock()
+            out["rotate"] = [
+                round(math.degrees(float(block.GetData("Rotation/Rotation" + axis, time).ToFloat())), 3)
+                for axis in "XYZ"
+            ]
+        except Exception as e:
+            out["rotate_error"] = str(e)
+    for key, getter in (("focal_length", "GetFocalLength"), ("angle_of_view", "GetAngleOfView"),
+                        ("look_at_mode", "IsLookAtMode")):
+        try:
+            value = getattr(cam, getter)(time)
+            out[key] = bool(value) if key == "look_at_mode" else round(float(value), 4)
+        except Exception:
+            pass
+    return out
+
+
+def list_cameras() -> dict[str, Any]:
+    """Every camera with its placement, and which one the viewport uses."""
+    current = RLPy.RScene.GetCurrentCamera()
+    cams = ([current] if current is not None else []) + list(RLPy.RScene.GetCameras() or [])
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for cam in cams:
+        name = cam.GetName()
+        if name in seen:
+            continue
+        seen.add(name)
+        out.append({**_camera_state(cam), "current": current is not None and name == current.GetName()})
+    return {"success": True, "current": current.GetName() if current else "", "cameras": out}
+
+
+def qt_viewport_probe() -> dict[str, Any]:
+    """Read-only: the largest visible Qt widgets and windows, to find the 3D viewport."""
+    from PySide2 import QtWidgets
+    app = QtWidgets.QApplication.instance()
+    widgets = []
+    for w in app.allWidgets():
+        try:
+            if not w.isVisible():
+                continue
+            g = w.geometry()
+            top_left = w.mapToGlobal(g.topLeft() - g.topLeft())
+            widgets.append({"class": w.metaObject().className(), "name": w.objectName(),
+                            "x": top_left.x(), "y": top_left.y(), "w": g.width(), "h": g.height()})
+        except Exception:
+            continue
+    widgets.sort(key=lambda d: d["w"] * d["h"], reverse=True)
+    windows = []
+    for win in app.allWindows():
+        try:
+            g = win.geometry()
+            windows.append({"class": win.metaObject().className(), "name": win.objectName(),
+                            "title": win.title(), "visible": win.isVisible(),
+                            "x": g.x(), "y": g.y(), "w": g.width(), "h": g.height()})
+        except Exception:
+            continue
+    return {"success": True, "widgets": widgets[:25], "windows": windows}
+
+
+def _viewport_widget():
+    """The 3D viewport widget (largest visible QCTPlayWidget, else CACCoreWnd), or None."""
+    from PySide2 import QtWidgets
+    best, best_area = None, 0
+    for cls in ("QCTPlayWidget", "CACCoreWnd"):
+        for w in QtWidgets.QApplication.instance().allWidgets():
+            try:
+                if w.metaObject().className() != cls or not w.isVisible():
+                    continue
+                area = w.width() * w.height()
+            except Exception:
+                continue
+            if area > best_area:
+                best, best_area = w, area
+        if best is not None:
+            return best
+    return None
+
+
+def _send_wheel(widget, notches: int, method: str) -> None:
+    """One wheel click per notch to the viewport. Positive = toward the user (camera backs off)."""
+    delta = -120 if notches > 0 else 120
+    if method == "qt":
+        from PySide2 import QtCore, QtGui, QtWidgets
+        local = QtCore.QPointF(widget.width() / 2.0, widget.height() / 2.0)
+        glob = QtCore.QPointF(widget.mapToGlobal(local.toPoint()))
+        for _ in range(abs(notches)):
+            event = QtGui.QWheelEvent(local, glob, QtCore.QPoint(0, 0), QtCore.QPoint(0, delta),
+                                      QtCore.Qt.NoButton, QtCore.Qt.NoModifier,
+                                      QtCore.Qt.NoScrollPhase, False)
+            QtWidgets.QApplication.sendEvent(widget, event)
+        return
+    # win32: WM_MOUSEWHEEL to the viewport's own window handle; the user's cursor does not move.
+    import ctypes
+    from PySide2 import QtCore
+    hwnd = int(widget.winId())
+    center = widget.mapToGlobal(QtCore.QPoint(widget.width() // 2, widget.height() // 2))
+    wparam = (delta & 0xFFFF) << 16
+    lparam = ((center.y() & 0xFFFF) << 16) | (center.x() & 0xFFFF)
+    for _ in range(abs(notches)):
+        ctypes.windll.user32.SendMessageW(hwnd, 0x020A, wparam, lparam)
+
+
+def camera_dolly(notches: Any, method: str = "win32") -> dict[str, Any]:
+    """Move the viewport camera along its view axis as the mouse wheel does (one notch = one
+    wheel click, 15 cm at the face view; positive = away from the subject). The Preview Camera
+    has no writable transform, so this drives the viewport's own navigation; the user's mouse
+    is not moved. method: "win32" (works, live 10-24), "qt" (Qt events: ignored by the viewport
+    on 10-24) or "auto" (win32, then qt). The camera moves on the next frame, so pending events
+    are processed before the position is read back."""
+    try:
+        n = int(notches)
+    except (TypeError, ValueError):
+        return {"success": False, "error": "notches must be an integer"}
+    if n == 0 or abs(n) > 200:
+        return {"success": False, "error": "notches must be between -200 and 200 and not 0"}
+    widget = _viewport_widget()
+    if widget is None:
+        return {"success": False, "error": "3D viewport widget not found"}
+    cam = RLPy.RScene.GetCurrentCamera()
+    if cam is None:
+        return {"success": False, "error": "No camera"}
+
+    def pos():
+        t = cam.WorldTransform().T()
+        return [t.x, t.y, t.z]
+
+    from PySide2 import QtWidgets
+    tried = []
+    for m in (["win32", "qt"] if method == "auto" else [method]):
+        before = pos()
+        try:
+            _send_wheel(widget, n, m)
+        except Exception as e:
+            tried.append({"method": m, "error": str(e)})
+            continue
+        after = before
+        for _ in range(20):  # the move lands on a later frame
+            QtWidgets.QApplication.processEvents()
+            if hasattr(RLPy.RGlobal, "ForceViewportUpdate"):
+                RLPy.RGlobal.ForceViewportUpdate()
+            after = pos()
+            if math.dist(before, after) > 0.01:
+                break
+            time.sleep(0.02)
+        moved = math.dist(before, after)
+        tried.append({"method": m, "moved_cm": round(moved, 3)})
+        if moved > 0.01:
+            return {"success": True, "method": m, "notches": n, "moved_cm": round(moved, 3),
+                    "before": [round(v, 3) for v in before], "after": [round(v, 3) for v in after]}
+    return {"success": False, "error": "the camera did not move", "tried": tried}
 
 
 # --- Light Control ---
@@ -9094,6 +9271,9 @@ def _auto_patch_server() -> None:
         "get_camera_info":       lambda p: _self.get_camera_info(),
         "set_camera_focal_length": lambda p: _self.set_camera_focal_length(float(p["focal_length"])),
         "frame_camera":          lambda p: _self.frame_camera(p.get("view", "face")),
+        "list_cameras":          lambda p: _self.list_cameras(),
+        "qt_viewport_probe":     lambda p: _self.qt_viewport_probe(),
+        "camera_dolly":          lambda p: _self.camera_dolly(p["notches"], p.get("method", "win32")),
         "get_lights":            lambda p: _self.get_lights(),
         "set_light_color":       lambda p: _self.set_light_color(p["light_name"], float(p["r"]), float(p["g"]), float(p["b"])),
         "get_light_info":        lambda p: _self.get_light_info(p["light_name"]),
@@ -9216,6 +9396,7 @@ def _auto_patch_server() -> None:
             "/redo":             "redo",
             "/camera/focal":     "set_camera_focal_length",
             "/camera/frame":     "frame_camera",
+            "/camera/dolly":     "camera_dolly",
             "/light/color":      "set_light_color",
             "/light/info":       "get_light_info",
             "/light/multiplier": "set_light_multiplier",
@@ -9311,6 +9492,8 @@ def _auto_patch_server() -> None:
     if hasattr(srv, "GET_ROUTES"):
         srv.GET_ROUTES.update({
             "/camera/info":      "get_camera_info",
+            "/camera/list":      "list_cameras",
+            "/debug/qt":         "qt_viewport_probe",
             "/lights":           "get_lights",
             "/visual/settings":  "get_visual_settings",
             "/expressions":      "get_expression_info",
@@ -9332,6 +9515,7 @@ def _auto_patch_server() -> None:
     if hasattr(srv, "REQUIRED_PARAMS"):
         srv.REQUIRED_PARAMS.update({
             "set_camera_focal_length": ["focal_length"],
+            "camera_dolly":            ["notches"],
             "set_light_color":         ["light_name", "r", "g", "b"],
             "get_light_info":          ["light_name"],
             "set_light_multiplier":    ["light_name", "multiplier"],

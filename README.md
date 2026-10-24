@@ -94,6 +94,8 @@ The MCP server provides 85 tools (registered in 18 modules under `src/tools/`) f
 | `get_camera_info` | Get camera position and focal length |
 | `set_camera_focal_length` | Set camera focal length |
 | `frame_camera` | Move the viewport camera to a preset view (face close-up, home, ...) |
+| `list_cameras` | List cameras with position, focal length, angle of view and whether scripts can move them (the Preview Camera cannot) |
+| `dolly_camera` | Move the viewport camera toward/away from the subject like the mouse wheel (15 cm per notch at the face view), without moving the user's mouse |
 
 #### Lighting (9)
 | Tool | Description |

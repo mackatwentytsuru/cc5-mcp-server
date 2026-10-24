@@ -50,4 +50,38 @@ export function registerCameraTools(server: McpServer, bridge: CC5Bridge) {
         : `Failed: ${result.error}`,
     )
   );
+
+  const xyz = (p?: number[]) => (p ? `(${p.map((v) => v.toFixed(1)).join(", ")})` : "(unknown)");
+
+  server.tool(
+    "list_cameras",
+    "List every camera in CC5 with its position (cm), focal length, vertical angle of view and whether scripts can move it. The viewport's Preview Camera is read-only to scripts (its focal length cannot be set either); move it with frame_camera presets and dolly_camera.",
+    {},
+    async () => bridgeCall(
+      () => bridge.listCameras(),
+      (result) => {
+        if (!result.success) return `Failed: ${result.error}`;
+        return (result.cameras ?? []).map((c) =>
+          `${c.name}${c.current ? " (current)" : ""}: position ${xyz(c.position)}, ` +
+          `focal ${c.focal_length ?? "?"}mm, angle of view ${c.angle_of_view ?? "?"} deg, ` +
+          `${c.transform_writable ? "movable by scripts" : "read-only to scripts"}`,
+        ).join("\n") || "No cameras.";
+      },
+    )
+  );
+
+  server.tool(
+    "dolly_camera",
+    "Move the viewport camera straight toward or away from the subject, exactly as the mouse wheel does, without moving the user's mouse. One notch = one wheel click (15 cm at the 'face' view). Positive backs away (less perspective; crop a larger capture to keep the framing), negative comes closer. Call frame_camera first to start from a known view.",
+    {
+      notches: z.number().int().min(-200).max(200).refine((n) => n !== 0, "notches must not be 0")
+        .describe("Wheel clicks: positive = back away, negative = come closer"),
+    },
+    async ({ notches }) => bridgeCall(
+      () => bridge.dollyCamera(notches),
+      (result) => result.success
+        ? `Camera moved ${(result.moved_cm ?? 0).toFixed(1)} cm (${notches} notches): ${xyz(result.before)} -> ${xyz(result.after)}`
+        : `Failed: ${result.error}`,
+    )
+  );
 }

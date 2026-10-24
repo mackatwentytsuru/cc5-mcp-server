@@ -179,6 +179,7 @@ export function registerSceneTools(server: McpServer, bridge: CC5Bridge) {
         if (base64Data) {
           content.push({ type: "image" as const, data: base64Data, mimeType: "image/png" });
           content.push({ type: "text" as const, text: `Viewport captured: ${imgPath ?? "temp file"}` });
+          if (result.warning) content.push({ type: "text" as const, text: `Warning: ${result.warning}` });
         } else {
           content.push({ type: "text" as const, text: "Failed to capture viewport via both RenderImage and screen capture." });
         }

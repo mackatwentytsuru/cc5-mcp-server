@@ -381,6 +381,17 @@ describe("capture_viewport handler", () => {
     expect(result.content[1].text).toContain("/tmp/cc5_snap.png");
   });
 
+  it("shows the bridge warning when the capture fell back to a window screenshot", async () => {
+    const fallback: CaptureResult = {
+      success: true, path: "C:/temp/capture.png", base64: CAPTURE_SUCCESS.base64,
+      warning: "RenderImage failed, so this is a screenshot of the CC5 window",
+      fallback: "window_screenshot",
+    };
+    bridge.captureViewport.mockResolvedValue(fallback);
+    const result = await server.getRegisteredTool("capture_viewport")({ output_path: "C:/temp/capture.png" });
+    expect(result.content[2].text).toBe("Warning: RenderImage failed, so this is a screenshot of the CC5 window");
+  });
+
   it("returns failure message when capture operation fails", async () => {
     const failed: CaptureResult = { success: false, error: "no render context" };
     bridge.captureViewport.mockResolvedValue(failed);
