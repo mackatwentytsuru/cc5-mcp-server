@@ -12,7 +12,7 @@ const ALLOWED_ASSET_EXTENSIONS = new Set([
   ".iavatar", ".ccavatar", ".ccproject", ".ccm",
   ".iclothes", ".ihair", ".iprop", ".ccfbx",
   ".iclothing", ".ishoe", ".iaccessory", ".ibody", ".iskin",
-  ".rlhair", ".rlhairelement",
+  ".rlhair", ".rlhairelement", ".rlhairstyle", ".rleyelashelement",
 ]);
 
 function validateAssetPath(filePath: string): string | null {
@@ -44,7 +44,7 @@ function validateExportPath(filePath: string): string | null {
 export function registerAssetTools(server: McpServer, bridge: CC5Bridge) {
   server.tool(
     "load_asset",
-    "Load a CC5 asset file into the scene. Supports .iAvatar, .ccm (character), .iClothes (clothing), .iHair (hair), .rlHair / .rlHairElement (Smart Hair and its parts), .iProp (prop), and other CC5 formats.",
+    "Load a CC5 asset file into the scene. Supports .iAvatar, .ccm (character), .iClothes (clothing), .iHair (hair), .rlHair / .rlHairElement / .rlHairStyle (Smart Hair, its parts and saved styles), .rlEyelashElement, .iProp (prop), and other CC5 formats.",
     {
       file_path: z.string().describe("Absolute path to the CC5 asset file (e.g., 'C:/Assets/MyChar.iAvatar')"),
     },
