@@ -30,6 +30,7 @@ function createWorkflowBridge() {
     wfSetTransform: vi.fn(),
     wfSaveProject: vi.fn(),
     wfExportObj: vi.fn(),
+    wfMeshOffset: vi.fn(),
     wfGetFloorContact: vi.fn(),
     wfSetFloorContact: vi.fn(),
     wfAutoAdjustFootHeight: vi.fn(),
@@ -86,6 +87,7 @@ const TOOL_NAMES = [
   "set_transform",
   "save_project",
   "export_obj",
+  "offset_mesh",
   "get_floor_contact",
   "set_floor_contact",
   "auto_adjust_foot_height",
@@ -101,8 +103,8 @@ const TOOL_NAMES = [
 ];
 
 describe("registerWorkflowTools – registration", () => {
-  it("registers exactly 25 tools", () => {
-    expect(server.tool).toHaveBeenCalledTimes(25);
+  it("registers exactly 26 tools", () => {
+    expect(server.tool).toHaveBeenCalledTimes(26);
   });
 
   it.each(TOOL_NAMES)("registers %s", (name) => {
@@ -259,9 +261,33 @@ const CASES: ToolCase[] = [
     tool: "export_obj",
     args: { file_path: "C:/work/hero.obj" },
     method: "wfExportObj",
-    expectedArgs: ["C:/work/hero.obj", true, true],
+    expectedArgs: ["C:/work/hero.obj", true, true, {}],
     success: { success: true, path: "C:/work/hero.obj", bytes: 2048 },
     successContains: ["Exported OBJ to C:/work/hero.obj", "2048 bytes"],
+  },
+  {
+    tool: "export_obj",
+    args: { file_path: "C:/work/choker.obj", current_pose: false, item_name: "Choker" },
+    method: "wfExportObj",
+    expectedArgs: ["C:/work/choker.obj", false, true, { item_name: "Choker" }],
+    success: { success: true, path: "C:/work/choker.obj", bytes: 10 },
+    successContains: ["Exported OBJ to C:/work/choker.obj"],
+  },
+  {
+    tool: "offset_mesh",
+    args: { item_name: "Choker", offset: [0, 0, -1], reference_obj: "C:/work/choker.obj" },
+    method: "wfMeshOffset",
+    expectedArgs: [{ item_name: "Choker" }, [0, 0, -1], "C:/work/choker.obj", { meshName: undefined, dryRun: undefined }],
+    success: { success: true, name: "Choker", mesh: "Choker", vertices: 120, offset: [0, 0, -1], after_error_cm: 0 },
+    successContains: ["Moved 'Choker' by (0, 0, -1) cm", "120 vertices", "read-back error 0 cm"],
+  },
+  {
+    tool: "offset_mesh",
+    args: { item_id: "i7", offset: [0, 0, 0], reference_obj: "C:/work/choker.obj", mesh_name: "Bow", dry_run: true },
+    method: "wfMeshOffset",
+    expectedArgs: [{ item_id: "i7" }, [0, 0, 0], "C:/work/choker.obj", { meshName: "Bow", dryRun: true }],
+    success: { success: true, dry_run: true, mesh: "Bow", vertices: 50, frame_turn_deg: 90 },
+    successContains: ["Checked 'Bow': 50 vertices match the OBJ (frame turned 90 deg)"],
   },
   {
     tool: "get_floor_contact",
@@ -531,6 +557,7 @@ const SELECTOR_TOOLS: Array<{ tool: string; extra: Record<string, unknown> }> = 
   { tool: "conform_cloth", extra: {} },
   { tool: "get_transform", extra: {} },
   { tool: "set_transform", extra: { move: [0, 0, 0] } },
+  { tool: "offset_mesh", extra: { offset: [0, 0, -1], reference_obj: "C:/work/c.obj" } },
   { tool: "get_physics_info", extra: {} },
   { tool: "set_physics_active", extra: { enable: true } },
   { tool: "load_physics_weight_map", extra: { file_path: "C:/maps/w.png" } },
@@ -632,7 +659,7 @@ describe("workflow tools – defaults", () => {
 
     await call("export_obj", { file_path: "C:/work/hero.obj" });
 
-    expect(bridge.wfExportObj).toHaveBeenCalledWith("C:/work/hero.obj", true, true);
+    expect(bridge.wfExportObj).toHaveBeenCalledWith("C:/work/hero.obj", true, true, {});
   });
 });
 

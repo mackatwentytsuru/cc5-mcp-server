@@ -26,6 +26,7 @@ import type {
   WorkflowTransformResult,
   WorkflowSaveResult,
   WorkflowExportObjResult,
+  WorkflowMeshOffsetResult,
   WorkflowFloorContactResult,
   WorkflowSimpleResult,
   WorkflowRenderResult,
@@ -495,15 +496,63 @@ export function registerWorkflowTools(server: McpServer, bridge: CC5Bridge): voi
         .default(true)
         .describe("true exports the current pose, false exports the rest pose"),
       with_materials: z.boolean().default(true).describe("true writes .mtl materials"),
+      item_name: z
+        .string()
+        .min(1)
+        .max(256)
+        .optional()
+        .describe("Export only this item (e.g. a cloth); omit for the first avatar"),
     },
-    async ({ file_path, current_pose, with_materials }) =>
+    async ({ file_path, current_pose, with_materials, item_name }) =>
       bridgeCall(
-        () => bridge.wfExportObj(file_path, current_pose ?? true, with_materials ?? true),
+        () =>
+          bridge.wfExportObj(
+            file_path,
+            current_pose ?? true,
+            with_materials ?? true,
+            item_name !== undefined ? { item_name } : {},
+          ),
         (result: WorkflowExportObjResult) =>
           result.success
             ? `Exported OBJ to ${result.path ?? file_path}${result.bytes !== undefined ? ` (${result.bytes} bytes)` : ""}`
             : failed(result.error),
       ),
+  );
+
+  server.tool(
+    "offset_mesh",
+    `Move every vertex of an item's mesh by [dx, dy, dz] cm in world space (Z up), keeping its skin weights. This is how to move a cloth item, which has no transform. reference_obj must be an OBJ of the same item from export_obj (item_name set, current_pose false); it is used to find the mesh's frame and to prove the vertex order. Save the project first: undo does not restore the mesh. ${NO_GUI}`,
+    selectorShape({
+      offset: z
+        .array(z.number().min(-20).max(20))
+        .length(3)
+        .describe("[dx, dy, dz] in cm, world space, Z up"),
+      reference_obj: z
+        .string()
+        .min(1)
+        .max(4096)
+        .describe("OBJ of the same item, exported by export_obj with current_pose false"),
+      mesh_name: z.string().min(1).max(256).optional().describe("Mesh to move when the item has several"),
+      dry_run: z.boolean().optional().describe("true only checks the frame and the vertex order"),
+    }),
+    async ({ item_name, item_id, offset, reference_obj, mesh_name, dry_run }) => {
+      const problem = selectorProblem({ item_name, item_id });
+      if (problem) return schemaFailure(problem);
+      return bridgeCall(
+        () =>
+          bridge.wfMeshOffset(toSelector({ item_name, item_id }), offset, reference_obj, {
+            meshName: mesh_name,
+            dryRun: dry_run,
+          }),
+        (result: WorkflowMeshOffsetResult) => {
+          const label = `'${result.mesh ?? result.name ?? item_name ?? item_id}'`;
+          if (!result.success) return failedItem(result);
+          return result.dry_run
+            ? `Checked ${label}: ${result.vertices} vertices match the OBJ (frame turned ${result.frame_turn_deg} deg)`
+            : `Moved ${label} by ${vec(result.offset)} cm (${result.vertices} vertices, read-back error ${result.after_error_cm} cm)`;
+        },
+      );
+    },
   );
 
   server.tool(

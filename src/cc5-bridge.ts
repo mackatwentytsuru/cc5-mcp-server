@@ -71,6 +71,7 @@ import type {
   WorkflowTransformUpdate,
   WorkflowSaveResult,
   WorkflowExportObjResult,
+  WorkflowMeshOffsetResult,
   WorkflowFloorContactResult,
   WorkflowSimpleResult,
   WorkflowRenderResult,
@@ -735,13 +736,27 @@ export class CC5Bridge {
   async wfExportObj(
     filePath: string,
     currentPose: boolean = true,
-    withMaterials: boolean = true
+    withMaterials: boolean = true,
+    sel: WorkflowItemSelector = {}
   ): Promise<WorkflowExportObjResult> {
     return this.request<WorkflowExportObjResult>("/workflow/export_obj", "POST", {
+      ...sel,
       file_path: filePath,
       current_pose: currentPose,
       with_materials: withMaterials,
     });
+  }
+
+  async wfMeshOffset(
+    sel: WorkflowItemSelector,
+    offset: number[],
+    referenceObj: string,
+    options: { meshName?: string; dryRun?: boolean } = {}
+  ): Promise<WorkflowMeshOffsetResult> {
+    const body: Record<string, unknown> = { ...sel, offset, reference_obj: referenceObj };
+    if (options.meshName !== undefined) body.mesh_name = options.meshName;
+    if (options.dryRun) body.dry_run = true;
+    return this.request<WorkflowMeshOffsetResult>("/workflow/mesh/offset", "POST", body);
   }
 
   async wfGetFloorContact(): Promise<WorkflowFloorContactResult> {

@@ -7903,6 +7903,131 @@ def wf_export_obj(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str
         return {"success": False, "error": str(e)}
 
 
+_WF_Z_TURNS = {0: lambda x, y: (x, y), 90: lambda x, y: (-y, x),
+               180: lambda x, y: (-x, -y), 270: lambda x, y: (y, -x)}
+
+
+def _wf_read_obj_vertices(path: str) -> list[tuple[float, float, float]]:
+    """The "v" lines of an OBJ, in file order."""
+    out = []
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if line.startswith("v "):
+                parts = line.split()
+                out.append((float(parts[1]), float(parts[2]), float(parts[3])))
+    return out
+
+
+def _wf_frame_turn(verts, ref, sample) -> tuple[int | None, dict[int, float]]:
+    """Which turn about Z maps GetVertices(True) onto the reference OBJ (max error per turn, cm)."""
+    errors = {}
+    for turn, rot in _WF_Z_TURNS.items():
+        worst = 0.0
+        for i in sample:
+            v = verts[i]
+            x, y = rot(v.x, v.y)
+            r = ref[i]
+            worst = max(worst, abs(x - r[0]), abs(y - r[1]), abs(v.z - r[2]))
+        errors[turn] = round(worst, 4)
+    ranked = sorted(errors, key=errors.get)
+    best, second = ranked[0], ranked[1]
+    # Even under the right turn the two differed by up to ~5 mm on a choker (likely the conform).
+    clear = errors[best] < 1.0 and errors[second] > 5 * max(errors[best], 0.01)
+    return (best if clear else None), errors
+
+
+def wf_mesh_offset(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/mesh/offset: move every vertex of one mesh by a world offset (cm, Z up).
+
+    Body: {"item_name"|"item_id": the item, "offset": [dx, dy, dz], "reference_obj": an OBJ of
+    the item exported by /workflow/export_obj (current_pose false), "mesh_name": optional,
+    "dry_run": true to only compare}. Skin weights stay, so a cloth item keeps following the
+    body; a cloth item has no transform to move it (10-24: a choker sat 1 cm too high).
+
+    RIMesh.GetVertices(True) is NOT in the world frame SetWorldVertices takes: for a choker it
+    came back turned 90 degrees about Z, and writing it back turned the choker sideways (10-24).
+    The reference OBJ (true world) is used only to find that turn on a sample of vertices; it
+    also proves the vertex order matches. Even under that turn the two differed by up to ~5 mm
+    on the choker (the OBJ likely carries the conform to the body), so the new positions are the
+    mesh's own vertices turned into the world frame plus the offset (checked on a choker: moved 1 cm
+    down, bow still in front). After writing, the mesh is read back and checked against the
+    target. Undo did not restore the mesh (10-24); save before, and reopen the save to restore.
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        obj, _kind, error = _wf_resolve(params.get("item_name"), params.get("item_id"))
+        if error:
+            return error
+        offset = params.get("offset")
+        if not isinstance(offset, (list, tuple)) or len(offset) != 3:
+            return {"success": False, "error": "offset must be [dx, dy, dz] in cm"}
+        dx, dy, dz = (float(v) for v in offset)
+        if max(abs(dx), abs(dy), abs(dz)) > 20:
+            return {"success": False, "error": "offset is limited to 20 cm per axis"}
+        ref_path = (params.get("reference_obj") or "").strip().replace(chr(92), "/")
+        path_error = _validate_path(ref_path, {".obj"})
+        if path_error:
+            return {"success": False, "error": "reference_obj: " + path_error}
+        if not os.path.isfile(ref_path):
+            return {"success": False, "error": "reference_obj not found", "path": ref_path}
+        only = (params.get("mesh_name") or "").strip()
+        meshes = [m for m in obj.GetMeshes() if not only or m.GetName() == only]
+        if len(meshes) != 1:
+            return {"success": False, "error": "need exactly one mesh (set mesh_name)",
+                    "meshes": list(obj.GetMeshNames())}
+        mesh = meshes[0]
+        ref = _wf_read_obj_vertices(ref_path)
+        verts = mesh.GetVertices(True)
+        if len(ref) != len(verts):
+            return {"success": False,
+                    "error": "vertex count differs: mesh %d, OBJ %d" % (len(verts), len(ref))}
+        step = max(1, len(verts) // 2000)
+        sample = range(0, len(verts), step)
+        turn, errors = _wf_frame_turn(verts, ref, sample)
+        out = {"name": _wf_obj_name(obj), "mesh": mesh.GetName(), "vertices": len(verts),
+               "frame_turn_deg": turn, "frame_errors_cm": errors}
+        if turn is None:
+            return {"success": False, **out,
+                    "error": "the OBJ does not match the mesh under any turn about Z (pose or order differs)"}
+        if params.get("dry_run"):
+            return {"success": True, "dry_run": True, **out}
+        rot = _WF_Z_TURNS[turn]
+        make = type(verts[0])
+        target = RLPy.Vector3fVector()
+        target.reserve(len(verts))
+        for v in verts:
+            x, y = rot(v.x, v.y)
+            target.append(make(x + dx, y + dy, v.z + dz))
+        RLPy.RGlobal.BeginAction("wf_mesh_offset")
+        try:
+            status = mesh.SetWorldVertices(target)
+        finally:
+            RLPy.RGlobal.EndAction()
+        try:
+            RLPy.RGlobal.ObjectModified(obj, RLPy.EObjectModifiedType_Attribute)
+        except Exception:
+            pass
+        # After the write, GetVertices(True) returns the written values as they are (no turn).
+        after = mesh.GetVertices(True)
+        worst = 0.0
+        for i in sample:
+            a, t = after[i], target[i]
+            worst = max(worst, abs(a.x - t.x), abs(a.y - t.y), abs(a.z - t.z))
+        status_error = False
+        try:
+            status_error = bool(status.IsError())
+        except Exception:
+            pass
+        ok = worst < 0.05 and not status_error
+        out.update({"offset": [dx, dy, dz], "status_error": status_error,
+                    "after_error_cm": round(worst, 4)})
+        if not ok:
+            out["error"] = "the mesh did not land on the target; reopen the saved project to restore it"
+        return {"success": ok, **out}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def wf_get_floor_contact(
     body: dict[str, Any] | None = None, **kwargs: Any
 ) -> dict[str, Any]:
@@ -9504,6 +9629,7 @@ def _auto_patch_server() -> None:
         "wf_set_transform":          wf_set_transform,
         "wf_save_project":           wf_save_project,
         "wf_export_obj":             wf_export_obj,
+        "wf_mesh_offset":            wf_mesh_offset,
         "wf_get_floor_contact":      wf_get_floor_contact,
         "wf_set_floor_contact":      wf_set_floor_contact,
         "wf_auto_adjust_foot_height": wf_auto_adjust_foot_height,
@@ -9608,6 +9734,7 @@ def _auto_patch_server() -> None:
             "/workflow/content/save":       "wf_content_save",
             "/workflow/content/apply":      "wf_content_apply",
             "/workflow/export_obj":         "wf_export_obj",
+            "/workflow/mesh/offset":        "wf_mesh_offset",
             "/workflow/floor_contact/get":  "wf_get_floor_contact",
             "/workflow/floor_contact/set":  "wf_set_floor_contact",
             "/workflow/foot_auto":          "wf_auto_adjust_foot_height",
