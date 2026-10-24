@@ -1461,6 +1461,18 @@ def selected_objects() -> dict[str, Any]:
     return {"success": True, "selected": out}
 
 
+def select_avatar(name: str = "") -> dict[str, Any]:
+    """Select the avatar (by name, else the first one) so presets apply to it. After a lash
+    preset CC5 leaves the lash parts selected, and the next preset then does nothing (10-24)."""
+    avatars = list(RLPy.RScene.GetAvatars() or [])
+    target = next((a for a in avatars if a.GetName() == name), None) if name else (avatars[0] if avatars else None)
+    if target is None:
+        return {"success": False, "error": f"Avatar not found: {name!r}"}
+    RLPy.RScene.ClearSelectObjects()
+    RLPy.RScene.SelectObject(target)
+    return {"success": True, **selected_objects()}
+
+
 def qt_viewport_probe() -> dict[str, Any]:
     """Read-only: the largest visible Qt widgets and windows, to find the 3D viewport."""
     from PySide2 import QtWidgets
@@ -9357,6 +9369,7 @@ def _auto_patch_server() -> None:
         "list_cameras":          lambda p: _self.list_cameras(),
         "qt_viewport_probe":     lambda p: _self.qt_viewport_probe(),
         "selected_objects":      lambda p: _self.selected_objects(),
+        "select_avatar":         lambda p: _self.select_avatar(p.get("name", "")),
         "camera_dolly":          lambda p: _self.camera_dolly(p["notches"], p.get("method", "win32")),
         "list_avatar_parts":     lambda p: _self.list_avatar_parts(),
         "remove_avatar_part":    lambda p: _self.remove_avatar_part(p.get("name", ""), p.get("type", "")),
@@ -9483,6 +9496,7 @@ def _auto_patch_server() -> None:
             "/camera/focal":     "set_camera_focal_length",
             "/camera/frame":     "frame_camera",
             "/camera/dolly":     "camera_dolly",
+            "/scene/select_avatar": "select_avatar",
             "/avatar/part/remove": "remove_avatar_part",
             "/light/color":      "set_light_color",
             "/light/info":       "get_light_info",
