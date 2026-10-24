@@ -131,3 +131,12 @@ These lessons go into the cc5-agent skill. Every item was learned the hard way.
 - `list_scene_items` の cloth/hair の「hidden」は誤り(RLPy に可視の読み取りが無い)。「visibility unknown」と出すようにした。本当の表示は Scene パネルの目のアイコンで見る。
 - カメラの位置はこの版では書き込めない(views4 の perspective が Back になるのはこのため)。**`/workflow/views_orbit`** を足した: アバターを Z 軸で回して Front プリセットで撮り、最後に元の向きへ戻す(yaws: [0,30,45,60,90,180]、top/bottom)。アバターを選んでから撮るので全身が入る。1回に6枚以上頼むとつなぎが時間切れを返すことがある(処理は続く)。3〜4枚ずつ頼む。
 - 足を開いた基本姿勢(A ポーズ)では、スカート v22w の後ろの内側の布が足の間に平らに張る。立ち姿のモーションでは出ない(v47 と同じ)。
+
+## 10-24 買ったはずの部品が「試用品」と出るとき
+- CC5 は、買った部品でも試用品(すかし入り・書き出し不可)と出ることがある(本人 10-24、Reallusion の報告でも既知)。
+- 部品を差し替える前に、まず次を試す。
+  1. CC5 のメニュー Help >「Activate Purchased Items」(購入済みの部品を有効にする)→ プロジェクトを保存。
+  2. 形の面(Morph)の「Refresh Slider」を押す。CC5 の開き直しでも直ることが多い。
+  3. まだだめなら、Smart Content Manager で部品を右クリック > Uninstall Content → 入れ直す。
+- Buy/Pack・Hub の「重要なアップデート」は押さない(本人に聞く)。
+- 10-24 の例: 歯の「Teeth Depth」(2019 年の部品)と HD Brows_F を試用品とみなして差し替えた(v58fix・v58b)。買ってある部品だった可能性がある。
