@@ -120,5 +120,48 @@ class MaterialOwnerTest(unittest.TestCase):
         self.assertIs(comp, avatar.GetMaterialComponent.return_value)
 
 
+
+class ExpressionKeysTest(unittest.TestCase):
+    """Batch expression keys: every frame in one call; a failed key is reported (10-25)."""
+
+    def _avatar(self, error_frames=()):
+        avatar = mock.MagicMock(name="avatar")
+        face = avatar.GetFaceComponent.return_value
+        face.GetExpressionGroups.return_value = ["MouthBase"]
+        face.GetExpressionNames.return_value = ["Mouth_Corner_Pull_L", "Mouth_Corner_Pull_R"]
+        calls = []
+
+        def add(time, names, weights, interval):
+            calls.append((time, list(names), list(weights)))
+            status = mock.MagicMock()
+            status.IsError.return_value = time in error_frames
+            return status
+        face.AddExpressionKeys.side_effect = add
+        return avatar, calls
+
+    def _fps(self):
+        fps = mock.MagicMock()
+        fps.IndexedFrameTime.side_effect = lambda f: f
+        return fps
+
+    def test_keys_every_frame_in_one_call(self) -> None:
+        avatar, calls = self._avatar()
+        keys = [{"frame": f, "expressions": {"Mouth_Corner_Pull_L": 0.8, "Bogus": 1.0}} for f in range(5)]
+        with mock.patch.object(cc5_api, "get_first_avatar", return_value=avatar),                 mock.patch.object(cc5_api.RLPy.RGlobal, "GetFps", return_value=self._fps()):
+            res = cc5_api.wf_expression_keys({"keys": keys})
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["keyed_frames"], 5)
+        self.assertEqual(res["unknown"], ["Bogus"])
+        self.assertEqual([c[0] for c in calls], [0, 1, 2, 3, 4])
+
+    def test_a_failed_key_fails_the_call(self) -> None:
+        avatar, _calls = self._avatar(error_frames={2})
+        keys = [{"frame": f, "expressions": {"Mouth_Corner_Pull_R": 0.5}} for f in range(4)]
+        with mock.patch.object(cc5_api, "get_first_avatar", return_value=avatar),                 mock.patch.object(cc5_api.RLPy.RGlobal, "GetFps", return_value=self._fps()):
+            res = cc5_api.wf_expression_keys({"keys": keys})
+        self.assertFalse(res["success"])
+        self.assertEqual(res["failed_frames"], [2])
+
+
 if __name__ == "__main__":
     unittest.main()
