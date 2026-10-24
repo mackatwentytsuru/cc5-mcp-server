@@ -677,6 +677,12 @@ def export_fbx(
         flags |= _safe_flag("EExportFbxOptions_AutoSkinRigidMesh")
         flags |= _safe_flag("EExportFbxOptions_ExportRootMotion")
         flags |= _safe_flag("EExportFbxOptions_RemoveAllUnused")
+        # Writes every shader map (roughness, SSS, micro-normal, HD wrinkle maps, hair
+        # root/ID/flow) into textures/<name>/... for CC Auto Setup. Without it only the
+        # FBX-native diffuse/normal/opacity reach UE and the skin renders flat (10-25).
+        flags |= _safe_flag("EExportFbxOptions_ExportPbrTextureAsImageInFormatDirectory")
+        if texture_size is None:
+            texture_size = 0   # keep the maps at their CC5 size (the API default capped at 2048)
         flags2 |= _safe_flag("EExportFbxOptions2_UnrealPreset")
         flags2 |= _safe_flag("EExportFbxOptions2_UnrealEngine4BoneAxis")
         flags2 |= _safe_flag("EExportFbxOptions2_YUp")
@@ -825,13 +831,19 @@ def export_fbx(
                     else:
                         notes.append("WARNING: motion_range must be [start, end]; left default (All)")
 
-                # Texture Settings — "Max Texture Size" (0 = original).
+                # Texture Settings — "Max Texture Size" (0 = original). SetTextureSize takes
+                # the EExportTextureSize enum, not a pixel count.
                 if texture_size is not None:
-                    try:
-                        setting.SetTextureSize(int(texture_size))
-                        applied_texture_size = int(texture_size)
-                    except Exception as e:
-                        notes.append(f"WARNING: SetTextureSize failed: {e}")
+                    size_enum = _texture_size_to_enum(int(texture_size))
+                    if size_enum is None:
+                        notes.append(f"WARNING: texture_size {texture_size} unsupported "
+                                     "(0/256/512/1024/2048/4096); left default")
+                    else:
+                        try:
+                            setting.SetTextureSize(size_enum)
+                            applied_texture_size = int(texture_size)
+                        except Exception as e:
+                            notes.append(f"WARNING: SetTextureSize failed: {e}")
 
                 if bone_structure:
                     enum_name = {"UE5": "EUnrealBoneStructure_UE5_BoneStructure",
@@ -3249,6 +3261,13 @@ def _resolution_to_enum(resolution: int) -> Any:
     if name is None:
         return None
     return getattr(RLPy, name, None)
+
+
+def _texture_size_to_enum(size: int) -> Any:
+    """Export "Max Texture Size": 0 = original, else the matching EExportTextureSize_* enum."""
+    if int(size) == 0:
+        return getattr(RLPy, "EExportTextureSize_Original", None)
+    return _resolution_to_enum(size)
 
 
 def bake_skin_textures(resolution: int = 4096) -> dict[str, Any]:
