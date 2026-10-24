@@ -2333,9 +2333,37 @@ def _validate_material_names(mesh_name: str, material_name: str) -> str | None:
     return None
 
 
+def _find_material_owner(avatar, mesh_name: str) -> Any:
+    """The scene object whose material component holds mesh_name: a cloth, hair or accessory
+    item when it owns that mesh, else the avatar.
+
+    The avatar's own component also lists an outfit item's meshes and materials, but keys
+    written there (AddDiffuseKey...) change nothing on the item: /material/color/set reported
+    success on a corset and the colour stayed (10-25). Items are checked first.
+    """
+    getters = (avatar.GetClothes, avatar.GetHairs, lambda: avatar.GetAccessories(True))
+    for getter in getters:
+        try:
+            items = list(getter() or [])
+        except Exception:
+            continue
+        for item in items:
+            try:
+                meshes = item.GetMeshNames(True) if hasattr(item, "GetMeshNames") else []
+            except Exception:
+                continue
+            if mesh_name in (meshes or []):
+                return item
+    return avatar
+
+
 def _get_valid_mesh_material(avatar, mesh_name: str, material_name: str) -> tuple[Any, str | None]:
-    """Validate mesh/material names exist on the avatar. Returns (mat_comp, error)."""
-    mat_comp = avatar.GetMaterialComponent()
+    """Validate mesh/material names exist on the avatar. Returns (mat_comp, error).
+
+    mat_comp belongs to the item that owns the mesh (see _find_material_owner).
+    """
+    owner = _find_material_owner(avatar, mesh_name)
+    mat_comp = owner.GetMaterialComponent()
     if not mat_comp:
         return None, "No material component"
 
@@ -2403,13 +2431,15 @@ def set_diffuse_color(mesh_name: str, material_name: str, r: float, g: float, b:
         g = max(0.0, min(1.0, g))
         b = max(0.0, min(1.0, b))
         color = RLPy.RRgb(r, g, b)
+        owner = _find_material_owner(avatar, mesh_name)
         try:
             RLPy.RGlobal.BeginAction("Set Diffuse Color")
             mat_comp.AddDiffuseKey(key, mesh_name, material_name, color)
-            RLPy.RGlobal.ObjectModified(avatar, _EOMTYPE_MATERIAL)
+            RLPy.RGlobal.ObjectModified(owner, _EOMTYPE_MATERIAL)
         finally:
             RLPy.RGlobal.EndAction()
-        return {"success": True, "mesh": mesh_name, "material": material_name}
+        return {"success": True, "mesh": mesh_name, "material": material_name,
+                "owner": owner.GetName() if owner is not avatar else "avatar"}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
