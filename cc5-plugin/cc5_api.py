@@ -5061,13 +5061,42 @@ def _wf_vector3(values: list[float]):
 
 
 def _wf_read_transform(obj) -> dict[str, Any]:
-    """Read the object's local transform as raw T/R/S values."""
+    """Read the object's local transform as raw T/R/S values (R is a quaternion's x/y/z, S a factor)."""
     transform = obj.LocalTransform()
     return {
         "move": _wf_vec3(transform.T()),
         "rotate": _wf_vec3(transform.R()),
         "scale": _wf_vec3(transform.S()),
     }
+
+
+_WF_TRANSFORM_UNITS = {"move": "cm", "rotate": "degrees (Euler X/Y/Z)", "scale": "percent (100 = original size)"}
+
+
+def _wf_transform_values(obj) -> dict[str, Any]:
+    """Move, rotate and scale in the units wf_set_transform takes (cm, degrees, percent).
+
+    Read from the Transform data block, the same place wf_set_transform writes. The raw
+    LocalTransform values differ: R() is a quaternion's x/y/z and S() a factor, so feeding
+    them back into set_transform shrank a hat to 1% and lost its tilt (10-24). Falls back
+    to the raw values, marked as such, when the item has no Transform data block.
+    """
+    try:
+        block = obj.GetControl("Transform").GetDataBlock()
+        now = RLPy.RGlobal.GetTime()
+
+        def read(prefix: str, conv) -> list[float]:
+            return [round(conv(float(block.GetData(prefix + axis, now).ToFloat())), 4) for axis in "XYZ"]
+
+        return {"move": read("Position/Position", float),
+                "rotate": read("Rotation/Rotation", math.degrees),
+                "scale": read("Scale/Scale", lambda v: v * 100.0),
+                "units": dict(_WF_TRANSFORM_UNITS)}
+    except Exception as exc:
+        return {**_wf_read_transform(obj),
+                "units": {"move": "cm", "rotate": "raw quaternion x/y/z (not degrees)",
+                          "scale": "factor (1 = original size, not percent)"},
+                "units_warning": "no Transform data block (%s); do not pass rotate/scale back to set_transform" % exc}
 
 
 def _wf_make_transform(move, rotate, scale):
@@ -7358,14 +7387,17 @@ def wf_get_transform(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[
         obj, _kind, error = _wf_resolve(params.get("item_name"), params.get("item_id"))
         if error:
             return error
-        values = _wf_read_transform(obj)
+        values = _wf_transform_values(obj)
         return {"success": True, "name": _wf_obj_name(obj), **values}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
 def wf_set_transform(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
-    """Route /workflow/transform/set."""
+    """Route /workflow/transform/set: move in cm, rotate in degrees (Euler X/Y/Z), scale in percent.
+
+    Only the keys given are written; /workflow/transform/get returns the same units.
+    """
     params = _wf_params(body, kwargs)
     try:
         obj, _kind, error = _wf_resolve(params.get("item_name"), params.get("item_id"))
@@ -7416,7 +7448,7 @@ def wf_set_transform(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[
                 except Exception:
                     pass
                 return {"success": True, "name": _wf_obj_name(obj), "method": "data block",
-                        **_wf_read_transform(obj)}
+                        **_wf_transform_values(obj)}
             except Exception as exc:
                 print(f"[CC5 MCP Bridge] data-block transform failed, trying RTransform: {exc}")
 

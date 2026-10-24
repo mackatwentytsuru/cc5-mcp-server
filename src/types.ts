@@ -554,6 +554,10 @@ export interface WorkflowTransformResult extends WorkflowItemResult {
   move?: number[];
   rotate?: number[];
   scale?: number[];
+  /** Units of move/rotate/scale (cm, degrees, percent when read from the Transform data block). */
+  units?: Record<string, string>;
+  /** Set when only raw values could be read; they must not be passed back to set_transform. */
+  units_warning?: string;
 }
 
 /** Transform values to apply; omitted fields are left unchanged. */
