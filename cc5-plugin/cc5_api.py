@@ -2196,7 +2196,8 @@ def _collect_expression_names(face_comp) -> set[str]:
     return valid
 
 
-def set_expression(expressions: list[dict[str, Any]]) -> dict[str, Any]:
+def set_expression(expressions: list[dict[str, Any]], pose_mode: bool = False,
+                   interval_ms: float = 0.0) -> dict[str, Any]:
     """Set one or more facial expression sliders by name (weights 0.0-1.0).
 
     expressions: [{"name": "Brow_Raise_Inner_L", "weight": 0.8}, ...]
@@ -2240,11 +2241,15 @@ def set_expression(expressions: list[dict[str, Any]]) -> dict[str, Any]:
         return {"success": False, "error": "No valid expression names", "skipped": skipped}
 
     time = RLPy.RGlobal.GetTime()
+    status_text = ""
     try:
         RLPy.RGlobal.BeginAction("Set Expression")
+        if pose_mode and hasattr(face_comp, "SetCurrentPoseMode"):
+            face_comp.SetCurrentPoseMode()
         face_comp.BeginKeyEditing()
         try:
-            face_comp.AddExpressionKeys(time, names, weights, RLPy.RTime_FromValue(0))
+            status = face_comp.AddExpressionKeys(time, names, weights, RLPy.RTime_FromValue(int(round(interval_ms))))
+            _ok, status_text = _describe_rlpy_status(status)
         finally:
             face_comp.EndKeyEditing()
         RLPy.RGlobal.ObjectModified(avatar, RLPy.EObjectModifiedType_Transform)
@@ -2256,7 +2261,61 @@ def set_expression(expressions: list[dict[str, Any]]) -> dict[str, Any]:
     except Exception:
         applied_weights = weights
     applied = [{"name": n, "weight": w} for n, w in zip(names, applied_weights)]
-    return {"success": True, "applied": applied, "skipped": skipped}
+    out = {"success": "IsError=True" not in status_text, "applied": applied, "skipped": skipped,
+           "status": status_text}
+    if hasattr(face_comp, "IsCurrentPoseMode"):
+        out["pose_mode"] = bool(face_comp.IsCurrentPoseMode())
+    return out
+
+
+def wf_expression_keys(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/expression/keys: key facial expression sliders at many frames in one call.
+
+    Body: {"keys": [{"frame": 0, "expressions": {"Mouth_Corner_Pull_L": 0.8, ...}}, ...]}.
+    Keys only take inside a face clip (load an .iTalk / .iMotionPlus first): outside one,
+    AddExpressionKeys returns an error. A loaded clip may already key the same sliders on
+    every frame; key every frame you want to own, or the clip's keys show between yours (10-25).
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        keys = params.get("keys") or []
+        if not isinstance(keys, list) or not keys or len(keys) > 20000:
+            return {"success": False, "error": "keys must be a non-empty list (at most 20000)"}
+        avatar = get_first_avatar()
+        if avatar is None:
+            return {"success": False, "error": "No avatar in the scene"}
+        face = avatar.GetFaceComponent()
+        valid = _collect_expression_names(face)
+        fps = RLPy.RGlobal.GetFps()
+        unknown: set[str] = set()
+        failed: list[int] = []
+        done = 0
+        RLPy.RGlobal.BeginAction("wf_expression_keys")
+        face.BeginKeyEditing()
+        try:
+            for row in keys:
+                frame = int(row.get("frame", 0))
+                exprs = row.get("expressions") or {}
+                names = [n for n in exprs if n in valid]
+                unknown.update(n for n in exprs if n not in valid)
+                if not names:
+                    continue
+                weights = [max(0.0, min(1.0, float(exprs[n]))) for n in names]
+                status = face.AddExpressionKeys(fps.IndexedFrameTime(frame), names, weights,
+                                                RLPy.RTime_FromValue(0))
+                ok, _text = _describe_rlpy_status(status)
+                if ok is False:
+                    failed.append(frame)
+                else:
+                    done += 1
+        finally:
+            face.EndKeyEditing()
+            RLPy.RGlobal.EndAction()
+        RLPy.RGlobal.ObjectModified(avatar, RLPy.EObjectModifiedType_Transform)
+        return {"success": not failed and done > 0, "keyed_frames": done, "failed_frames": failed[:50],
+                "failed_count": len(failed), "unknown": sorted(unknown)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 def reset_expression() -> dict[str, Any]:
@@ -7231,6 +7290,8 @@ def wf_load_texture(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[s
 
     Body: {"mesh": "CC_Base_Body", "material": "Std_Skin_Head",
     "channel": "diffuse"|"normal"|"roughness"|"ao"|..., "path": image file}.
+    Load "diffuse" last: on a cloth item's PBR material, loading metallic / AO after it
+    left the item flat grey (10-25).
     """
     params = _wf_params(body, kwargs)
     try:
@@ -7249,7 +7310,7 @@ def wf_load_texture(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[s
         avatar = get_first_avatar()
         if avatar is None:
             return {"success": False, "error": "No avatar in the scene"}
-        comp = avatar.GetMaterialComponent()
+        comp = _find_material_owner(avatar, mesh).GetMaterialComponent()   # the cloth's own, for outfit meshes
         if mat not in list(comp.GetMaterialNames(mesh)):
             return {"success": False, "error": "material %s not on mesh %s" % (mat, mesh)}
         RLPy.RGlobal.BeginAction("wf_load_texture")
@@ -9898,7 +9959,8 @@ def _auto_patch_server() -> None:
             bool(p.get("dry_run", True)),
             p.get("backup_current_to", ""),
         ),
-        "set_expression":        lambda p: _self.set_expression(p["expressions"]),
+        "set_expression":        lambda p: _self.set_expression(p["expressions"], bool(p.get("pose_mode", False)),
+                                                            float(p.get("interval_ms", 0.0))),
         "reset_expression":      lambda p: _self.reset_expression(),
         "reset_all_morphs":      lambda p: _self.reset_all_morphs(p.get("avatar_name", "")),
         "get_material_info":     lambda p: _self.get_material_info(p.get("avatar_name", "")),
@@ -9960,6 +10022,7 @@ def _auto_patch_server() -> None:
         "wf_bone_world":             wf_bone_world,
         "wf_motion_clear":           wf_motion_clear,
         "wf_motion_info":            wf_motion_info,
+        "wf_expression_keys":        wf_expression_keys,
         "wf_menu_find":              wf_menu_find,
         "wf_menu_trigger":           wf_menu_trigger,
         "wf_create_morph_slider":    wf_create_morph_slider,
@@ -10066,6 +10129,7 @@ def _auto_patch_server() -> None:
             "/workflow/bone/world":         "wf_bone_world",
             "/workflow/motion/clear":       "wf_motion_clear",
             "/workflow/motion/info":        "wf_motion_info",
+            "/workflow/expression/keys":    "wf_expression_keys",
             "/workflow/menu/find":          "wf_menu_find",
             "/workflow/menu/trigger":       "wf_menu_trigger",
             "/workflow/morph/create":       "wf_create_morph_slider",
