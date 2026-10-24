@@ -462,8 +462,73 @@ def delete_avatar(name: str = "") -> dict[str, Any]:
     return {"success": True, "removed": removed}
 
 
-def load_asset(file_path: str) -> dict[str, Any]:
-    """Load a CC5 asset file (.iAvatar, .ccm, .ccShoes, .ccCloth, etc.)."""
+# Questions RFileIO.LoadFile raises inside the call when a motion or expression file (.iTalk,
+# .iMotionPlus) carries expression keys the avatar's facial profile lacks (CC5 MetaHuman HD
+# face + iClone expression loops, 10-25). Unanswered, they block the bridge. Lower-case dialog
+# text fragment -> button to press. "ExPlus" keeps a little more than "Traditional" (eye squint).
+_LOAD_AUTO_ANSWERS: dict[str, str] = {
+    "contains custom expressions which can not be found on the target character": "ExPlus",
+    "custom expression key(s) which can not find the matched expression data": "OK",
+}
+
+
+class _WfAutoAnswer:
+    """Context manager: while a blocking RLPy call runs, answer known questions.
+
+    rules: lower-case dialog text fragment -> button text to press. Dialogs that match no
+    rule are left open (and so still block, as before). pressed lists what was answered.
+    """
+
+    def __init__(self, rules: dict[str, str]) -> None:
+        self.rules = {k.lower(): v for k, v in (rules or {}).items()}
+        self.pressed: list[str] = []
+        self._timer: Any = None
+
+    def _tick(self) -> None:
+        try:
+            from PySide2.QtWidgets import QAbstractButton, QApplication, QDialog
+            for w in QApplication.instance().topLevelWidgets():
+                if not (isinstance(w, QDialog) and w.isVisible()):
+                    continue
+                text = _wf_dialog_text(w).lower()
+                for frag, label in self.rules.items():
+                    if frag not in text:
+                        continue
+                    for b in w.findChildren(QAbstractButton):
+                        if (b.text() or "").replace("&", "").strip().lower() == label.lower():
+                            self.pressed.append(f"{label}: {text[:70]}")
+                            b.click()
+                            return
+        except Exception:
+            pass
+
+    def __enter__(self) -> "_WfAutoAnswer":
+        if not self.rules:
+            return self
+        try:
+            from PySide2.QtCore import QTimer
+            self._timer = QTimer()
+            self._timer.setInterval(300)
+            self._timer.timeout.connect(self._tick)
+            self._timer.start()
+        except Exception:
+            self._timer = None
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        if self._timer is not None:
+            try:
+                self._timer.stop()
+            except Exception:
+                pass
+
+
+def load_asset(file_path: str, answers: dict[str, str] | None = None) -> dict[str, Any]:
+    """Load a CC5 asset file (.iAvatar, .ccm, .ccShoes, .ccCloth, etc.).
+
+    answers: questions to answer during the load (dialog text fragment -> button). None uses
+    _LOAD_AUTO_ANSWERS; {} answers nothing.
+    """
     # Defense-in-depth: validate path even though TypeScript also validates.
     # Path-safety (traversal/null) via _validate_path; for the extension, accept the
     # explicit allowlist OR any CC5.1 / iClone content family (.cc*/.i*) — browse_content
@@ -484,9 +549,13 @@ def load_asset(file_path: str) -> dict[str, Any]:
         # SkinGen presets (drawn brows, makeup) cannot be applied this way: CC5 answers
         # "No character picked." even with the avatar selected (live 10-24). Apply them by
         # double-clicking in the Content panel instead.
-        result = RLPy.RFileIO.LoadFile(file_path)
+        with _WfAutoAnswer(_LOAD_AUTO_ANSWERS if answers is None else answers) as auto:
+            result = RLPy.RFileIO.LoadFile(file_path)
         _invalidate_caches()
-        return {"success": True, "path": file_path}
+        out: dict[str, Any] = {"success": True, "path": file_path}
+        if auto.pressed:
+            out["answered"] = auto.pressed
+        return out
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -6528,41 +6597,114 @@ def _wf_find_skin_bone(avatar: Any, name: str) -> Any:
     return None
 
 
+def _wf_clip_components(avatar: Any) -> dict[str, Any]:
+    """The avatar's components that hold clips: body motion and facial expression (.iTalk)."""
+    out = {"skeleton": avatar.GetSkeletonComponent()}
+    for key, getter in (("face", "GetFaceComponent"), ("viseme", "GetVisemeComponent"),
+                        ("morph", "GetMorphComponent")):
+        try:
+            comp = getattr(avatar, getter)()
+            if comp is not None and hasattr(comp, "GetClipCount"):
+                out[key] = comp
+        except Exception:
+            pass
+    return out
+
+
+def _wf_delete_clip(comp: Any, clip: Any) -> None:
+    """Delete one clip; the viseme component names it RemoveVisemesClip and takes the clip's start."""
+    if hasattr(comp, "DeleteClip"):
+        comp.DeleteClip(clip)
+    else:
+        comp.RemoveVisemesClip(clip.ClipTimeToSceneTime(RLPy.RTime.ZERO))
+
+
 def wf_motion_clear(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
     """Route /workflow/motion/clear: delete every motion clip of the first avatar (back to the bind pose).
 
     RIMesh.SetWorldVertices takes positions in the CURRENT pose, while GetVertices(True) reads
     the bind shape; editing a mesh with a motion applied moved a choker into the neck (10-24).
     Clear the motion (in a copy of the project) before offset_mesh. Body: {"dry_run": true}
-    only counts the clips.
+    only counts the clips. Facial clips (face expression, viseme and morph tracks, which an
+    .iTalk or .iMotionPlus load fills) are deleted too, unless {"face": false}: a leftover
+    expression would end up in the next motion export (10-25).
     """
     params = _wf_params(body, kwargs)
     try:
         avatar = get_first_avatar()
         if avatar is None:
             return {"success": False, "error": "No avatar in the scene"}
-        skel = avatar.GetSkeletonComponent()
-        count = int(skel.GetClipCount())
+        comps = _wf_clip_components(avatar)
+        if params.get("face") is False:
+            for k in ("face", "viseme", "morph"):
+                comps.pop(k, None)
+        counts = {k: int(c.GetClipCount()) for k, c in comps.items()}
         if params.get("dry_run"):
-            return {"success": True, "dry_run": True, "clips": count}
+            return {"success": True, "dry_run": True, "clips": counts["skeleton"],
+                    "face_clips": counts.get("face"), "other_clips": {k: v for k, v in counts.items()
+                                                                    if k not in ("skeleton", "face")}}
         if RLPy.RGlobal.IsPlaying():
             RLPy.RGlobal.Pause()
-        deleted = 0
+        deleted = {k: 0 for k in comps}
         RLPy.RGlobal.BeginAction("wf_motion_clear")
         try:
-            for i in reversed(range(count)):
-                clip = skel.GetClip(i)
-                if clip is not None:
-                    skel.DeleteClip(clip)
-                    deleted += 1
+            for k, comp in comps.items():
+                for i in reversed(range(counts[k])):
+                    clip = comp.GetClip(i)
+                    if clip is not None:
+                        _wf_delete_clip(comp, clip)
+                        deleted[k] += 1
         finally:
             RLPy.RGlobal.EndAction()
         try:
             RLPy.RGlobal.ObjectModified(avatar, RLPy.EObjectModifiedType_Transform)
         except Exception:
             pass
-        left = int(skel.GetClipCount())
-        return {"success": left == 0, "deleted": deleted, "clips_left": left}
+        left = {k: int(c.GetClipCount()) for k, c in comps.items()}
+        return {"success": not any(left.values()), "deleted": deleted["skeleton"],
+                "clips_left": left["skeleton"], "face_deleted": deleted.get("face"),
+                "face_clips_left": left.get("face"),
+                "other_deleted": {k: v for k, v in deleted.items() if k not in ("skeleton", "face")},
+                "other_left": {k: v for k, v in left.items() if k not in ("skeleton", "face")}}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def wf_motion_info(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/motion/info: read-only. Clips of the first avatar with their frame span.
+
+    Returns {"skeleton": [{"start": f, "end": f, "frames": n}], "face": [...], "end_frame",
+    "fps"}. Used to set export_fbx's motion_range to the loaded motion, so an export does
+    not run on to the end of the project timeline holding the last pose (10-25).
+    """
+    _wf_params(body, kwargs)
+    try:
+        avatar = get_first_avatar()
+        if avatar is None:
+            return {"success": False, "error": "No avatar in the scene"}
+        fps = RLPy.RGlobal.GetFps()
+        out: dict[str, Any] = {"success": True}
+        for k, comp in _wf_clip_components(avatar).items():
+            rows = []
+            for i in range(int(comp.GetClipCount())):
+                clip = comp.GetClip(i)
+                if clip is None:
+                    continue
+                row: dict[str, Any] = {}
+                try:
+                    row["start"] = int(fps.GetFrameIndex(clip.ClipTimeToSceneTime(RLPy.RTime.ZERO)))
+                    row["end"] = int(fps.GetFrameIndex(clip.ClipTimeToSceneTime(clip.GetClipLength())))
+                    row["frames"] = row["end"] - row["start"]
+                except Exception as e:
+                    row["error"] = str(e)
+                rows.append(row)
+            out[k] = rows
+        out["end_frame"] = int(fps.GetFrameIndex(RLPy.RGlobal.GetEndTime()))
+        try:
+            out["fps"] = round(float(fps.ToFloat()), 3)
+        except Exception:
+            pass
+        return out
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -9671,7 +9813,7 @@ def _auto_patch_server() -> None:
         "set_multiple_morphs":   lambda p: _self.set_multiple_morphs(p["morphs"]),
         "create_default_avatar": lambda p: _self.create_default_avatar(),
         "delete_avatar":         lambda p: _self.delete_avatar(p.get("name", "")),
-        "load_asset":            lambda p: _self.load_asset(p["file_path"]),
+        "load_asset":            lambda p: _self.load_asset(p["file_path"], p.get("answers")),
         "export_fbx":            lambda p: _self.export_fbx(
             p["output_path"],
             int(p.get("options", 0)),
@@ -9787,6 +9929,7 @@ def _auto_patch_server() -> None:
         "wf_bone_rotation":          wf_bone_rotation,
         "wf_bone_world":             wf_bone_world,
         "wf_motion_clear":           wf_motion_clear,
+        "wf_motion_info":            wf_motion_info,
         "wf_menu_find":              wf_menu_find,
         "wf_menu_trigger":           wf_menu_trigger,
         "wf_create_morph_slider":    wf_create_morph_slider,
@@ -9892,6 +10035,7 @@ def _auto_patch_server() -> None:
             "/workflow/bone/rotation":      "wf_bone_rotation",
             "/workflow/bone/world":         "wf_bone_world",
             "/workflow/motion/clear":       "wf_motion_clear",
+            "/workflow/motion/info":        "wf_motion_info",
             "/workflow/menu/find":          "wf_menu_find",
             "/workflow/menu/trigger":       "wf_menu_trigger",
             "/workflow/morph/create":       "wf_create_morph_slider",
