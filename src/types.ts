@@ -586,6 +586,8 @@ export interface WorkflowMeshOffsetResult extends WorkflowItemResult {
   offset?: number[];
   /** Largest read-back difference from the target on the sampled vertices. */
   after_error_cm?: number;
+  /** Vertices that a deltas_file moved. */
+  deltas_moved?: number;
   dry_run?: boolean;
 }
 

@@ -6509,6 +6509,62 @@ def _wf_find_skin_bone(avatar: Any, name: str) -> Any:
     return None
 
 
+def _wf_node_world(node: Any) -> dict[str, list[float]]:
+    """World position (cm), rotation quaternion [x, y, z, w] and scale of a bone or item."""
+    tr = node.WorldTransform()
+    t, r, sc = tr.T(), tr.R(), tr.S()
+    return {"pos": [round(t.x, 4), round(t.y, 4), round(t.z, 4)],
+            "quat": [round(r.x, 6), round(r.y, 6), round(r.z, 6), round(r.w, 6)],
+            "scale": [round(sc.x, 5), round(sc.y, 5), round(sc.z, 5)]}
+
+
+def wf_bone_world(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/bone/world: world transforms of bones (and items) at given frames.
+
+    Body: {"bones": ["CC_Base_Pelvis", ...], "items": ["beyon_skirt_v22w", ...] (optional),
+    "frames": [0, 5, ...] (optional, default the current frame)}. Moves the time to each
+    frame (playback is paused) and returns pos (cm), quat [x, y, z, w] and scale. Used to
+    find where the legs sweep during a motion, so a hip-attached skirt can be kept clear.
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        names = params.get("bones") or []
+        item_names = params.get("items") or []
+        if not isinstance(names, list) or not isinstance(item_names, list) or not (names or item_names):
+            return {"success": False, "error": "bones and/or items must be non-empty lists of names"}
+        avatar = get_first_avatar()
+        if avatar is None:
+            return {"success": False, "error": "No avatar in the scene"}
+        bones = {n: _wf_find_skin_bone(avatar, str(n)) for n in names}
+        missing = [n for n, b in bones.items() if b is None]
+        if missing:
+            return {"success": False, "error": "Unknown bone(s): " + ", ".join(missing)}
+        items = {}
+        for n in item_names:
+            obj, _kind, error = _wf_resolve(str(n), None)
+            if error:
+                return error
+            items[n] = obj
+        fps = RLPy.RGlobal.GetFps()
+        if RLPy.RGlobal.IsPlaying():
+            RLPy.RGlobal.Pause()
+        frames = params.get("frames")
+        if frames is None:
+            frames = [int(fps.GetFrameIndex(RLPy.RGlobal.GetTime()))]
+        if not isinstance(frames, list) or len(frames) > 2000:
+            return {"success": False, "error": "frames must be a list of at most 2000 frame numbers"}
+        out = []
+        for frame in frames:
+            RLPy.RGlobal.SetTime(fps.IndexedFrameTime(int(frame)))
+            row = {"frame": int(frame), "bones": {n: _wf_node_world(b) for n, b in bones.items()}}
+            if items:
+                row["items"] = {n: _wf_node_world(o) for n, o in items.items()}
+            out.append(row)
+        return {"success": True, "frames": out}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def _wf_bone_rotation_deg(block: Any, time: Any) -> list[float]:
     out = []
     for axis in "XYZ":
@@ -7282,19 +7338,28 @@ def wf_file_dialog_fill(body: dict[str, Any] | None = None, **kwargs: Any) -> di
 
 
 def wf_timeline(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
-    """Route /workflow/timeline: {"action": "state"|"pause"|"set", "frame": n}.
+    """Route /workflow/timeline: {"action": "state"|"pause"|"set"|"play", "frame": n}.
 
     "pause" stops playback where it is; "set" pauses and moves to a frame, so
-    captures for before/after comparisons show the same pose.
+    captures for before/after comparisons show the same pose. "play" starts playback
+    from "frame" (default 0) to "to" (default the end): soft-cloth physics is only
+    simulated while playing, so jumping with "set" shows cloth that has not moved.
     """
     params = _wf_params(body, kwargs)
     try:
         action = (params.get("action") or "state").strip().lower()
         fps = RLPy.RGlobal.GetFps()                      # RFps: frames by index, not a number
-        if action in ("pause", "set") and RLPy.RGlobal.IsPlaying():
+        if action in ("pause", "set", "play") and RLPy.RGlobal.IsPlaying():
             RLPy.RGlobal.Pause()
         if action == "set":
             RLPy.RGlobal.SetTime(fps.IndexedFrameTime(int(params.get("frame", 0))))
+        if action == "play":
+            start = fps.IndexedFrameTime(int(params.get("frame", 0)))
+            end_frame = params.get("to")
+            end = (fps.IndexedFrameTime(int(end_frame)) if end_frame is not None
+                   else RLPy.RGlobal.GetEndTime())
+            RLPy.RGlobal.SetTime(start)
+            RLPy.RGlobal.Play(start, end)
         now = RLPy.RGlobal.GetTime()
         return {"success": True, "playing": bool(RLPy.RGlobal.IsPlaying()),
                 "time_ms": float(now.ToFloat()) if hasattr(now, "ToFloat") else None,
@@ -7903,10 +7968,6 @@ def wf_export_obj(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str
         return {"success": False, "error": str(e)}
 
 
-_WF_Z_TURNS = {0: lambda x, y: (x, y), 90: lambda x, y: (-y, x),
-               180: lambda x, y: (-x, -y), 270: lambda x, y: (y, -x)}
-
-
 def _wf_read_obj_vertices(path: str) -> list[tuple[float, float, float]]:
     """The "v" lines of an OBJ, in file order."""
     out = []
@@ -7918,22 +7979,47 @@ def _wf_read_obj_vertices(path: str) -> list[tuple[float, float, float]]:
     return out
 
 
-def _wf_frame_turn(verts, ref, sample) -> tuple[int | None, dict[int, float]]:
-    """Which turn about Z maps GetVertices(True) onto the reference OBJ (max error per turn, cm)."""
-    errors = {}
-    for turn, rot in _WF_Z_TURNS.items():
-        worst = 0.0
-        for i in sample:
-            v = verts[i]
-            x, y = rot(v.x, v.y)
-            r = ref[i]
-            worst = max(worst, abs(x - r[0]), abs(y - r[1]), abs(v.z - r[2]))
-        errors[turn] = round(worst, 4)
-    ranked = sorted(errors, key=errors.get)
-    best, second = ranked[0], ranked[1]
-    # Even under the right turn the two differed by up to ~5 mm on a choker (likely the conform).
-    clear = errors[best] < 1.0 and errors[second] > 5 * max(errors[best], 0.01)
-    return (best if clear else None), errors
+def _wf_solve4(a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
+    """Solve a (4x4) x = b (4x3) by Gaussian elimination with partial pivoting."""
+    m = [row[:] + rhs[:] for row, rhs in zip(a, b)]
+    for col in range(4):
+        piv = max(range(col, 4), key=lambda r: abs(m[r][col]))
+        m[col], m[piv] = m[piv], m[col]
+        if abs(m[col][col]) < 1e-12:
+            raise ValueError("vertices are degenerate (all in one plane)")
+        for r in range(4):
+            if r != col:
+                f = m[r][col] / m[col][col]
+                m[r] = [x - f * y for x, y in zip(m[r], m[col])]
+    return [[m[r][4 + c] / m[r][r] for c in range(3)] for r in range(4)]
+
+
+def _wf_frame_fit(verts, ref, sample) -> tuple[list[list[float]], float]:
+    """Least-squares affine map from GetVertices(True) onto the reference OBJ, and its max error (cm).
+
+    Returns rows [x', y', z'] = [x, y, z, 1] @ M (M is 4x3).
+    """
+    ata = [[0.0] * 4 for _ in range(4)]
+    atb = [[0.0] * 3 for _ in range(4)]
+    for i in sample:
+        v, r = verts[i], ref[i]
+        row = (v.x, v.y, v.z, 1.0)
+        for p in range(4):
+            for q in range(4):
+                ata[p][q] += row[p] * row[q]
+            for c in range(3):
+                atb[p][c] += row[p] * r[c]
+    m = _wf_solve4(ata, atb)
+    worst = 0.0
+    for i in sample:
+        v, r = verts[i], ref[i]
+        mapped = _wf_map(m, v.x, v.y, v.z)
+        worst = max(worst, abs(mapped[0] - r[0]), abs(mapped[1] - r[1]), abs(mapped[2] - r[2]))
+    return m, worst
+
+
+def _wf_map(m, x: float, y: float, z: float) -> tuple[float, float, float]:
+    return tuple(x * m[0][c] + y * m[1][c] + z * m[2][c] + m[3][c] for c in range(3))
 
 
 def wf_mesh_offset(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
@@ -7941,16 +8027,21 @@ def wf_mesh_offset(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[st
 
     Body: {"item_name"|"item_id": the item, "offset": [dx, dy, dz], "reference_obj": an OBJ of
     the item exported by /workflow/export_obj (current_pose false), "mesh_name": optional,
-    "dry_run": true to only compare}. Skin weights stay, so a cloth item keeps following the
+    "dry_run": true to only compare}. Instead of one offset, "deltas_file" moves each vertex by
+    its own amount: a text file with one "dx dy dz" line per vertex, in the OBJ's order (world
+    frame, cm, up to 30 cm each); used to keep a hip-attached skirt clear of the legs (10-24).
+    With dry_run, "sample_vertices": true also returns ~300 vertices (GetVertices True/False)
+    to diagnose a fit that fails. Skin weights stay, so a cloth item keeps following the
     body; a cloth item has no transform to move it (10-24: a choker sat 1 cm too high).
 
-    RIMesh.GetVertices(True) is NOT in the world frame SetWorldVertices takes: for a choker it
-    came back turned 90 degrees about Z, and writing it back turned the choker sideways (10-24).
-    The reference OBJ (true world) is used only to find that turn on a sample of vertices; it
-    also proves the vertex order matches. Even under that turn the two differed by up to ~5 mm
-    on the choker (the OBJ likely carries the conform to the body), so the new positions are the
-    mesh's own vertices turned into the world frame plus the offset (checked on a choker: moved 1 cm
-    down, bow still in front). After writing, the mesh is read back and checked against the
+    RIMesh.GetVertices(True) is NOT in the world frame SetWorldVertices takes, and the difference
+    depends on the item: a cloth choker came back turned 90 degrees about Z (writing it back turned
+    the choker sideways), a skirt converted to an accessory turned ~12 degrees and shifted ~2 cm
+    (10-24). So a least-squares affine map from GetVertices(True) onto the reference OBJ (true
+    world) is fitted on a sample of vertices; a small fit error also proves the vertex order
+    matches. The fit leaves a few mm (the OBJ likely carries the conform to the body), so the new
+    positions are the mesh's own vertices mapped into the world frame plus the offset (checked on a
+    choker: moved 1 cm down, bow still in front). After writing, the mesh is read back and checked against the
     target. Undo did not restore the mesh (10-24); save before, and reopen the save to restore.
     """
     params = _wf_params(body, kwargs)
@@ -7958,12 +8049,28 @@ def wf_mesh_offset(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[st
         obj, _kind, error = _wf_resolve(params.get("item_name"), params.get("item_id"))
         if error:
             return error
-        offset = params.get("offset")
+        deltas_path = (params.get("deltas_file") or "").strip().replace(chr(92), "/")
+        offset = params.get("offset", [0, 0, 0] if deltas_path else None)
         if not isinstance(offset, (list, tuple)) or len(offset) != 3:
             return {"success": False, "error": "offset must be [dx, dy, dz] in cm"}
         dx, dy, dz = (float(v) for v in offset)
         if max(abs(dx), abs(dy), abs(dz)) > 20:
             return {"success": False, "error": "offset is limited to 20 cm per axis"}
+        deltas = None
+        if deltas_path:
+            path_error = _validate_path(deltas_path, {".txt"})
+            if path_error:
+                return {"success": False, "error": "deltas_file: " + path_error}
+            if not os.path.isfile(deltas_path):
+                return {"success": False, "error": "deltas_file not found", "path": deltas_path}
+            deltas = []
+            with open(deltas_path, encoding="utf-8") as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) == 3:
+                        deltas.append(tuple(float(x) for x in parts))
+            if any(max(abs(c) for c in d) > 30 for d in deltas):
+                return {"success": False, "error": "deltas are limited to 30 cm per axis"}
         ref_path = (params.get("reference_obj") or "").strip().replace(chr(92), "/")
         path_error = _validate_path(ref_path, {".obj"})
         if path_error:
@@ -7981,23 +8088,32 @@ def wf_mesh_offset(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[st
         if len(ref) != len(verts):
             return {"success": False,
                     "error": "vertex count differs: mesh %d, OBJ %d" % (len(verts), len(ref))}
+        if deltas is not None and len(deltas) != len(verts):
+            return {"success": False,
+                    "error": "deltas_file has %d lines, the mesh has %d vertices" % (len(deltas), len(verts))}
         step = max(1, len(verts) // 2000)
         sample = range(0, len(verts), step)
-        turn, errors = _wf_frame_turn(verts, ref, sample)
+        fit, fit_error = _wf_frame_fit(verts, ref, sample)
         out = {"name": _wf_obj_name(obj), "mesh": mesh.GetName(), "vertices": len(verts),
-               "frame_turn_deg": turn, "frame_errors_cm": errors}
-        if turn is None:
+               "frame_turn_deg": round(math.degrees(math.atan2(fit[0][1], fit[0][0])), 2),
+               "frame_fit_error_cm": round(fit_error, 4)}
+        if params.get("dry_run") and params.get("sample_vertices"):
+            local = mesh.GetVertices(False)
+            out["sample"] = [{"i": i, "world": [verts[i].x, verts[i].y, verts[i].z],
+                              "local": [local[i].x, local[i].y, local[i].z]}
+                             for i in range(0, len(verts), max(1, len(verts) // 300))]
+        if fit_error > 1.0:
             return {"success": False, **out,
-                    "error": "the OBJ does not match the mesh under any turn about Z (pose or order differs)"}
+                    "error": "the OBJ does not match the mesh (pose or vertex order differs)"}
         if params.get("dry_run"):
             return {"success": True, "dry_run": True, **out}
-        rot = _WF_Z_TURNS[turn]
         make = type(verts[0])
         target = RLPy.Vector3fVector()
         target.reserve(len(verts))
-        for v in verts:
-            x, y = rot(v.x, v.y)
-            target.append(make(x + dx, y + dy, v.z + dz))
+        for i, v in enumerate(verts):
+            x, y, z = _wf_map(fit, v.x, v.y, v.z)
+            ex, ey, ez = deltas[i] if deltas is not None else (0.0, 0.0, 0.0)
+            target.append(make(x + dx + ex, y + dy + ey, z + dz + ez))
         RLPy.RGlobal.BeginAction("wf_mesh_offset")
         try:
             status = mesh.SetWorldVertices(target)
@@ -8019,6 +8135,8 @@ def wf_mesh_offset(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[st
         except Exception:
             pass
         ok = worst < 0.05 and not status_error
+        if deltas is not None:
+            out["deltas_moved"] = sum(1 for d in deltas if max(abs(c) for c in d) > 0.001)
         out.update({"offset": [dx, dy, dz], "status_error": status_error,
                     "after_error_cm": round(worst, 4)})
         if not ok:
@@ -9609,6 +9727,7 @@ def _auto_patch_server() -> None:
         "wf_conform_cloth":          wf_conform_cloth,
         "wf_get_transform":          wf_get_transform,
         "wf_bone_rotation":          wf_bone_rotation,
+        "wf_bone_world":             wf_bone_world,
         "wf_menu_find":              wf_menu_find,
         "wf_menu_trigger":           wf_menu_trigger,
         "wf_create_morph_slider":    wf_create_morph_slider,
@@ -9712,6 +9831,7 @@ def _auto_patch_server() -> None:
             "/workflow/conform":            "wf_conform_cloth",
             "/workflow/transform/get":      "wf_get_transform",
             "/workflow/bone/rotation":      "wf_bone_rotation",
+            "/workflow/bone/world":         "wf_bone_world",
             "/workflow/menu/find":          "wf_menu_find",
             "/workflow/menu/trigger":       "wf_menu_trigger",
             "/workflow/morph/create":       "wf_create_morph_slider",

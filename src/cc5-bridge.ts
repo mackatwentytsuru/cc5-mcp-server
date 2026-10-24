@@ -749,13 +749,15 @@ export class CC5Bridge {
 
   async wfMeshOffset(
     sel: WorkflowItemSelector,
-    offset: number[],
+    offset: number[] | undefined,
     referenceObj: string,
-    options: { meshName?: string; dryRun?: boolean } = {}
+    options: { meshName?: string; dryRun?: boolean; deltasFile?: string } = {}
   ): Promise<WorkflowMeshOffsetResult> {
-    const body: Record<string, unknown> = { ...sel, offset, reference_obj: referenceObj };
+    const body: Record<string, unknown> = { ...sel, reference_obj: referenceObj };
+    if (offset !== undefined) body.offset = offset;
     if (options.meshName !== undefined) body.mesh_name = options.meshName;
     if (options.dryRun) body.dry_run = true;
+    if (options.deltasFile !== undefined) body.deltas_file = options.deltasFile;
     return this.request<WorkflowMeshOffsetResult>("/workflow/mesh/offset", "POST", body);
   }
 

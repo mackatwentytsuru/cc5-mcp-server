@@ -526,7 +526,14 @@ export function registerWorkflowTools(server: McpServer, bridge: CC5Bridge): voi
       offset: z
         .array(z.number().min(-20).max(20))
         .length(3)
-        .describe("[dx, dy, dz] in cm, world space, Z up"),
+        .optional()
+        .describe("[dx, dy, dz] in cm, world space, Z up (needed unless deltas_file is given)"),
+      deltas_file: z
+        .string()
+        .min(1)
+        .max(4096)
+        .optional()
+        .describe('Text file with one "dx dy dz" line per vertex (OBJ order, world, cm) to move each vertex by its own amount'),
       reference_obj: z
         .string()
         .min(1)
@@ -535,21 +542,27 @@ export function registerWorkflowTools(server: McpServer, bridge: CC5Bridge): voi
       mesh_name: z.string().min(1).max(256).optional().describe("Mesh to move when the item has several"),
       dry_run: z.boolean().optional().describe("true only checks the frame and the vertex order"),
     }),
-    async ({ item_name, item_id, offset, reference_obj, mesh_name, dry_run }) => {
+    async ({ item_name, item_id, offset, reference_obj, mesh_name, dry_run, deltas_file }) => {
       const problem = selectorProblem({ item_name, item_id });
       if (problem) return schemaFailure(problem);
+      if (offset === undefined && deltas_file === undefined) {
+        return schemaFailure("Provide offset or deltas_file.");
+      }
       return bridgeCall(
         () =>
           bridge.wfMeshOffset(toSelector({ item_name, item_id }), offset, reference_obj, {
             meshName: mesh_name,
             dryRun: dry_run,
+            deltasFile: deltas_file,
           }),
         (result: WorkflowMeshOffsetResult) => {
           const label = `'${result.mesh ?? result.name ?? item_name ?? item_id}'`;
           if (!result.success) return failedItem(result);
           return result.dry_run
             ? `Checked ${label}: ${result.vertices} vertices match the OBJ (frame turned ${result.frame_turn_deg} deg)`
-            : `Moved ${label} by ${vec(result.offset)} cm (${result.vertices} vertices, read-back error ${result.after_error_cm} cm)`;
+            : result.deltas_moved !== undefined
+              ? `Moved ${result.deltas_moved} of ${result.vertices} vertices of ${label} by their own deltas (read-back error ${result.after_error_cm} cm)`
+              : `Moved ${label} by ${vec(result.offset)} cm (${result.vertices} vertices, read-back error ${result.after_error_cm} cm)`;
         },
       );
     },
