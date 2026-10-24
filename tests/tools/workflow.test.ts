@@ -232,6 +232,14 @@ const CASES: ToolCase[] = [
     successContains: ["'Jacket'", "move=(1, 2.5, -3)", "rotate=(0, 45, 0)", "scale=(1, 1, 1)"],
   },
   {
+    tool: "get_transform",
+    args: { item_id: "i9" },
+    method: "wfGetTransform",
+    expectedArgs: [{ item_id: "i9" }],
+    success: { ...TRANSFORM, name: "Hat", units_warning: "no Transform data block (x); do not pass rotate/scale back" },
+    successContains: ["'Hat'", "Warning: no Transform data block (x); do not pass rotate/scale back"],
+  },
+  {
     tool: "set_transform",
     args: { item_name: "Jacket", move: [1, 2.5, -3] },
     method: "wfSetTransform",

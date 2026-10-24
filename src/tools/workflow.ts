@@ -427,7 +427,7 @@ export function registerWorkflowTools(server: McpServer, bridge: CC5Bridge): voi
 
   server.tool(
     "get_transform",
-    `Read an item's move, rotate and scale values. ${NO_GUI}`,
+    `Read an item's move (cm), rotate (degrees, Euler X/Y/Z) and scale (percent, 100 = original size) — the same units set_transform takes, so the values can be edited and passed back. ${NO_GUI}`,
     selectorShape({}),
     async ({ item_name, item_id }) => {
       const problem = selectorProblem({ item_name, item_id });
@@ -436,7 +436,8 @@ export function registerWorkflowTools(server: McpServer, bridge: CC5Bridge): voi
         () => bridge.wfGetTransform(toSelector({ item_name, item_id })),
         (result: WorkflowTransformResult) =>
           result.success
-            ? `'${result.name ?? item_name ?? item_id}' move=${vec(result.move)} rotate=${vec(result.rotate)} scale=${vec(result.scale)}`
+            ? `'${result.name ?? item_name ?? item_id}' move=${vec(result.move)} rotate=${vec(result.rotate)} scale=${vec(result.scale)}` +
+              (result.units_warning ? `\nWarning: ${result.units_warning}` : "")
             : failedItem(result),
       );
     },
@@ -446,9 +447,9 @@ export function registerWorkflowTools(server: McpServer, bridge: CC5Bridge): voi
     "set_transform",
     `Set an item's move, rotate and/or scale values and return the applied values. ${NO_GUI}`,
     selectorShape({
-      move: z.array(z.number()).length(3).optional().describe("[x, y, z] move values"),
-      rotate: z.array(z.number()).length(3).optional().describe("[x, y, z] rotation values"),
-      scale: z.array(z.number()).length(3).optional().describe("[x, y, z] scale values"),
+      move: z.array(z.number()).length(3).optional().describe("[x, y, z] move in cm"),
+      rotate: z.array(z.number()).length(3).optional().describe("[x, y, z] rotation in degrees (Euler)"),
+      scale: z.array(z.number()).length(3).optional().describe("[x, y, z] scale in percent (100 = original size)"),
     }),
     async ({ item_name, item_id, move, rotate, scale }) => {
       const problem = selectorProblem({ item_name, item_id });
