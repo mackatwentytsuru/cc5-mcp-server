@@ -6509,6 +6509,45 @@ def _wf_find_skin_bone(avatar: Any, name: str) -> Any:
     return None
 
 
+def wf_motion_clear(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
+    """Route /workflow/motion/clear: delete every motion clip of the first avatar (back to the bind pose).
+
+    RIMesh.SetWorldVertices takes positions in the CURRENT pose, while GetVertices(True) reads
+    the bind shape; editing a mesh with a motion applied moved a choker into the neck (10-24).
+    Clear the motion (in a copy of the project) before offset_mesh. Body: {"dry_run": true}
+    only counts the clips.
+    """
+    params = _wf_params(body, kwargs)
+    try:
+        avatar = get_first_avatar()
+        if avatar is None:
+            return {"success": False, "error": "No avatar in the scene"}
+        skel = avatar.GetSkeletonComponent()
+        count = int(skel.GetClipCount())
+        if params.get("dry_run"):
+            return {"success": True, "dry_run": True, "clips": count}
+        if RLPy.RGlobal.IsPlaying():
+            RLPy.RGlobal.Pause()
+        deleted = 0
+        RLPy.RGlobal.BeginAction("wf_motion_clear")
+        try:
+            for i in reversed(range(count)):
+                clip = skel.GetClip(i)
+                if clip is not None:
+                    skel.DeleteClip(clip)
+                    deleted += 1
+        finally:
+            RLPy.RGlobal.EndAction()
+        try:
+            RLPy.RGlobal.ObjectModified(avatar, RLPy.EObjectModifiedType_Transform)
+        except Exception:
+            pass
+        left = int(skel.GetClipCount())
+        return {"success": left == 0, "deleted": deleted, "clips_left": left}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def _wf_node_world(node: Any) -> dict[str, list[float]]:
     """World position (cm), rotation quaternion [x, y, z, w] and scale of a bone or item."""
     tr = node.WorldTransform()
@@ -9728,6 +9767,7 @@ def _auto_patch_server() -> None:
         "wf_get_transform":          wf_get_transform,
         "wf_bone_rotation":          wf_bone_rotation,
         "wf_bone_world":             wf_bone_world,
+        "wf_motion_clear":           wf_motion_clear,
         "wf_menu_find":              wf_menu_find,
         "wf_menu_trigger":           wf_menu_trigger,
         "wf_create_morph_slider":    wf_create_morph_slider,
@@ -9832,6 +9872,7 @@ def _auto_patch_server() -> None:
             "/workflow/transform/get":      "wf_get_transform",
             "/workflow/bone/rotation":      "wf_bone_rotation",
             "/workflow/bone/world":         "wf_bone_world",
+            "/workflow/motion/clear":       "wf_motion_clear",
             "/workflow/menu/find":          "wf_menu_find",
             "/workflow/menu/trigger":       "wf_menu_trigger",
             "/workflow/morph/create":       "wf_create_morph_slider",
