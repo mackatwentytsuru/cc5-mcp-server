@@ -78,6 +78,25 @@ export interface FocalLengthResult extends OperationResult {
   focal_length?: number;
 }
 
+export interface AvatarPart {
+  type: string;
+  name: string;
+  id?: number | string;
+  /** Only Brow and Beard parts can be removed. */
+  removable?: boolean;
+  visible?: boolean | null;
+}
+
+export interface AvatarPartsResult extends OperationResult {
+  avatar?: string;
+  parts?: AvatarPart[];
+}
+
+export interface RemoveAvatarPartResult extends OperationResult {
+  removed?: Array<{ type: string; name: string }>;
+  remaining_face_hair?: string[];
+}
+
 export interface CameraState {
   name: string;
   position?: [number, number, number];

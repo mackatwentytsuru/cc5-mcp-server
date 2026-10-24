@@ -481,6 +481,9 @@ def load_asset(file_path: str) -> dict[str, Any]:
         return {"success": False, "error": f"File not found: {file_path}"}
 
     try:
+        # SkinGen presets (drawn brows, makeup) cannot be applied this way: CC5 answers
+        # "No character picked." even with the avatar selected (live 10-24). Apply them by
+        # double-clicking in the Content panel instead.
         result = RLPy.RFileIO.LoadFile(file_path)
         _invalidate_caches()
         return {"success": True, "path": file_path}
@@ -1327,6 +1330,75 @@ def frame_camera(view: str = "face") -> dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
+# --- Avatar parts (brows, lashes, beard, eyes, teeth ...) ---
+# HD brows loaded from Hair/Group/Eyebrows are avatar parts, not hairs: GetHairs() and the
+# scene scan do not list them (live 10-24).
+
+_PART_TYPES = ("Brow", "Eyelash", "Beard", "Eyes", "Teeth", "Tongue", "EyeOcclusion", "TearLine")
+_REMOVABLE_PARTS = ("Brow", "Beard")  # face hair only; removing base parts would break the head
+
+
+def _avatar_parts():
+    avatar = get_first_avatar()
+    if avatar is None:
+        return None, []
+    found = []
+    for type_name in _PART_TYPES:
+        enum = getattr(RLPy, "EAvatarPartType_" + type_name, None)
+        if enum is None:
+            continue
+        try:
+            parts = avatar.GetAvatarParts(enum) or []
+        except Exception:
+            parts = []
+        for part in parts:
+            found.append((type_name, part))
+    return avatar, found
+
+
+def list_avatar_parts() -> dict[str, Any]:
+    """Brows, eyelashes, beard, eyes, teeth, tongue, eye occlusion and tear line of the avatar."""
+    avatar, found = _avatar_parts()
+    if avatar is None:
+        return {"success": False, "error": "No avatar in scene"}
+    now = RLPy.RGlobal.GetTime()
+    parts = []
+    for type_name, part in found:
+        entry: dict[str, Any] = {"type": type_name, "name": part.GetName(), "id": _wf_obj_id(part),
+                                 "removable": type_name in _REMOVABLE_PARTS}
+        try:
+            entry["visible"] = bool(part.IsVisible(now)) if hasattr(part, "IsVisible") else None
+        except Exception:
+            entry["visible"] = None
+        parts.append(entry)
+    return {"success": True, "avatar": avatar.GetName(), "parts": parts}
+
+
+def remove_avatar_part(name: str = "", part_type: str = "") -> dict[str, Any]:
+    """Remove brow or beard parts by name, or all parts of part_type ("Brow"/"Beard")."""
+    avatar, found = _avatar_parts()
+    if avatar is None:
+        return {"success": False, "error": "No avatar in scene"}
+    targets = [(t, p) for t, p in found if (name and p.GetName() == name) or (not name and t == part_type)]
+    if not targets:
+        return {"success": False, "error": f"No avatar part matches name={name!r} type={part_type!r}",
+                "parts": [{"type": t, "name": p.GetName()} for t, p in found]}
+    blocked = [p.GetName() for t, p in targets if t not in _REMOVABLE_PARTS]
+    if blocked:
+        return {"success": False, "error": f"Only {', '.join(_REMOVABLE_PARTS)} parts can be removed: {blocked}"}
+    removed = []
+    RLPy.RGlobal.BeginAction("remove_avatar_part")
+    try:
+        for t, p in targets:
+            removed.append({"type": t, "name": p.GetName()})
+            RLPy.RScene.RemoveObject(p)
+    finally:
+        RLPy.RGlobal.EndAction()
+    _invalidate_caches()
+    left = [x["name"] for x in list_avatar_parts().get("parts", []) if x["type"] in _REMOVABLE_PARTS]
+    return {"success": True, "removed": removed, "remaining_face_hair": left}
+
+
 # --- Camera inspection and dolly ---
 # The Preview Camera has no Transform control and CC5 cannot create scene cameras, so
 # scripts cannot set its position or focal length (live 10-24). It can be read, and moved
@@ -1376,6 +1448,17 @@ def list_cameras() -> dict[str, Any]:
         seen.add(name)
         out.append({**_camera_state(cam), "current": current is not None and name == current.GetName()})
     return {"success": True, "current": current.GetName() if current else "", "cameras": out}
+
+
+def selected_objects() -> dict[str, Any]:
+    """Read-only: names and types of the objects selected in the scene."""
+    out = []
+    for obj in RLPy.RScene.GetSelectedObjects() or []:
+        try:
+            out.append({"name": obj.GetName(), "type": type(obj).__name__})
+        except Exception as e:
+            out.append({"error": str(e)})
+    return {"success": True, "selected": out}
 
 
 def qt_viewport_probe() -> dict[str, Any]:
@@ -9273,7 +9356,10 @@ def _auto_patch_server() -> None:
         "frame_camera":          lambda p: _self.frame_camera(p.get("view", "face")),
         "list_cameras":          lambda p: _self.list_cameras(),
         "qt_viewport_probe":     lambda p: _self.qt_viewport_probe(),
+        "selected_objects":      lambda p: _self.selected_objects(),
         "camera_dolly":          lambda p: _self.camera_dolly(p["notches"], p.get("method", "win32")),
+        "list_avatar_parts":     lambda p: _self.list_avatar_parts(),
+        "remove_avatar_part":    lambda p: _self.remove_avatar_part(p.get("name", ""), p.get("type", "")),
         "get_lights":            lambda p: _self.get_lights(),
         "set_light_color":       lambda p: _self.set_light_color(p["light_name"], float(p["r"]), float(p["g"]), float(p["b"])),
         "get_light_info":        lambda p: _self.get_light_info(p["light_name"]),
@@ -9397,6 +9483,7 @@ def _auto_patch_server() -> None:
             "/camera/focal":     "set_camera_focal_length",
             "/camera/frame":     "frame_camera",
             "/camera/dolly":     "camera_dolly",
+            "/avatar/part/remove": "remove_avatar_part",
             "/light/color":      "set_light_color",
             "/light/info":       "get_light_info",
             "/light/multiplier": "set_light_multiplier",
@@ -9493,7 +9580,9 @@ def _auto_patch_server() -> None:
         srv.GET_ROUTES.update({
             "/camera/info":      "get_camera_info",
             "/camera/list":      "list_cameras",
+            "/avatar/parts":     "list_avatar_parts",
             "/debug/qt":         "qt_viewport_probe",
+            "/scene/selected":   "selected_objects",
             "/lights":           "get_lights",
             "/visual/settings":  "get_visual_settings",
             "/expressions":      "get_expression_info",
