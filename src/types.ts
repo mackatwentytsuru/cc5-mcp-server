@@ -576,6 +576,19 @@ export interface WorkflowExportObjResult extends OperationResult {
   bytes?: number;
 }
 
+/** Result of /workflow/mesh/offset (moving a mesh's vertices in world space). */
+export interface WorkflowMeshOffsetResult extends WorkflowItemResult {
+  mesh?: string;
+  vertices?: number;
+  /** Turn about Z between GetVertices(True) and the true world; null when none fits. */
+  frame_turn_deg?: number | null;
+  frame_errors_cm?: Record<string, number>;
+  offset?: number[];
+  /** Largest read-back difference from the target on the sampled vertices. */
+  after_error_cm?: number;
+  dry_run?: boolean;
+}
+
 export interface WorkflowFloorContactResult extends OperationResult {
   value?: unknown;
 }

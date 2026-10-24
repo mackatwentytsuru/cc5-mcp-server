@@ -154,7 +154,8 @@ These tools drive the `/workflow/*` routes. They work without the GUI and are me
 | `get_transform` | Read an item's move, rotate and scale values |
 | `set_transform` | Set an item's move, rotate and/or scale values |
 | `save_project` | Save the current project, optionally to a new path |
-| `export_obj` | Export the scene to OBJ (current pose and materials by default) |
+| `export_obj` | Export the scene, or one item with `item_name`, to OBJ (current pose and materials by default) |
+| `offset_mesh` | Move every vertex of an item's mesh by a world offset in cm, keeping skin weights (moves a cloth item; needs that item's OBJ from `export_obj` with `current_pose` false) |
 | `get_floor_contact` | Read the current floor-contact settings |
 | `set_floor_contact` | Apply floor-contact settings returned by `get_floor_contact` |
 | `auto_adjust_foot_height` | Automatically adjust foot height so the avatar stands on the floor |
