@@ -18,14 +18,20 @@ import { bridgeCall, bridgeCallRich, textContent, type ToolContent } from "../ut
 import {
   failureContent,
   openWindowShots,
+  refusedContent,
   runUiJob,
   stillRunningText,
   windowNeedsPerson,
   type WaitOptions,
 } from "./ui-common.js";
 
-const EDITOR_WAIT_SECONDS = 150;   // baking can take a while
+const DEFAULT_SETTLE_SECONDS = 120;
 const LAYER_WAIT_SECONDS = 90;
+
+/** How long the tool waits for an editor switch: the bridge waits up to 60 s for the switch, then settles twice. */
+export function editorWaitSeconds(timeoutSeconds: number | undefined): number {
+  return 60 + 2 * ((timeoutSeconds ?? DEFAULT_SETTLE_SECONDS) + 10) + 30;
+}
 
 export function formatLayers(layers: SkinGenLayer[] | undefined): string {
   if (!layers || layers.length === 0) return "  (no layers)";
@@ -88,19 +94,21 @@ export function registerSkinGenTools(server: McpServer, bridge: CC5Bridge, wait:
     {
       active: z.boolean().describe("true = editor on, false = off (bakes)"),
       exit_answer: z.enum(["yes", "no"]).optional().describe("Answer to 'exit SkinGen editing mode?' (default yes)"),
-      timeout_seconds: z.number().int().min(10).max(600).optional().describe("Seconds CC5 may take to settle (default 120)"),
+      timeout_seconds: z.number().int().min(10).max(600).optional()
+        .describe(`Seconds CC5 may take to settle after the switch changed (default ${DEFAULT_SETTLE_SECONDS})`),
     },
     async ({ active, exit_answer, timeout_seconds }) =>
       bridgeCallRich(async (): Promise<ToolContent[]> => {
+        const waitSeconds = editorWaitSeconds(timeout_seconds);
         const run = await runUiJob<SkinGenEditorResult>(
           bridge,
           () => bridge.uiSkinGenEditor({ active, ...(exit_answer ? { exit_answer } : {}), ...(timeout_seconds ? { timeout_s: timeout_seconds } : {}) }),
-          EDITOR_WAIT_SECONDS,
+          waitSeconds,
           wait,
         );
-        if ("refused" in run) return failureContent(run.refused.error ?? "the bridge refused to start the job");
+        if ("refused" in run) return refusedContent(run.refused);
         if (!run.outcome.finished) {
-          return [textContent(stillRunningText(run.jobId, EDITOR_WAIT_SECONDS, run.outcome.status?.windows)), ...(await openWindowShots(bridge))];
+          return [textContent(stillRunningText(run.jobId, waitSeconds, run.outcome.status)), ...(await openWindowShots(bridge))];
         }
         const result = run.outcome.result ?? { success: false, error: "the job returned nothing" };
         const answered = (result.answered ?? []).map((a) => a.pressed).join(", ");
@@ -109,7 +117,11 @@ export function registerSkinGenTools(server: McpServer, bridge: CC5Bridge, wait:
             `${answered ? ` Answered: ${answered}.` : ""}${result.waited_s ? ` Waited ${result.waited_s}s for CC5.` : ""}`
           : `Failed: ${result.error}`;
         const content: ToolContent[] = [textContent(text)];
-        if (result.blocked_by) content.push(textContent(windowNeedsPerson(result.blocked_by)), ...(await openWindowShots(bridge)));
+        if (result.blocked_windows && result.blocked_windows.length > 0) {
+          content.push(textContent(`Windows left alone: ${result.blocked_windows.map((b) => `'${b.title}' (${b.why})`).join("; ")}`));
+        }
+        if (result.blocked_by) content.push(textContent(windowNeedsPerson(result.blocked_by)));
+        if (!result.success) content.push(...(await openWindowShots(bridge)));    // see what is on screen
         return content;
       }, (content) => content),
   );
@@ -142,9 +154,9 @@ export function registerSkinGenTools(server: McpServer, bridge: CC5Bridge, wait:
       if (args.confirm_delete === true) body.confirm = true;
       return bridgeCallRich(async (): Promise<ToolContent[]> => {
         const run = await runUiJob<SkinGenLayerResult>(bridge, () => bridge.uiSkinGenLayer(body), LAYER_WAIT_SECONDS, wait);
-        if ("refused" in run) return failureContent(run.refused.error ?? "the bridge refused to start the job");
+        if ("refused" in run) return refusedContent(run.refused);
         if (!run.outcome.finished) {
-          return [textContent(stillRunningText(run.jobId, LAYER_WAIT_SECONDS, run.outcome.status?.windows)), ...(await openWindowShots(bridge))];
+          return [textContent(stillRunningText(run.jobId, LAYER_WAIT_SECONDS, run.outcome.status)), ...(await openWindowShots(bridge))];
         }
         const result = run.outcome.result ?? { success: false, error: "the job returned nothing" };
         const content: ToolContent[] = [textContent(formatLayerResult(args.action, result))];
@@ -164,7 +176,9 @@ export function formatLayerResult(action: string, result: SkinGenLayerResult): s
   if (action === "opacity") {
     lines.push(`Opacity of layer ${String(result.layer)}: ${result.opacity_before} -> ${result.opacity_after} (read back from CC5).`);
   } else if (action === "delete") {
-    lines.push(`Deleted (${result.scope}): ${result.layers_before} -> ${result.layers_after} layer(s).`);
+    const unchanged = result.layers_before !== undefined && result.layers_before === result.layers_after;
+    lines.push(`Deleted (${result.scope}): ${result.layers_before} -> ${result.layers_after} layer(s).` +
+      (unchanged ? " The count did not change (normal for current/all material when nothing was left); check skingen_state." : ""));
   } else {
     lines.push(`${action} done.`);
   }

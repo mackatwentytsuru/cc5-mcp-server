@@ -20,6 +20,7 @@ if PLUGIN_DIR not in sys.path:
 
 import cc5_api  # noqa: E402
 import cc5_ui  # noqa: E402
+import cc5_uiview  # noqa: E402,F401  (imported so tests can find it in sys.modules)
 import fake_qt  # noqa: E402
 
 __all__ = ["UiTestCase", "cc5_api", "cc5_ui", "fake_qt", "PLUGIN_DIR", "ROOT"]

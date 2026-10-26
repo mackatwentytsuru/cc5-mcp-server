@@ -13,6 +13,7 @@ import {
   failureContent,
   openWindowShots,
   pathProblem,
+  refusedContent,
   runUiJob,
   stillRunningText,
   windowNeedsPerson,
@@ -57,6 +58,12 @@ export function formatApplyResult(result: UiApplyPresetResult): string {
   if (result.answered && result.answered.length > 0) {
     lines.push(`Answered windows: ${result.answered.map((a) => `${a.pressed} ('${a.window}')`).join(", ")}`);
   }
+  if (result.blocked_windows && result.blocked_windows.length > 0) {
+    lines.push(`Windows left alone: ${result.blocked_windows.map((b) => `'${b.title}' (${b.why})`).join("; ")}`);
+  }
+  if (result.success && files.length > 0 && files.every((f) => (f.added?.length ?? 0) + (f.removed?.length ?? 0) === 0)) {
+    lines.push("No scene item was added or removed (normal for SkinGen presets and for presets that only change settings; otherwise check with list_scene_items).");
+  }
   if (result.skingen) {
     lines.push(
       `SkinGen: editor ${result.skingen.editor_active ? "open" : "closed"}; layers: ${result.skingen.layers.join(", ") || "(none)"}`,
@@ -75,10 +82,10 @@ async function applyContent(
 ): Promise<ToolContent[]> {
   const waitSeconds = perFileSeconds * fileCount + 30;
   const run = await runUiJob<UiApplyPresetResult>(bridge, () => bridge.uiApplyPreset(body), waitSeconds, wait);
-  if ("refused" in run) return failureContent(run.refused.error ?? "the bridge refused to start the job");
+  if ("refused" in run) return refusedContent(run.refused);
   if (!run.outcome.finished) {
     return [
-      textContent(stillRunningText(run.jobId, waitSeconds, run.outcome.status?.windows)),
+      textContent(stillRunningText(run.jobId, waitSeconds, run.outcome.status)),
       ...(await openWindowShots(bridge)),
     ];
   }
@@ -120,6 +127,7 @@ export function registerPresetTools(server: McpServer, bridge: CC5Bridge, wait: 
         .describe(`Seconds to wait per file for CC5 to settle (default ${DEFAULT_FILE_SECONDS})`),
     },
     async (args) => {
+      if (args.file_path && args.file_paths) return { content: failureContent("give file_path or file_paths, not both") };
       const paths = args.file_paths ?? (args.file_path ? [args.file_path] : []);
       if (paths.length === 0) return { content: failureContent("give file_path or file_paths") };
       for (const path of paths) {
@@ -166,12 +174,13 @@ export function registerPresetTools(server: McpServer, bridge: CC5Bridge, wait: 
       return bridgeCall(
         () => bridge.uiListPresets(args),
         (result: UiPresetListResult) => {
-          if (!result.success) return `Failed: ${result.error}`;
+          if (!result.success) return `Failed: ${result.error ?? "the bridge returned no reason"}`;
           if (result.subfolders) return `Sub-folders of ${result.folders?.join(", ")}:\n${result.subfolders.join("\n") || "(none)"}`;
           const lines = (result.presets ?? []).map((p) => `- ${p.name}${p.installed ? "" : " (not on disk)"}  ${p.path}`);
-          const head = `${result.total ?? lines.length} preset(s)${result.truncated ? " (list cut off: use query or limit)" : ""}:`;
+          const head = `${result.total ?? lines.length} preset(s)${result.truncated ? " (list cut off: narrow with query / ext / a sub-folder, or raise limit)" : ""}:`;
           const tail = [
             result.missing && result.missing.length > 0 ? `Not on disk (cloud or misspelled): ${result.missing.join(", ")}` : "",
+            result.errors && result.errors.length > 0 ? `Listing errors (the list may be incomplete): ${result.errors.join("; ")}` : "",
             result.note ?? "",
           ].filter(Boolean);
           return [head, ...lines, ...tail].join("\n");

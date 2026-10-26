@@ -42,6 +42,7 @@ class Widget:
         self._enabled = True
         self._modal = False
         self.grabbed = 0
+        self._props: dict[str, Any] = {}
         if parent is not None:
             parent.children.append(self)
         Widget.registry.append(self)
@@ -51,6 +52,22 @@ class Widget:
     # --- tree ---
     def parent(self) -> "Widget | None":
         return self._parent
+
+    _is_window = False
+
+    def window(self) -> "Widget":
+        """The nearest ancestor (or self) that is a top-level window, as in Qt."""
+        node = self
+        while not node._is_window and node._parent is not None:
+            node = node._parent
+        return node
+
+    def property(self, name: str) -> Any:
+        return self._props.get(name)
+
+    def setProperty(self, name: str, value: Any) -> bool:
+        self._props[name] = value
+        return True
 
     def objectName(self) -> str:
         return self._name
@@ -110,11 +127,11 @@ class Pixmap:
 
 
 class MainWindow(Widget):
-    pass
+    _is_window = True
 
 
 class Dialog(Widget):
-    pass
+    _is_window = True
 
 
 class Menu(Widget):
@@ -175,6 +192,46 @@ class RadioButton(AbstractButton):
 
 
 class ProgressBar(Widget):
+    pass
+
+
+class GroupBox(Widget):
+    def __init__(self, title: str, parent: Widget) -> None:
+        super().__init__(parent=parent)
+        self._group_title = title
+
+    def title(self) -> str:
+        return self._group_title
+
+
+class LineEdit(Widget):
+    Normal = 0
+    Password = 2
+
+    def __init__(self, parent: Widget, text: str = "", echo: int = 0, placeholder: str = "", name: str = "") -> None:
+        super().__init__(name=name, parent=parent)
+        self._text, self._echo, self._placeholder = text, echo, placeholder
+
+    def text(self) -> str:
+        return self._text
+
+    def echoMode(self) -> int:
+        return self._echo
+
+    def placeholderText(self) -> str:
+        return self._placeholder
+
+
+class TextEdit(Widget):
+    def __init__(self, parent: Widget, text: str = "") -> None:
+        super().__init__(parent=parent)
+        self._text = text
+
+    def toPlainText(self) -> str:
+        return self._text
+
+
+class PlainTextEdit(TextEdit):
     pass
 
 
@@ -380,6 +437,9 @@ class Image:
     def copy(self, rect: Rect) -> "Image":
         return Image(w=rect.w, h=rect.h)
 
+    def scaledToWidth(self, width: int, _mode: Any = None) -> "Image":
+        return Image(w=width, h=max(1, round(self.h * width / self.w)))
+
     def save(self, target: Any, _fmt: str = "PNG") -> bool:
         if isinstance(target, str):
             Image.saved[target] = (self.w, self.h)
@@ -431,6 +491,10 @@ def make_qt() -> types.SimpleNamespace:
         QCheckBox=CheckBox,
         QRadioButton=RadioButton,
         QProgressBar=ProgressBar,
+        QGroupBox=GroupBox,
+        QLineEdit=LineEdit,
+        QTextEdit=TextEdit,
+        QPlainTextEdit=PlainTextEdit,
         QSpinBox=SpinBox,
         QComboBox=ComboBox,
         QTableWidget=Table,

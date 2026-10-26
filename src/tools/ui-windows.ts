@@ -7,9 +7,11 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CC5Bridge } from "../cc5-bridge.js";
-import type { UiWidgetsResult, UiWindowsResult } from "../types.js";
+import type { UiJobStatus, UiWidgetsResult, UiWindowsResult } from "../types.js";
 import { bridgeCall, bridgeCallRich, textContent, type ToolContent } from "../util.js";
-import { describeWindow, failureContent, windowImages } from "./ui-common.js";
+import { describeWindow, failureContent, openWindowShots, windowImages, type WaitOptions } from "./ui-common.js";
+
+const RESULT_CHARS = 3500;
 
 export function formatWidgets(result: UiWidgetsResult): string {
   if (!result.success) return `Failed: ${result.error}`;
@@ -28,7 +30,20 @@ export function formatWidgets(result: UiWidgetsResult): string {
   return `${widgets.length} widget(s):\n${lines.join("\n")}${more}`;
 }
 
-export function registerUiWindowTools(server: McpServer, bridge: CC5Bridge): void {
+/** A job status as text: state, then the result as compact JSON (pictures left out). */
+export function formatJobStatus(status: UiJobStatus): string {
+  if (!status.success && !status.state) return `Failed: ${status.error ?? "unknown job"}`;
+  const head = `Job ${status.job_id} (${status.kind}): ${status.state}${status.elapsed_s !== undefined ? `, ${status.elapsed_s}s` : ""}`;
+  if (status.state === "queued" || status.state === "running") {
+    const open = (status.windows ?? []).map((w) => `  - ${describeWindow(w)}`).join("\n");
+    return `${head}${open ? `\nOpen windows:\n${open}` : ""}`;
+  }
+  const json = JSON.stringify(status.result, (key, value) => (key === "png_base64" ? "(picture omitted)" : value), 1) ?? "null";
+  const cut = json.length > RESULT_CHARS ? `${json.slice(0, RESULT_CHARS)}\n... (cut; ${json.length} characters)` : json;
+  return `${head}\nResult:\n${cut}`;
+}
+
+export function registerUiWindowTools(server: McpServer, bridge: CC5Bridge, wait: WaitOptions = {}): void {
   server.tool(
     "list_cc5_windows",
     "Look at the pop-up / question windows CC5 has open RIGHT NOW, from inside CC5 (Qt): title, text, buttons, " +
@@ -64,6 +79,28 @@ export function registerUiWindowTools(server: McpServer, bridge: CC5Bridge): voi
           return content;
         },
       ),
+  );
+
+  server.tool(
+    "get_ui_job",
+    "Look at (or wait for) a UI job that apply_preset, skingen_editor, skingen_layer or capture_framed_crop " +
+      "started in CC5. Those tools wait for their job themselves; use this when one said 'Still running' or " +
+      "lost contact, with the job id it printed. wait_seconds=0 only reads the state; a larger value waits " +
+      "for the job to finish. The job runs on inside CC5 either way. Read-only.",
+    {
+      job_id: z.string().min(1).max(64).describe("The job id, e.g. 'preset-3'"),
+      wait_seconds: z.number().int().min(0).max(900).optional().describe("Seconds to wait for it to finish (default 0)"),
+    },
+    async ({ job_id, wait_seconds }) =>
+      bridgeCallRich(async (): Promise<ToolContent[]> => {
+        if (!wait_seconds) return [textContent(formatJobStatus(await bridge.uiJob(job_id)))];
+        const outcome = await bridge.uiWaitJob(job_id, { timeoutMs: wait_seconds * 1000, ...wait });
+        const status = outcome.status;
+        if (!status) return [textContent(`Job ${job_id}: no answer from CC5 within ${wait_seconds}s`)];
+        const content = [textContent(formatJobStatus(status))];
+        if (!outcome.finished) content.push(...(await openWindowShots(bridge)));
+        return content;
+      }, (content) => content),
   );
 
   server.tool(

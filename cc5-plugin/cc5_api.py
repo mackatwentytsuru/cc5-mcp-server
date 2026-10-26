@@ -8174,7 +8174,6 @@ def wf_save_project(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[s
                         "readable through the RLPy API used here"
                     ),
                 }
-        existed = os.path.exists(file_path)
         path_error = _validate_path(file_path, {".ccproject"})
         if path_error:
             return {"success": False, "error": path_error}
@@ -8184,6 +8183,7 @@ def wf_save_project(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[s
                 "error": "Refusing to overwrite a *_hs_ok.ccProject safety copy",
             }
 
+        existed = os.path.exists(file_path)
         parent_dir = os.path.dirname(file_path)
         if parent_dir:
             os.makedirs(parent_dir, exist_ok=True)
@@ -9908,12 +9908,12 @@ def wf_physics_set_collision(
         return {"success": False, "error": str(e)}
 
 
-# --- Qt UI helper modules (cc5_ui, cc5_skingen, cc5_content) ---
+# --- Qt UI helper modules (cc5_ui, cc5_uiview, cc5_skingen, cc5_content) ---
 # Routes under /ui/. They live in their own files next to this one; a missing or broken file turns
 # its routes into a clear error and never stops the bridge. They are re-imported on every
 # _auto_patch_server() call, so GET /reload picks up edits of any of them.
 
-_UI_MODULES = ("cc5_ui", "cc5_skingen", "cc5_content")
+_UI_MODULES = ("cc5_ui", "cc5_uiview", "cc5_skingen", "cc5_content")
 _UI_ROUTE_PATHS = (
     "/ui/windows", "/ui/widgets", "/ui/job", "/ui/capture_crop",
     "/ui/skingen/state", "/ui/skingen/editor", "/ui/skingen/layer",
@@ -9940,8 +9940,8 @@ def _ui_modules_missing(body: dict[str, Any] | None = None) -> dict[str, Any]:
         "success": False,
         "error": (
             "The Qt UI helper modules are not installed next to cc5_api.py (or failed to load; see the "
-            "CC5 console). Copy cc5_ui.py, cc5_skingen.py and cc5_content.py into the plugin folder "
-            "(install-plugin.ps1 does) and call GET /reload."
+            "CC5 console). Copy cc5_ui.py, cc5_uiview.py, cc5_skingen.py and cc5_content.py into the "
+            "plugin folder (install-plugin.ps1 does) and call GET /reload."
         ),
     }
 
@@ -9959,6 +9959,9 @@ def _patch_ui_routes(srv: Any) -> None:
         srv.ACTION_MAP["ui_modules_missing"] = _ui_modules_missing
         for path in missing:
             srv.POST_ROUTES[path] = "ui_modules_missing"
+    core = sys.modules.get("cc5_ui")
+    if core is not None and hasattr(core, "install_job_guard"):
+        core.install_job_guard(srv.ACTION_MAP)   # other bridge commands wait while a UI job runs
 
 
 # --- Auto-patch server ACTION_MAP on reload ---

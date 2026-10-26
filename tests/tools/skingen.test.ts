@@ -10,6 +10,7 @@ import {
   formatSkinGenState,
   formatLayerResult,
   layerProblem,
+  editorWaitSeconds,
 } from "../../src/tools/skingen.js";
 import { createMockServer } from "../helpers/mock-server.js";
 
@@ -72,7 +73,7 @@ describe("skingen_editor", () => {
     });
     const text = texts(await call("skingen_editor", { active: false, exit_answer: "yes", timeout_seconds: 90 }));
     expect(bridge.uiSkinGenEditor).toHaveBeenCalledWith({ active: false, exit_answer: "yes", timeout_s: 90 });
-    expect(bridge.uiWaitJob).toHaveBeenCalledWith("e-1", expect.objectContaining({ timeoutMs: 150_000 }));
+    expect(bridge.uiWaitJob).toHaveBeenCalledWith("e-1", expect.objectContaining({ timeoutMs: editorWaitSeconds(90) * 1000 }));
     expect(text).toContain("SkinGen editor is now off.");
     expect(text).toContain("Answered: yes.");
     expect(text).toContain("Waited 14.2s");
@@ -103,7 +104,41 @@ describe("skingen_editor", () => {
     bridge.uiSkinGenEditor.mockResolvedValueOnce({ success: true, job_id: "e-4" });
     bridge.uiWaitJob.mockResolvedValueOnce({ finished: false, status: { success: true, state: "running", windows: [] } });
     bridge.uiWindows.mockResolvedValue({ success: true, windows: [] });
-    expect(texts(await call("skingen_editor", { active: false }))).toContain("Still running after 150s");
+    expect(texts(await call("skingen_editor", { active: false }))).toContain(`Still running after ${editorWaitSeconds(undefined)}s`);
+  });
+
+  it("the wait follows timeout_seconds (the bridge waits for the switch, then settles twice)", () => {
+    expect(editorWaitSeconds(undefined)).toBe(60 + 2 * (120 + 10) + 30);
+    expect(editorWaitSeconds(600)).toBe(60 + 2 * 610 + 30);
+  });
+
+  it("a start request that timed out is not reported as a failure to retry", async () => {
+    bridge.uiSkinGenEditor.mockResolvedValue({ success: false, error: "Timeout waiting for CC5 to process command" });
+    const text = texts(await call("skingen_editor", { active: false }));
+    expect(text).toContain("MAY STILL RUN LATER");
+    expect(text).toContain("do not send it again");
+  });
+
+  it("a failed editor job also shows what is on screen, and the windows it left alone", async () => {
+    bridge.uiSkinGenEditor.mockResolvedValue({ success: true, job_id: "e-5" });
+    bridge.uiWaitJob.mockResolvedValue({
+      finished: true,
+      result: { success: false, error: "the switch did not change within 60s", blocked_windows: [{ title: "License", why: "mentions 'licen'" }] },
+    });
+    bridge.uiWindows.mockResolvedValue({ success: true, windows: [{ title: "Mystery", text: "?", buttons: ["OK"], png_base64: "UE5H" }] });
+    const result = await call("skingen_editor", { active: false });
+    expect(texts(result)).toContain("Windows left alone: 'License' (mentions 'licen')");
+    expect(result.content.some((c: { type: string }) => c.type === "image")).toBe(true);
+  });
+
+  it("losing contact with CC5 while waiting keeps the job id", async () => {
+    bridge.uiSkinGenEditor.mockResolvedValue({ success: true, job_id: "e-6" });
+    bridge.uiWaitJob.mockRejectedValue(new Error("socket hang up"));
+    bridge.uiWindows.mockRejectedValue(new Error("down"));
+    const text = texts(await call("skingen_editor", { active: false }));
+    expect(text).toContain("job e-6");
+    expect(text).toContain("lost contact with CC5: socket hang up");
+    expect(text).toContain("get_ui_job");
   });
 });
 
@@ -183,6 +218,11 @@ describe("skingen_layer", () => {
     const text = formatLayerResult("delete", { success: false, error: "no delete menu entry", menu: ["Selected Layer", "All Material"], layers: LAYERS });
     expect(text).toContain("Menu entries: Selected Layer | All Material.");
     expect(text).toContain("1: Eyeshadow");
+  });
+
+  it("a delete that left the count alone is flagged", () => {
+    const text = formatLayerResult("delete", { success: true, scope: "current_material", layers_before: 2, layers_after: 2, layers: [] });
+    expect(text).toContain("The count did not change");
   });
 
   it("show / hide / select say what they did", () => {

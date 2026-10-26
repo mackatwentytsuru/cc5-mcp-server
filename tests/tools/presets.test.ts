@@ -61,6 +61,11 @@ describe("apply_preset arguments", () => {
     expect(bridge.uiApplyPreset).not.toHaveBeenCalled();
   });
 
+  it("refuses both file_path and file_paths", async () => {
+    expect(texts(await call("apply_preset", { file_path: LIP, file_paths: [LIP] }))).toContain("not both");
+    expect(bridge.uiApplyPreset).not.toHaveBeenCalled();
+  });
+
   it("refuses path traversal before the bridge", async () => {
     const result = await call("apply_preset", { file_path: "C:/lib/../secret/x.ccSkinGenPreset" });
     expect(texts(result)).toContain("traversal");
@@ -160,6 +165,22 @@ describe("apply_preset job flow", () => {
   });
 });
 
+describe("apply_preset extra messages", () => {
+  it("says when nothing changed in the scene and which windows were left alone", () => {
+    const text = formatApplyResult({
+      success: true, avatar: "Beyon", files: [{ path: LIP, ok: true, added: [], removed: [] }],
+      blocked_windows: [{ title: "Palette", why: "mentions 'update'" }],
+    });
+    expect(text).toContain("No scene item was added or removed");
+    expect(text).toContain("Windows left alone: 'Palette' (mentions 'update')");
+  });
+
+  it("a start that timed out is not a failure to repeat", async () => {
+    bridge.uiApplyPreset.mockResolvedValue({ success: false, error: "Timeout waiting for CC5 to process command" });
+    expect(texts(await call("apply_preset", { file_path: LIP }))).toContain("do not send it again");
+  });
+});
+
 describe("formatApplyResult", () => {
   it("lists added, removed and watched items per file and the skipped ones", () => {
     const text = formatApplyResult({
@@ -209,9 +230,16 @@ describe("list_presets", () => {
     expect(texts(await call("list_presets", { folder: "$/x" }))).toBe("Failed: folder must be a content path");
   });
 
-  it("flags a cut-off list", async () => {
-    bridge.uiListPresets.mockResolvedValue({ success: true, total: 900, presets: [], truncated: true });
-    expect(texts(await call("list_presets", { category: "skin" }))).toContain("list cut off");
+  it("flags a cut-off list and listing errors", async () => {
+    bridge.uiListPresets.mockResolvedValue({ success: true, total: 900, presets: [], truncated: true, errors: ["$/Broken: RuntimeError: refused"] });
+    const text = texts(await call("list_presets", { category: "skin" }));
+    expect(text).toContain("list cut off");
+    expect(text).toContain("Listing errors (the list may be incomplete): $/Broken: RuntimeError: refused");
+  });
+
+  it("never prints 'undefined' when the bridge gives no reason", async () => {
+    bridge.uiListPresets.mockResolvedValue({ success: false });
+    expect(texts(await call("list_presets", { folder: "$/x" }))).toBe("Failed: the bridge returned no reason");
   });
 
   it("only takes '$/' folders and plain extensions", () => {

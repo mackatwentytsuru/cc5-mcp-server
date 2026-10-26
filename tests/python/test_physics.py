@@ -363,7 +363,9 @@ class RouteRegistrationTests(unittest.TestCase):
         }
         for route, action in expected.items():
             self.assertEqual(fake_server.POST_ROUTES.get(route), action)
-            self.assertIs(fake_server.ACTION_MAP[action], getattr(cc5_api, action))
+            # the UI job guard wraps every handler; the wrapper keeps the original in _cc5_guarded
+            handler = fake_server.ACTION_MAP[action]
+            self.assertIs(getattr(handler, "_cc5_guarded", handler), getattr(cc5_api, action))
 
 
 if __name__ == "__main__":

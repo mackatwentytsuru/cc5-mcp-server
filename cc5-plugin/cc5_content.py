@@ -37,14 +37,21 @@ PRESET_FOLDERS: dict[str, list[str]] = {
 
 # Files RLPy lists next to content that are not content themselves.
 SKIP_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tga", ".db", ".json", ".xml", ".txt", ".ini"}
-# Never applied through this tool: they replace the scene or the character.
-DENIED_APPLY_EXTS = {".ccproject", ".ccavatar", ".iavatar", ".ccm", ".ccfbx", ".fbx", ".obj"}
+# The ONLY file types apply_preset loads (lower case). Anything that replaces the scene or the
+# character (.ccProject, .ccAvatar, .iAvatar, FBX, ...) is not on the list on purpose; a type that
+# is missing here can be added by editing this tuple.
+ALLOWED_APPLY_EXTS = frozenset({
+    ".ccavatarpreset", ".ccskingenpreset", ".rleyelashelement", ".rlhairelement", ".rlhairstyle", ".rlhair",
+    ".cchair", ".cccloth", ".ccshoes", ".ccacc", ".ccfacialprofile", ".cccustomslider", ".imtl",
+    ".italk", ".imotionplus", ".rlmotion",
+})
 
 LIST_DEFAULT_LIMIT = 200
 LIST_MAX_LIMIT = 1000
 MAX_FOLDERS_WALKED = 300
 MAX_DEPTH = 5
 MAX_FILES_PER_CALL = 10
+DEFAULT_FILE_SECONDS = 240
 SCENE_TYPES = ("Cloth", "Hair", "Accessory", "Prop")
 DEFAULT_ROOTS = ("C:/Users/Public/Documents/Reallusion/Reallusion Templates",
                   "C:/Users/Public/Documents/Reallusion/Reallusion Custom")
@@ -63,12 +70,13 @@ def _rlpy_listing() -> bool:
     return hasattr(app, "GetContentFilesInFolder") and hasattr(app, "GetContentFoldersInFolder")
 
 
-def _list_files(folder: str) -> list[str]:
+def _list_files(folder: str, errors: list[str]) -> list[str]:
     """Files directly in a "$/" folder (RLPy first; else the content roots on disk)."""
     if _rlpy_listing():
         try:
             return [str(f).replace("\\", "/") for f in (RLPy.RApplication.GetContentFilesInFolder(folder) or [])]
-        except Exception:
+        except Exception as exc:
+            errors.append(f"{folder}: {type(exc).__name__}: {exc}")
             return []
     out: list[str] = []
     for root in _roots():
@@ -78,14 +86,14 @@ def _list_files(folder: str) -> list[str]:
     return out
 
 
-def _list_folders(folder: str) -> list[str]:
+def _list_folders(folder: str, errors: list[str]) -> list[str]:
     """Sub-folders of a "$/" folder as full "$/" paths."""
     names: list[str] = []
     if _rlpy_listing():
         try:
             names = [str(f).replace("\\", "/") for f in (RLPy.RApplication.GetContentFoldersInFolder(folder) or [])]
-        except Exception:
-            names = []
+        except Exception as exc:
+            errors.append(f"{folder}: {type(exc).__name__}: {exc}")
     else:
         for root in _roots():
             path = f"{root}/{folder[2:]}"
@@ -103,8 +111,10 @@ def _child_folder(parent: str, child: str) -> str:
     return f"{parent.rstrip('/')}/{child.strip('/')}"
 
 
-def collect_files(folders: list[str], recursive: bool = True) -> tuple[list[dict[str, Any]], list[str], bool]:
-    """(entries, folders_seen, truncated) for the given "$/" folders."""
+def collect_files(folders: list[str], recursive: bool = True,
+                  errors: list[str] | None = None) -> tuple[list[dict[str, Any]], list[str], bool]:
+    """(entries, folders_seen, truncated) for the given "$/" folders; listing errors go to `errors`."""
+    errors = errors if errors is not None else []
     entries: list[dict[str, Any]] = []
     seen: list[str] = []
     queue = [(f, 0) for f in folders]
@@ -113,14 +123,14 @@ def collect_files(folders: list[str], recursive: bool = True) -> tuple[list[dict
         if folder in seen:
             continue
         seen.append(folder)
-        for path in _list_files(folder):
+        for path in _list_files(folder, errors):
             ext = os.path.splitext(path)[1]
             if ext.lower() in SKIP_EXTS:
                 continue
             entries.append({"name": os.path.splitext(os.path.basename(path))[0], "path": path,
                             "folder": folder, "ext": ext, "installed": os.path.isfile(path)})
         if recursive and depth < MAX_DEPTH:
-            queue.extend((sub, depth + 1) for sub in _list_folders(folder))
+            queue.extend((sub, depth + 1) for sub in _list_folders(folder, errors))
     return entries, seen, bool(queue)
 
 
@@ -150,24 +160,26 @@ def ui_list_presets(body: dict[str, Any] | None = None) -> dict[str, Any]:
         folders = list(PRESET_FOLDERS[category])
     else:
         return {"success": False, "error": "give category (" + ", ".join(PRESET_FOLDERS) + ") or folder ('$/...')"}
+    errors: list[str] = []
     if p.get("list_folders"):
-        subs = sorted({s for f in folders for s in _list_folders(f)})
-        return {"success": True, "folders": folders, "subfolders": subs}
-    entries, seen, truncated = collect_files(folders, p.get("recursive", True) is not False)
+        subs = sorted({s for f in folders for s in _list_folders(f, errors)})
+        return {"success": True, "folders": folders, "subfolders": subs, **({"errors": errors} if errors else {})}
+    entries, seen, truncated = collect_files(folders, p.get("recursive", True) is not False, errors)
+    out: dict[str, Any] = {"success": True, "folders": seen[:50]}
+    names = [str(n) for n in (p.get("names") or [])]
+    if names:                                     # judged on everything found, before query / ext narrow it
+        have = {e["name"].lower() for e in entries}
+        out["missing"] = [n for n in names if n.lower() not in have]
     ext = str(p.get("ext") or "").lower()
     if ext:
         entries = [e for e in entries if e["ext"].lower() == ext]
     query = str(p.get("query") or "").strip().lower()
     if query:
         entries = [e for e in entries if query in e["name"].lower() or query in e["path"].lower()]
-    out: dict[str, Any] = {"success": True, "folders": seen[:50], "total": len(entries)}
-    names = [str(n) for n in (p.get("names") or [])]
-    if names:
-        have = {e["name"].lower() for e in entries}
-        out["missing"] = [n for n in names if n.lower() not in have]
     limit = cc5_ui._clamp_int(p.get("limit", LIST_DEFAULT_LIMIT), 1, LIST_MAX_LIMIT, LIST_DEFAULT_LIMIT)
-    out["presets"] = entries[:limit]
-    out["truncated"] = truncated or len(entries) > limit
+    out.update({"total": len(entries), "presets": entries[:limit], "truncated": truncated or len(entries) > limit})
+    if errors:
+        out["errors"] = errors[:10]
     out["note"] = "Only content on disk is listed; items still in the cloud are not (download them in the Content panel)."
     return out
 
@@ -176,12 +188,11 @@ def ui_list_presets(body: dict[str, Any] | None = None) -> dict[str, Any]:
 
 def check_preset_path(path: str) -> str | None:
     """Why this file may not be applied, or None."""
-    ext = os.path.splitext(path)[1].lower()
-    if ext in DENIED_APPLY_EXTS:
-        return f"{ext} files replace the scene or the character; load them with load_asset on purpose, not here"
-    if not ext.startswith((".cc", ".rl", ".i")):
-        return f"not a CC5 content file (extension {ext or 'none'})"
-    error = cc5_ui._api()._validate_path(path, {ext})
+    ext = os.path.splitext(str(path))[1].lower()
+    if ext not in ALLOWED_APPLY_EXTS:
+        return (f"{ext or 'no extension'} is not a preset type this tool applies "
+                f"(allowed: {', '.join(sorted(ALLOWED_APPLY_EXTS))}); use load_asset for other content on purpose")
+    error = cc5_ui.path_problem(path, {ext})
     if error:
         return error
     if not os.path.isfile(path):
@@ -227,9 +238,14 @@ def _skingen_summary() -> dict[str, Any] | None:
     return {"editor_active": state["editor_active"], "layers": [l["name"] for l in state["layers"]]}
 
 
-def _apply_one(avatar: Any, path: str, choices: dict[str, Any], limit_s: float, watch: str) -> Iterator[float]:
-    before = scene_items()
+def _apply_one(avatar_name: str, path: str, choices: dict[str, Any], limit_s: float, watch: str,
+               baseline: set[tuple[str, str]]) -> Iterator[float]:
     entry: dict[str, Any] = {"path": path, "ok": False}
+    avatar = _avatar(avatar_name)                  # looked up again for every file: a load may rebuild it
+    if avatar is None:
+        entry["error"] = f"avatar not found: {avatar_name or '(none in the scene)'}"
+        return entry
+    before = scene_items()
     try:
         RLPy.RScene.ClearSelectObjects()
         RLPy.RScene.SelectObject(avatar)
@@ -238,7 +254,7 @@ def _apply_one(avatar: Any, path: str, choices: dict[str, Any], limit_s: float, 
         entry["error"] = f"LoadFile raised {type(exc).__name__}: {exc}"
         return entry
     entry["status_error"] = _status_error(status)
-    settled = yield from cc5_ui.settle_steps(limit_s, choices)
+    settled = yield from cc5_ui.settle_steps(limit_s, choices, baseline=baseline)
     after = scene_items()
     entry["added"] = [i for i in after if i not in before]
     entry["removed"] = [i for i in before if i not in after]
@@ -254,16 +270,24 @@ def _apply_one(avatar: Any, path: str, choices: dict[str, Any], limit_s: float, 
     return entry
 
 
+def _apply_budget(files: int, per_file_s: float) -> float:
+    """Longest a whole apply job may take (also the answerer's time limit)."""
+    return files * (per_file_s + 30) + 120
+
+
 def _apply_steps(p: dict[str, Any]) -> Iterator[float]:
     choices = p["choices"]
     avatar = _avatar(p.get("avatar_name", ""))
     if avatar is None:
         return {"success": False, "error": "avatar not found: " + (p.get("avatar_name") or "(none in the scene)")}
-    answerer = cc5_ui.WindowAnswerer(choices).start()
+    avatar_name = avatar.GetName()
+    answerer = cc5_ui.WindowAnswerer(choices, max_seconds=_apply_budget(len(p["paths"]), p["timeout_s"])).start()
     files: list[dict[str, Any]] = []
     try:
+        baseline = cc5_ui.baseline_keys()
         for path in p["paths"]:
-            entry = yield from _apply_one(avatar, path, choices, p["timeout_s"], p.get("watch_prefix", ""))
+            answerer.touch()
+            entry = yield from _apply_one(avatar_name, path, choices, p["timeout_s"], p.get("watch_prefix", ""), baseline)
             files.append(entry)
             if not entry["ok"]:
                 break                                   # do not pile more loads on top of a problem
@@ -273,8 +297,10 @@ def _apply_steps(p: dict[str, Any]) -> Iterator[float]:
     if hasattr(api, "_invalidate_caches"):
         api._invalidate_caches()
     out: dict[str, Any] = {"success": all(f["ok"] for f in files) and len(files) == len(p["paths"]),
-                           "avatar": avatar.GetName(), "files": files, "answered": answered,
+                           "avatar": avatar_name, "files": files, "answered": answered,
                            "skipped": p["paths"][len(files):]}
+    if answerer.blocked:
+        out["blocked_windows"] = answerer.blocked
     skingen = _skingen_summary()
     if skingen is not None:
         out["skingen"] = skingen
@@ -294,8 +320,11 @@ def ui_apply_preset(body: dict[str, Any] | None = None) -> dict[str, Any]:
     avatar), answers {layer_choice: replace|add, restore_neutral_lash: bool, skingen_exit: yes|no},
     timeout_s (default 240 per file), watch_prefix (list scene items whose name starts with it,
     e.g. "Lash_"). Only the windows in cc5_ui.WINDOW_RULES are answered; anything else is reported.
+    Only the file types in ALLOWED_APPLY_EXTS are loaded.
     """
     p = dict(body or {})
+    if p.get("file_paths") and p.get("file_path"):
+        return {"success": False, "error": "give file_path or file_paths, not both"}
     raw = p.get("file_paths") or ([p["file_path"]] if p.get("file_path") else [])
     if not isinstance(raw, (list, tuple)) or not raw or len(raw) > MAX_FILES_PER_CALL:
         return {"success": False, "error": f"give file_path or file_paths (1 to {MAX_FILES_PER_CALL} files)"}
@@ -311,9 +340,9 @@ def ui_apply_preset(body: dict[str, Any] | None = None) -> dict[str, Any]:
     if _avatar(str(p.get("avatar_name") or "")) is None:
         return {"success": False, "error": "avatar not found: " + str(p.get("avatar_name") or "(none in the scene)")}
     p["paths"] = paths
-    p["timeout_s"] = cc5_ui._clamp_int(p.get("timeout_s", 240), 10, 900, 240)
+    p["timeout_s"] = cc5_ui._clamp_int(p.get("timeout_s", DEFAULT_FILE_SECONDS), 10, 900, DEFAULT_FILE_SECONDS)
     p["watch_prefix"] = str(p.get("watch_prefix") or "")
-    return cc5_ui.start_job("preset", _apply_steps, p)
+    return cc5_ui.start_job("preset", _apply_steps, p, max_seconds=_apply_budget(len(paths), p["timeout_s"]) + 60)
 
 
 ROUTES: dict[str, tuple[str, Callable[..., dict[str, Any]]]] = {
