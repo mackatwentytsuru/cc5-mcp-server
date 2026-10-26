@@ -84,6 +84,20 @@ import type {
   PhysicsCollisionGetResult,
   PhysicsCollisionSetResult,
   PhysicsCollisionUpdate,
+  UiJobStart,
+  UiJobStatus,
+  UiJobOutcome,
+  UiWindowsResult,
+  UiWindowsArgs,
+  UiWidgetsResult,
+  UiWidgetsArgs,
+  UiPresetListResult,
+  UiListPresetsArgs,
+  UiApplyPresetArgs,
+  SkinGenState,
+  SkinGenEditorArgs,
+  SkinGenLayerArgs,
+  UiCaptureCropArgs,
 } from "./types.js";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:5101";
@@ -111,10 +125,16 @@ export class CC5Bridge {
     this.baseUrl = url;
   }
 
+  /**
+   * `lenient`: a failure reply with a JSON body (HTTP 400 {"success": false, "error": ...}, or the 504
+   * "CC5 is busy" reply) comes back as the result instead of a thrown error, so a tool can show the
+   * details (open windows, what was answered).
+   */
   private async request<T>(
     path: string,
     method: "GET" | "POST" = "GET",
-    body?: unknown
+    body?: unknown,
+    lenient = false
   ): Promise<T> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -134,6 +154,8 @@ export class CC5Bridge {
 
       if (!response.ok) {
         const errorBody = await response.text();
+        const parsed = lenient ? parseJsonObject(errorBody) : undefined;
+        if (parsed) return { success: false, ...parsed } as T;
         throw new Error(
           `CC5 bridge error (${response.status}): ${errorBody}`
         );
@@ -859,6 +881,99 @@ export class CC5Bridge {
       ...physicsTargetBody(target),
       shapes,
     });
+  }
+
+  // --- UI automation (/ui/ routes). Failure replies come back as results (lenient). ---
+
+  private ui<T>(path: string, body: unknown = {}): Promise<T> {
+    return this.request<T>(path, "POST", body, true);
+  }
+
+  async uiApplyPreset(args: UiApplyPresetArgs): Promise<UiJobStart> {
+    return this.ui<UiJobStart>("/ui/preset/apply", args);
+  }
+
+  async uiListPresets(args: UiListPresetsArgs): Promise<UiPresetListResult> {
+    return this.ui<UiPresetListResult>("/ui/preset/list", args);
+  }
+
+  async uiSkinGenState(): Promise<SkinGenState> {
+    return this.ui<SkinGenState>("/ui/skingen/state");
+  }
+
+  async uiSkinGenEditor(args: SkinGenEditorArgs): Promise<UiJobStart> {
+    return this.ui<UiJobStart>("/ui/skingen/editor", args);
+  }
+
+  async uiSkinGenLayer(args: SkinGenLayerArgs): Promise<UiJobStart> {
+    return this.ui<UiJobStart>("/ui/skingen/layer", args);
+  }
+
+  async uiWindows(args: UiWindowsArgs = {}): Promise<UiWindowsResult> {
+    return this.ui<UiWindowsResult>("/ui/windows", args);
+  }
+
+  async uiWidgets(args: UiWidgetsArgs): Promise<UiWidgetsResult> {
+    return this.ui<UiWidgetsResult>("/ui/widgets", args);
+  }
+
+  async uiCaptureCrop(args: UiCaptureCropArgs): Promise<UiJobStart> {
+    return this.ui<UiJobStart>("/ui/capture_crop", args);
+  }
+
+  async uiJob<T extends OperationResult = OperationResult>(jobId: string): Promise<UiJobStatus<T>> {
+    return this.ui<UiJobStatus<T>>("/ui/job", { job_id: jobId });
+  }
+
+  /**
+   * Poll a job until it is done. The bridge answers 504 ("CC5 is busy") while CC5 bakes or a window is
+   * open; that is not an error, keep polling. Returns finished=false with the last status when
+   * timeoutMs passes (the job keeps running in CC5).
+   */
+  async uiWaitJob<T extends OperationResult = OperationResult>(
+    jobId: string,
+    options: { timeoutMs?: number; intervalMs?: number; sleep?: (ms: number) => Promise<void>; now?: () => number } = {},
+  ): Promise<UiJobOutcome<T>> {
+    const timeoutMs = options.timeoutMs ?? 300_000;
+    const intervalMs = options.intervalMs ?? 1_500;
+    const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    const now = options.now ?? Date.now;
+    const deadline = now() + timeoutMs;
+    let last: UiJobStatus<T> | undefined;
+    let failures = 0;
+    while (now() < deadline) {
+      await sleep(intervalMs);
+      try {
+        last = await this.uiJob<T>(jobId);
+        failures = 0;
+      } catch (err) {
+        failures += 1;
+        if (failures > 5) throw err;
+        continue;
+      }
+      if (isBusyReply(last)) continue;
+      if (last.state === "done" || last.state === "failed") return { finished: true, result: last.result, status: last };
+      if (last.success === false) {
+        return { finished: true, result: { success: false, error: last.error } as T, status: last };
+      }
+    }
+    return { finished: false, status: last };
+  }
+}
+
+/** The bridge's 504 body: CC5's main thread is busy, the request was not run. */
+function isBusyReply(reply: { error?: string }): boolean {
+  return typeof reply.error === "string" && reply.error.startsWith("Timeout waiting for CC5");
+}
+
+function parseJsonObject(text: string): Record<string, unknown> | undefined {
+  try {
+    const value: unknown = JSON.parse(text);
+    return value !== null && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
   }
 }
 

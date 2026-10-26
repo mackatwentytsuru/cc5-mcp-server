@@ -467,23 +467,34 @@ export function registerWorkflowTools(server: McpServer, bridge: CC5Bridge): voi
 
   server.tool(
     "save_project",
-    `Save the current CC5 project, optionally to a new path. ${NO_GUI}`,
+    "Save the current CC5 project. WITH file_path (or path, the same thing) it saves under that name " +
+      "(save as; an existing file with that name is replaced and the reply says so). WITHOUT a path it " +
+      "OVERWRITES the open project file in place. Arguments the bridge does not know are refused and " +
+      `nothing is saved. ${NO_GUI}`,
     {
       file_path: z
         .string()
         .min(1)
         .max(4096)
         .optional()
-        .describe("Optional project path; omit to save in place"),
+        .describe("Project path to save as; omit to save the open project in place"),
+      path: z.string().min(1).max(4096).optional().describe("Same as file_path"),
     },
-    async ({ file_path }) =>
-      bridgeCall(
-        () => bridge.wfSaveProject(file_path),
-        (result: WorkflowSaveResult) =>
-          result.success
-            ? `Saved project to ${result.path ?? file_path ?? "(current path)"}`
-            : failed(result.error),
-      ),
+    async ({ file_path, path }) => {
+      if (file_path !== undefined && path !== undefined && file_path !== path) {
+        return schemaFailure("file_path and path are both given and differ; give one. Nothing was saved.");
+      }
+      const target = file_path ?? path;
+      return bridgeCall(
+        () => bridge.wfSaveProject(target),
+        (result: WorkflowSaveResult) => {
+          if (!result.success) return failed(result.error);
+          const where = result.path ?? target ?? "(current path)";
+          if (result.in_place) return `Saved the open project in place: ${where}`;
+          return `Saved project to ${where}${result.overwrote_existing ? " (replaced an existing file)" : ""}`;
+        },
+      );
+    },
   );
 
   server.tool(

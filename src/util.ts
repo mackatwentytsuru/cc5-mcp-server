@@ -36,3 +36,36 @@ export async function bridgeCall<T>(
     };
   }
 }
+
+/** One block of a tool result: text or an inline image (base64). */
+export type ToolContent =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
+
+export function textContent(text: string): ToolContent {
+  return { type: "text" as const, text };
+}
+
+export function pngContent(base64: string): ToolContent {
+  return { type: "image" as const, data: base64, mimeType: "image/png" };
+}
+
+/**
+ * Like bridgeCall, but the formatter returns several content blocks (text and images), and may
+ * itself call the bridge again (for example to fetch a screenshot of an open window).
+ */
+export async function bridgeCallRich<T>(
+  fn: () => Promise<T>,
+  format: (result: T) => ToolContent[] | Promise<ToolContent[]>,
+): Promise<{ content: ToolContent[] }> {
+  try {
+    const result = await fn();
+    return { content: await format(result) };
+  } catch (err: unknown) {
+    console.error("[CC5 Bridge] bridgeCallRich caught error:", err);
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      content: [textContent(`CC5 bridge error: ${message}. Is CC5 running with the MCP Bridge plugin?`)],
+    };
+  }
+}
