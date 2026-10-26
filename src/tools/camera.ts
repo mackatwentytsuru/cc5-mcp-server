@@ -72,7 +72,7 @@ export function registerCameraTools(server: McpServer, bridge: CC5Bridge) {
 
   server.tool(
     "dolly_camera",
-    "Move the viewport camera straight toward or away from the subject, exactly as the mouse wheel does, without moving the user's mouse. One notch = one wheel click (15 cm at the 'face' view). Positive backs away (less perspective; crop a larger capture to keep the framing), negative comes closer. Call frame_camera first to start from a known view.",
+    "Move the viewport camera straight toward or away from the subject, exactly as the mouse wheel does, without moving the user's mouse. One notch = one wheel click (15 cm at the 'face' view at first, but the step size can change during a session: it became 42 cm once, so do NOT compare options shot with different dolly counts; use capture_framed_crop for equal framing). Positive backs away (less perspective; crop a larger capture to keep the framing), negative comes closer. Call frame_camera first to start from a known view.",
     {
       notches: z.number().int().min(-200).max(200).refine((n) => n !== 0, "notches must not be 0")
         .describe("Wheel clicks: positive = back away, negative = come closer"),

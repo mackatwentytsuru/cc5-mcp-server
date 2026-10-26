@@ -569,6 +569,10 @@ export interface WorkflowTransformUpdate {
 
 export interface WorkflowSaveResult extends OperationResult {
   path?: string;
+  /** true when no path was given and the open project file was overwritten. */
+  in_place?: boolean;
+  /** true when a save-as replaced a file that already existed. */
+  overwrote_existing?: boolean;
 }
 
 export interface WorkflowExportObjResult extends OperationResult {
@@ -713,4 +717,245 @@ export interface PhysicsCollisionSetResult extends PhysicsMaterialResult {
     after: PhysicsCollisionShape | null;
     errors?: string[];
   }>;
+}
+
+// ── UI automation (/ui/ routes: presets, SkinGen, windows, framed capture) ─────
+
+/** Reply of a route that starts a job; poll /ui/job with job_id. */
+export interface UiJobStart extends OperationResult {
+  job_id?: string;
+  state?: string;
+}
+
+export interface UiWindowInfo {
+  index?: number;
+  title: string;
+  class?: string;
+  text: string;
+  buttons: string[];
+  checkboxes?: Array<{ text: string; checked: boolean }>;
+  modal?: boolean;
+  progress?: boolean;
+  geometry?: number[] | null;
+  /** The word that makes this window off limits (licence, purchase, login, ...). */
+  needs_human?: string | null;
+  /** Name of the known question rule that would answer this window. */
+  answerable_as?: string | null;
+  blocked_reason?: string;
+  png_base64?: string;
+  png_size?: number[];
+  error?: string;
+}
+
+export interface UiWindowsResult extends OperationResult {
+  count?: number;
+  windows?: UiWindowInfo[];
+  main_window?: { title?: string; png_base64?: string; png_size?: number[]; error?: string };
+}
+
+export type UiJobState = "queued" | "running" | "done" | "failed";
+
+export interface UiJobStatus<T = OperationResult> extends OperationResult {
+  job_id?: string;
+  kind?: string;
+  state?: UiJobState;
+  elapsed_s?: number;
+  result?: T;
+  windows?: UiWindowInfo[];
+}
+
+/** What waiting for a job gave: the job's result, or the last status when time ran out. */
+export interface UiJobOutcome<T = OperationResult> {
+  finished: boolean;
+  result?: T;
+  status?: UiJobStatus<T>;
+}
+
+export interface UiPresetEntry {
+  name: string;
+  path: string;
+  folder: string;
+  ext: string;
+  installed: boolean;
+}
+
+export interface UiPresetListResult extends OperationResult {
+  folders?: string[];
+  total?: number;
+  presets?: UiPresetEntry[];
+  missing?: string[];
+  truncated?: boolean;
+  subfolders?: string[];
+  note?: string;
+}
+
+export interface UiApplyFileResult {
+  path: string;
+  ok: boolean;
+  status_error?: boolean | null;
+  added?: string[];
+  removed?: string[];
+  watched?: string[];
+  settled?: boolean;
+  blocked_by?: UiWindowInfo | null;
+  error?: string;
+}
+
+export interface UiAnsweredWindow {
+  rule: string;
+  pressed: string;
+  window: string;
+  text?: string;
+}
+
+export interface UiApplyPresetResult extends OperationResult {
+  avatar?: string;
+  files?: UiApplyFileResult[];
+  answered?: UiAnsweredWindow[];
+  skipped?: string[];
+  skingen?: { editor_active: boolean | null; layers: Array<string | null> };
+  note?: string;
+}
+
+export interface SkinGenLayer {
+  index: number;
+  name: string | null;
+  number?: string;
+  visible: boolean | null;
+  selected: boolean;
+  other_labels?: string[];
+}
+
+export interface SkinGenState extends OperationResult {
+  editor_found?: boolean;
+  editor_active?: boolean | null;
+  table_found?: boolean;
+  layers?: SkinGenLayer[];
+  selected?: number | null;
+  opacity?: number | null;
+  opacity_range?: number[];
+  tab?: string;
+  combos?: Record<string, string>;
+  hint?: string;
+}
+
+export interface SkinGenEditorResult extends OperationResult {
+  changed?: boolean;
+  editor_active?: boolean;
+  waited_s?: number | null;
+  answered?: UiAnsweredWindow[];
+  blocked_by?: UiWindowInfo | null;
+  windows?: UiWindowInfo[];
+}
+
+export interface SkinGenLayerResult extends OperationResult {
+  layer?: number | SkinGenLayer;
+  layers?: SkinGenLayer[];
+  selected?: number | null;
+  opacity?: number | null;
+  opacity_before?: number;
+  opacity_after?: number | null;
+  scope?: string;
+  layers_before?: number;
+  layers_after?: number;
+  menu?: string[];
+  blocked_by?: UiWindowInfo | null;
+}
+
+export interface UiWidgetState {
+  object_name: string;
+  class: string;
+  visible: boolean;
+  enabled: boolean;
+  text?: string;
+  current_text?: string;
+  value?: number;
+  checked?: boolean;
+  tooltip?: string;
+  path: string;
+}
+
+export interface UiWidgetsResult extends OperationResult {
+  count?: number;
+  shown?: number;
+  widgets?: UiWidgetState[];
+}
+
+// Bodies of the /ui/ routes (snake_case, as the bridge reads them).
+
+export interface UiApplyPresetArgs {
+  file_path?: string;
+  file_paths?: string[];
+  avatar_name?: string;
+  answers?: { layer_choice?: "replace" | "add"; restore_neutral_lash?: boolean };
+  watch_prefix?: string;
+  timeout_s?: number;
+}
+
+export interface UiListPresetsArgs {
+  category?: string;
+  folder?: string;
+  query?: string;
+  names?: string[];
+  ext?: string;
+  recursive?: boolean;
+  list_folders?: boolean;
+  limit?: number;
+}
+
+export interface SkinGenEditorArgs {
+  active: boolean;
+  exit_answer?: "yes" | "no";
+  timeout_s?: number;
+}
+
+export type SkinGenLayerAction = "select" | "show" | "hide" | "opacity" | "delete";
+export type SkinGenDeleteScope = "selected_layer" | "current_material" | "all_material";
+
+export interface SkinGenLayerArgs {
+  action: SkinGenLayerAction;
+  index?: number;
+  name?: string;
+  opacity?: number;
+  scope?: SkinGenDeleteScope;
+  confirm?: boolean;
+}
+
+export interface UiWindowsArgs {
+  screenshot?: boolean;
+  max_width?: number;
+  target?: "dialogs" | "main";
+  include_other?: boolean;
+}
+
+export interface UiWidgetsArgs {
+  object_name?: string;
+  name_contains?: string;
+  class_name?: string;
+  text_contains?: string;
+  ancestor?: string;
+  visible_only?: boolean;
+  limit?: number;
+}
+
+export interface UiCaptureCropArgs {
+  view?: string;
+  size?: number;
+  crop?: number[];
+  crop_fraction?: number[];
+  output_path?: string;
+  full_path?: string;
+  settle_ms?: number;
+}
+
+export interface UiCaptureCropResult extends OperationResult {
+  view?: string;
+  full_path?: string;
+  render_size?: number[];
+  crop_path?: string;
+  crop_box?: number[];
+  crop_size?: number[];
+  png_base64?: string;
+  warning?: string;
+  path?: string;
 }

@@ -807,3 +807,51 @@ describe("physics tools", () => {
     expect(result.content[0].text).toContain("Weight-map import is not available");
   });
 });
+
+// ── save_project: path alias and overwrite warnings (10-26 incident) ──────────
+
+describe("save_project path handling", () => {
+  it("accepts path as the same thing as file_path", async () => {
+    bridge.wfSaveProject.mockResolvedValue({ success: true, path: "C:/work/copy.ccProject", in_place: false });
+
+    const result = await call("save_project", { path: "C:/work/copy.ccProject" });
+
+    expect(bridge.wfSaveProject).toHaveBeenCalledWith("C:/work/copy.ccProject");
+    expect(result.content[0].text).toBe("Saved project to C:/work/copy.ccProject");
+  });
+
+  it("refuses two different names and saves nothing", async () => {
+    const result = await call("save_project", { file_path: "C:/a.ccProject", path: "C:/b.ccProject" });
+
+    expect(bridge.wfSaveProject).not.toHaveBeenCalled();
+    expect(result.content[0].text).toContain("both given and differ");
+  });
+
+  it("accepts the same name twice", async () => {
+    bridge.wfSaveProject.mockResolvedValue({ success: true, path: "C:/a.ccProject" });
+
+    await call("save_project", { file_path: "C:/a.ccProject", path: "C:/a.ccProject" });
+
+    expect(bridge.wfSaveProject).toHaveBeenCalledWith("C:/a.ccProject");
+  });
+
+  it("says when the open project was overwritten in place", async () => {
+    bridge.wfSaveProject.mockResolvedValue({ success: true, path: "C:/work/hero.ccProject", in_place: true });
+
+    const result = await call("save_project", {});
+
+    expect(result.content[0].text).toBe("Saved the open project in place: C:/work/hero.ccProject");
+  });
+
+  it("says when a save-as replaced an existing file", async () => {
+    bridge.wfSaveProject.mockResolvedValue({ success: true, path: "C:/work/old.ccProject", in_place: false, overwrote_existing: true });
+
+    const result = await call("save_project", { file_path: "C:/work/old.ccProject" });
+
+    expect(result.content[0].text).toBe("Saved project to C:/work/old.ccProject (replaced an existing file)");
+  });
+
+  it("the description warns that no path overwrites the open file", () => {
+    expect(descriptionOf("save_project")).toContain("OVERWRITES the open project file in place");
+  });
+});

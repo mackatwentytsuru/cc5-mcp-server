@@ -31,6 +31,10 @@ import { registerScriptingTools } from "./tools/scripting.js";
 import { registerMetaHumanTools } from "./tools/metahuman.js";
 import { registerActorMixerTools } from "./tools/actor-mixer.js";
 import { registerDialogTools } from "./tools/dialogs.js";
+import { registerPresetTools } from "./tools/presets.js";
+import { registerSkinGenTools } from "./tools/skingen.js";
+import { registerUiWindowTools } from "./tools/ui-windows.js";
+import { registerFramedCaptureTools } from "./tools/framed-capture.js";
 import { DialogWatcher, withDialogWatch } from "./dialogs.js";
 import { registerMorphResources } from "./resources/morphs.js";
 
@@ -66,6 +70,10 @@ async function main() {
   registerMetaHumanTools(server, bridge);
   registerActorMixerTools(server, bridge);
   registerDialogTools(server, dialogWatcher);
+  registerPresetTools(server, bridge);
+  registerSkinGenTools(server, bridge);
+  registerUiWindowTools(server, bridge);
+  registerFramedCaptureTools(server, bridge);
 
   // Register resources
   registerMorphResources(server, bridge);
