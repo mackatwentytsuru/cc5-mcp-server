@@ -876,6 +876,8 @@ export interface UiWidgetState {
   value?: number;
   checked?: boolean;
   tooltip?: string;
+  /** true for line edits and text boxes: what a person typed is never returned. */
+  text_hidden?: boolean;
   path: string;
 }
 

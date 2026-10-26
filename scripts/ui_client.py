@@ -30,6 +30,7 @@ import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any, Callable
 
@@ -37,8 +38,16 @@ DEFAULT_BASE = "http://127.0.0.1:5101"
 BUSY_MARK = "Timeout waiting for CC5"      # the bridge's 504: CC5's main thread is busy (baking, modal window)
 
 
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
 def _base(base: str | None) -> str:
-    return (base or os.environ.get("CC5_BRIDGE_URL") or DEFAULT_BASE).rstrip("/")
+    """The bridge URL. Like the MCP server, it must be this machine (an ssh tunnel ends on localhost)."""
+    url = (base or os.environ.get("CC5_BRIDGE_URL") or DEFAULT_BASE).rstrip("/")
+    host = urllib.parse.urlparse(url).hostname
+    if host not in LOOPBACK_HOSTS:
+        raise ValueError(f"the bridge URL must point to localhost (an ssh tunnel is fine), got {url!r}")
+    return url
 
 
 def post(path: str, body: dict[str, Any] | None = None, base: str | None = None, timeout: float = 40) -> dict[str, Any]:
@@ -68,7 +77,10 @@ def run_job(path: str, body: dict[str, Any] | None = None, base: str | None = No
             post_fn: Callable[..., dict[str, Any]] = post) -> dict[str, Any]:
     """Start a job route and wait for its result. Never raises on a busy CC5; returns the result dict,
     or {"success": False, "state": "running", "windows": [...]} when the time ran out."""
-    started = post_fn(path, body, base)
+    try:
+        started = post_fn(path, body, base)
+    except (urllib.error.URLError, OSError) as exc:
+        return {"success": False, "error": f"bridge unreachable: {exc}"}
     if not started.get("success") or "job_id" not in started:
         return started
     job_id = started["job_id"]
@@ -166,6 +178,11 @@ def _answers(pairs: list[str]) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    try:
+        _base(args.base)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     run = lambda path, body: run_job(path, body, args.base, args.timeout)   # noqa: E731
     if args.cmd == "windows":
         result = post("/ui/windows", {"screenshot": bool(args.shots), "target": "main" if args.main else "dialogs"},

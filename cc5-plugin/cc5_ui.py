@@ -48,7 +48,12 @@ MAX_PRESSES_PER_WINDOW = 3          # the same window pressed more often than th
 MAX_TOTAL_PRESSES = 60              # presses per answerer run
 PRESS_PROPERTY = "cc5_ui_presses"   # Qt dynamic property that counts presses on a window
 
-_TAG_RE = re.compile(r"</?[A-Za-z][^>]*>")
+_HTML_TAGS = ("html|head|body|style|p|div|span|a|b|i|u|s|em|strong|small|big|sub|sup|br|hr|center|font|h[1-6]|ul|ol|li"
+              "|table|tr|td|th|tbody|thead|img|code|pre|blockquote|nobr")
+_TAG_RE = re.compile(r"</?(?:" + _HTML_TAGS + r")(?:\s[^>]*)?/?>", re.IGNORECASE)
+MAX_RAW_CHARS = 8000                # one label is cut here before the tag regex runs
+# Typographic characters that may appear in the plain-English windows we answer.
+_TYPOGRAPHIC_OK = frozenset("\u2018\u2019\u201c\u201d\u2026\u00a0\u2013\u2014\u00b7")
 
 
 # --- the safety word list ----------------------------------------------------------------
@@ -57,7 +62,7 @@ def norm(text: Any) -> str:
     """Text for comparing: NFKD, no combining marks / invisible format characters, case-folded.
     (So 'LİCENSE', 'Lic­ense' and full-width letters all read as plain 'license'.)"""
     decomposed = unicodedata.normalize("NFKD", "" if text is None else str(text))
-    kept = "".join(ch for ch in decomposed if unicodedata.category(ch) not in ("Mn", "Cf"))
+    kept = "".join(ch for ch in decomposed if unicodedata.category(ch) not in ("Mn", "Cf") and ch != "&")
     return kept.casefold()
 
 
@@ -66,14 +71,17 @@ _WORD_STEMS = (
     "licen", "purchas", "repurchas", "buy", "log in", "log-in", "login", "logging in", "sign in", "sign-in",
     "signin", "password", "passcode", "updat", "upgrad", "agree", "terms", "eula", "activat", "deactivat",
     "reactivat", "subscri", "unsubscri", "payment", "checkout", "credit card", "trial", "serial", "register",
-    "renew", "redeem", "coupon", "unlock", "account",
+    "renew", "redeem", "coupon", "unlock", "account", "bought", "billing", "invoice", "refund", "premium", "expire",
+    "product key", "authoriz", "membership", "voucher", "sign up", "log out", "logged", "lizenz", "kaufen", "passwort",
+    "aktualisier", "acheter", "mise a jour", "mot de passe", "comprar", "contrasena", "actualiz", "лицензи",
 )
 # Strong stems also searched with spaces and punctuation removed ('Lic ense', 'Lic<b>ense</b>').
 _COMPACT_STEMS = ("licen", "purchas", "password", "login", "subscri", "payment", "checkout", "eula")
 # Japanese: no word boundaries, matched anywhere (after norm(), which drops the dakuten marks).
 _JAPANESE_STEMS = ("ライセンス", "購入", "購買", "ログイン", "サインイン", "更新", "アップデート", "規約", "同意",
                    "決済", "支払", "認証", "有効化", "アクティベ", "試用", "体験版", "パスワード", "シリアル",
-                   "登録", "会員", "課金", "契約")
+                   "登録", "会員", "課金", "契約",
+                   "라이선스", "구매", "로그인", "비밀번호", "업데이트", "许可证", "授权", "购买", "登录", "密码")
 
 _WORD_RE = re.compile(r"(?<![a-z0-9])(?:" + "|".join(re.escape(norm(s)) for s in _WORD_STEMS) + ")")
 _COMPACT_NEEDLES = tuple(norm(s) for s in _COMPACT_STEMS)
@@ -144,9 +152,14 @@ def _safe(fn: Callable[[], Any], default: Any = None) -> Any:
 
 def clean_text(value: Any) -> str:
     """Plain text of a label: rich-text tags removed, white space collapsed."""
-    text = "" if value is None else str(value)
+    text = "" if value is None else str(value)[:MAX_RAW_CHARS]
     text = html.unescape(_TAG_RE.sub(" ", text))
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _squash_tags(value: Any) -> str:
+    """The same text with tags removed WITHOUT a space ('Act<b>ivate</b>' -> 'Activate'), for the safety check."""
+    return html.unescape(_TAG_RE.sub("", "" if value is None else str(value)[:MAX_RAW_CHARS]))
 
 
 def label_text(widget: Any) -> str:
@@ -234,10 +247,13 @@ def describe_window(w: Any, q: Any = None) -> dict[str, Any]:
         secret = secret or _safe(line.echoMode, q.QLineEdit.Normal) != q.QLineEdit.Normal
         other.append(clean_text(_safe(line.placeholderText, "")))
     text = " ".join(labels)
-    full = " ".join([title, text, *buttons, *(b["text"] for b in boxes), *other])[:MAX_FULL_CHARS]
-    needs_human = (forbidden_reason(full)
+    full = " ".join([title, text, *buttons, *(b["text"] for b in boxes), *other])
+    squashed = " ".join(_squash_tags(_safe(c.text, "")) for c in _safe(lambda: w.findChildren(q.QLabel), []))
+    needs_human = (forbidden_reason(full[:MAX_FULL_CHARS], squashed[:MAX_FULL_CHARS])
                    or ("password field" if secret else None)
-                   or ("long text (a licence or terms?)" if long_text else None))
+                   or ("long text (a licence or terms?)" if long_text else None)
+                   or ("text too long to check" if len(full) > MAX_FULL_CHARS else None))
+    full = full[:MAX_FULL_CHARS]
     lowered = norm(f"{title} {text}")
     progress = not needs_human and (
         bool(_safe(lambda: w.findChildren(q.QProgressBar), [])) or any(word in lowered for word in BUSY_WORDS))
@@ -266,8 +282,9 @@ def public_info(info: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in info.items() if not k.startswith("_")}
 
 
-def window_key(info: dict[str, Any]) -> tuple[str, str]:
-    return (info["title"], info["class"])
+def window_key(info: dict[str, Any]) -> tuple[str, str, str]:
+    """What identifies a window across polls (a new question under the same title is a new window)."""
+    return (info["title"], info["class"], info["text"][:120])
 
 
 def scan_windows(include_other: bool = False) -> list[tuple[dict[str, Any], Any]]:
@@ -292,7 +309,7 @@ def scan_windows(include_other: bool = False) -> list[tuple[dict[str, Any], Any]
     return found
 
 
-def baseline_keys() -> set[tuple[str, str]]:
+def baseline_keys() -> set[tuple[str, str, str]]:
     """Windows already open now (and harmless): a job does not wait for those."""
     return {window_key(info) for info, _w in scan_windows() if not info["needs_human"]}
 
@@ -346,6 +363,12 @@ def normalize_choices(raw: Any = None) -> dict[str, Any]:
     return out
 
 
+def _plain_english(text: str) -> bool:
+    """ASCII plus a few typographic marks: the windows we answer are plain English, so look-alike letters
+    (Cyrillic, Greek, ...) mean it is not one of ours."""
+    return all(ord(ch) < 128 or ch in _TYPOGRAPHIC_OK for ch in text)
+
+
 def decide(info: dict[str, Any], choices: dict[str, Any]) -> dict[str, Any] | None:
     """What to do with one window: {"rule", "press", "ticks"}, or {"rule", "blocked"}, or None
     (not one of ours)."""
@@ -363,6 +386,8 @@ def decide(info: dict[str, Any], choices: dict[str, Any]) -> dict[str, Any] | No
             continue                            # a window of another shape that mentions the question
         if info.get("needs_human"):
             return {"rule": rule.key, "blocked": f"window mentions '{info['needs_human']}': a person must decide"}
+        if not (_plain_english(info["title"]) and _plain_english(info.get("_full") or info["text"])):
+            return {"rule": rule.key, "blocked": "the window text has characters outside plain English: a person must look"}
         want = rule.default if rule.key == "apply_preset" else choices.get(rule.key, rule.default)
         if want not in buttons:
             return {"rule": rule.key, "blocked": f"no '{want}' button (buttons: {info['buttons']})"}
@@ -371,6 +396,10 @@ def decide(info: dict[str, Any], choices: dict[str, Any]) -> dict[str, Any] | No
             decision["ticks"] = [(RESTORE_LASH_FRAGMENT, bool(choices.get("restore_neutral_lash", True)))]
         return decision
     return None
+
+
+def _press_count(w: Any) -> int:
+    return _clamp_int(_safe(lambda: w.property(PRESS_PROPERTY)), 0, 10_000, 0)
 
 
 def _same_widget(a: Any, b: Any) -> bool:
@@ -453,7 +482,7 @@ class WindowAnswerer:
 
     def _answer(self, info: dict[str, Any], w: Any, decision: dict[str, Any]) -> bool:
         q = _qt()
-        count = _clamp_int(_safe(lambda: w.property(PRESS_PROPERTY)), 0, 10_000, 0)
+        count = _press_count(w)
         if count >= MAX_PRESSES_PER_WINDOW:
             self._note(info, f"pressed {count} times and still open")
             return False
@@ -619,7 +648,7 @@ def install_job_guard(action_map: dict[str, Callable[..., Any]]) -> None:
 
 def settle_steps(limit_s: float, choices: dict[str, Any], extra_ok: Callable[[], bool] | None = None,
                  quiet_needed: int = 2, poll_ms: int = 1000, grace_s: float = 4.0,
-                 answerable: bool = True, baseline: set[tuple[str, str]] | None = None) -> Iterator[float]:
+                 answerable: bool = True, baseline: set[tuple[str, str, str]] | None = None) -> Iterator[float]:
     """Generator (use with `yield from`): wait until no window is open for quiet_needed polls in a
     row. A window that needs a person stops the wait at once; progress windows (baking, loading)
     are waited out; a question the answerer will press is waited out (answerable=False: nothing
@@ -639,11 +668,11 @@ def settle_steps(limit_s: float, choices: dict[str, Any], extra_ok: Callable[[],
                    if i["needs_human"] or baseline is None or window_key(i) not in baseline]
         stuck = next((i for i, _w in windows if i["needs_human"]), None)
         if stuck is None:
-            for info, _w in windows:
+            for info, w in windows:
                 if info["progress"]:
                     continue
                 decision = decide(info, choices) if answerable else None
-                if decision is not None and "press" in decision:
+                if decision is not None and "press" in decision and _press_count(w) < MAX_PRESSES_PER_WINDOW:
                     continue
                 stuck = info
                 break

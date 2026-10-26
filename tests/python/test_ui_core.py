@@ -538,5 +538,67 @@ class RoutesTest(unittest.TestCase):
         self.assertEqual(set(cc5_ui.ROUTES), {"/ui/job"})
 
 
+class HardeningTest(UiTestCase):
+    def test_text_in_angle_brackets_is_not_swallowed_as_a_tag(self) -> None:
+        self.assertEqual(cc5_ui.clean_text("<Purchase a license to continue>"), "<Purchase a license to continue>")
+        self.assertEqual(cc5_ui.clean_text("<b>bold</b> and <i>it</i>"), "bold and it")
+        dlg = fake_qt.Dialog(title="Apply Character Preset", visible=True)
+        fake_qt.Label("<Purchase a license to continue>", dlg)
+        fake_qt.PushButton("<Buy now>", dlg)
+        fake_qt.PushButton("Apply", dlg)
+        self.assertIsNotNone(cc5_ui.describe_window(dlg, self.q)["needs_human"])
+
+    def test_words_split_by_tags_or_ampersands_are_still_found(self) -> None:
+        for text in ("Act<b>ivate</b> now", "Up<i>date</i> available", "b<b>uy</b> it", "Reg<b>ister</b>", "Act&ivate", "b&uy"):
+            dlg = fake_qt.Dialog(title="Apply Character Preset", visible=True)
+            fake_qt.Label(text, dlg)
+            fake_qt.PushButton("Apply", dlg)
+            self.assertIsNotNone(cc5_ui.describe_window(dlg, self.q)["needs_human"], text)
+
+    def test_a_window_too_long_to_check_needs_a_person(self) -> None:
+        dlg = fake_qt.Dialog(title="Apply Character Preset", visible=True)
+        fake_qt.Label("fine " * (cc5_ui.MAX_FULL_CHARS // 5 + 50), dlg)
+        fake_qt.PushButton("Buy Now", dlg)
+        self.assertEqual(cc5_ui.describe_window(dlg, self.q)["needs_human"], "text too long to check")
+
+    def test_more_words_in_more_languages(self) -> None:
+        for text in ("You bought this", "Billing details", "Product key", "Lizenz abgelaufen", "Passwort", "Acheter maintenant",
+                     "Mise à jour disponible", "Comprar ahora", "Contraseña", "Лицензия", "라이선스", "로그인", "许可证", "购买"):
+            self.assertIsNotNone(cc5_ui.forbidden_reason(text), text)
+
+    def test_look_alike_letters_mean_it_is_not_our_window(self) -> None:
+        question = "Would you like to exit SkinGen editing mode ?"
+        for sneaky in (question.replace("e", "\u0435"), question.replace("o", "\u03bf"), question + "\u202e", question + "\u3164"):
+            info = {"title": "x", "text": sneaky, "buttons": ["Yes", "No"], "needs_human": None}
+            decision = cc5_ui.decide(info, cc5_ui.normalize_choices())
+            self.assertTrue(decision is None or "blocked" in decision, repr(sneaky))
+        smart = {"title": "x", "text": "Would you like to exit SkinGen editing mode \u2026 ?", "buttons": ["Yes", "No"], "needs_human": None}
+        self.assertEqual(cc5_ui.decide(smart, cc5_ui.normalize_choices())["press"], "yes")
+
+    def test_a_non_ascii_title_is_blocked_too(self) -> None:
+        info = {"title": "Apply Character Preset", "text": "ok", "buttons": ["Apply"], "needs_human": None}
+        self.assertEqual(cc5_ui.decide(info, cc5_ui.normalize_choices())["press"], "apply")
+        info["title"] = "Apply Character Preset\u3164"
+        self.assertIsNone(cc5_ui.decide(info, cc5_ui.normalize_choices()))     # not an exact title any more
+
+    def test_a_window_that_hit_the_press_limit_stops_the_wait_at_once(self) -> None:
+        dlg = self.dialog("Apply Character Preset", "x", ["Apply"])
+        dlg.setProperty(cc5_ui.PRESS_PROPERTY, cc5_ui.MAX_PRESSES_PER_WINDOW)
+        result = self.run_steps(cc5_ui.settle_steps(600, cc5_ui.normalize_choices()))
+        self.assertFalse(result["ok"])
+        self.assertLess(result["waited_s"], 10)
+
+    def test_a_new_question_under_an_old_title_is_not_ignored(self) -> None:
+        self.dialog("Palette", "tool window", ["Close"])
+        baseline = cc5_ui.baseline_keys()
+        self.dialog("Palette", "Delete everything?", ["Yes", "No"])
+        result = self.run_steps(cc5_ui.settle_steps(60, cc5_ui.normalize_choices(), baseline=baseline))
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["blocked_by"]["text"], "Delete everything?")
+
+    def test_a_huge_label_is_cut_before_the_tag_regex(self) -> None:
+        self.assertLessEqual(len(cc5_ui.clean_text("<a" * 40000)), cc5_ui.MAX_RAW_CHARS)
+
+
 if __name__ == "__main__":
     unittest.main()
