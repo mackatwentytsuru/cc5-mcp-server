@@ -12,6 +12,8 @@ New-Item -ItemType Directory -Force -Path $dest | Out-Null
 Copy-Item "$source\main.py"    $dest
 Copy-Item "$source\server.py"  $dest
 Copy-Item "$source\cc5_api.py" $dest
+# Qt UI helper modules (cc5_ui.py, cc5_skingen.py, cc5_content.py: the /ui/ routes)
+Get-ChildItem -Path $source -Filter "cc5_*.py" | Where-Object { $_.Name -ne "cc5_api.py" } | ForEach-Object { Copy-Item $_.FullName $dest }
 Copy-Item "$source\config.json" $dest
 Copy-Item "$source\config.xml"  $dest
 

@@ -8136,12 +8136,35 @@ def wf_content_save(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[s
         return {"success": False, "error": str(e)}
 
 
+_WF_SAVE_KEYS = ("file_path", "path")
+
+
 def wf_save_project(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
-    """Route /workflow/save."""
+    """Route /workflow/save.
+
+    Body: {"file_path": "X.ccProject"} saves under that name ("path" means the same); {} saves
+    the open project in place. Any other key is refused: it used to be ignored, so a mistyped
+    "save as" overwrote the open project (10-26, beyon_v61_chin5_1026).
+    """
     params = _wf_params(body, kwargs)
     try:
-        file_path = (params.get("file_path") or "").strip()
-        if not file_path:
+        unknown = sorted(str(key) for key in params if key not in _WF_SAVE_KEYS)
+        if unknown:
+            return {
+                "success": False,
+                "error": (
+                    f"unknown argument(s) {unknown}: nothing was saved. Use file_path (or path) to save "
+                    "under a new name, or send no path to save the open project in place."
+                ),
+            }
+        given = {key: str(params.get(key) or "").strip() for key in _WF_SAVE_KEYS}
+        if given["file_path"] and given["path"] and (
+            os.path.normcase(os.path.abspath(given["file_path"])) != os.path.normcase(os.path.abspath(given["path"]))
+        ):
+            return {"success": False, "error": "file_path and path are both given and differ: nothing was saved"}
+        file_path = given["file_path"] or given["path"]
+        in_place = not file_path
+        if in_place:
             file_path = _wf_current_project_path()
             if not file_path:
                 return {
@@ -8151,6 +8174,7 @@ def wf_save_project(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[s
                         "readable through the RLPy API used here"
                     ),
                 }
+        existed = os.path.exists(file_path)
         path_error = _validate_path(file_path, {".ccproject"})
         if path_error:
             return {"success": False, "error": path_error}
@@ -8187,7 +8211,8 @@ def wf_save_project(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[s
                 raise save_error or RuntimeError("SaveProject failed")
         finally:
             RLPy.RGlobal.EndAction()
-        return {"success": True, "path": file_path}
+        return {"success": True, "path": file_path, "in_place": in_place,
+                "overwrote_existing": bool(existed)}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -9883,6 +9908,59 @@ def wf_physics_set_collision(
         return {"success": False, "error": str(e)}
 
 
+# --- Qt UI helper modules (cc5_ui, cc5_skingen, cc5_content) ---
+# Routes under /ui/. They live in their own files next to this one; a missing or broken file turns
+# its routes into a clear error and never stops the bridge. They are re-imported on every
+# _auto_patch_server() call, so GET /reload picks up edits of any of them.
+
+_UI_MODULES = ("cc5_ui", "cc5_skingen", "cc5_content")
+_UI_ROUTE_PATHS = (
+    "/ui/windows", "/ui/widgets", "/ui/job", "/ui/capture_crop",
+    "/ui/skingen/state", "/ui/skingen/editor", "/ui/skingen/layer",
+    "/ui/preset/list", "/ui/preset/apply",
+)
+
+
+def _load_ui_modules() -> dict[str, Any]:
+    """Import (or re-import) the helper modules; returns the ones that loaded."""
+    import importlib
+
+    loaded: dict[str, Any] = {}
+    for name in _UI_MODULES:
+        try:
+            module = sys.modules.get(name)
+            loaded[name] = importlib.reload(module) if module is not None else importlib.import_module(name)
+        except Exception as exc:
+            print(f"[CC5 MCP Bridge] helper module {name} not loaded: {exc!r}")
+    return loaded
+
+
+def _ui_modules_missing(body: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "success": False,
+        "error": (
+            "The Qt UI helper modules are not installed next to cc5_api.py (or failed to load; see the "
+            "CC5 console). Copy cc5_ui.py, cc5_skingen.py and cc5_content.py into the plugin folder "
+            "(install-plugin.ps1 does) and call GET /reload."
+        ),
+    }
+
+
+def _patch_ui_routes(srv: Any) -> None:
+    """Register every /ui/ route of the helper modules (or the 'not installed' error)."""
+    registered: set[str] = set()
+    for module in _load_ui_modules().values():
+        for path, (action, handler) in getattr(module, "ROUTES", {}).items():
+            srv.ACTION_MAP[action] = handler
+            srv.POST_ROUTES[path] = action
+            registered.add(path)
+    missing = [path for path in _UI_ROUTE_PATHS if path not in registered]
+    if missing:
+        srv.ACTION_MAP["ui_modules_missing"] = _ui_modules_missing
+        for path in missing:
+            srv.POST_ROUTES[path] = "ui_modules_missing"
+
+
 # --- Auto-patch server ACTION_MAP on reload ---
 
 def _auto_patch_server() -> None:
@@ -10030,6 +10108,8 @@ def _auto_patch_server() -> None:
         "wf_morph_editor":           wf_morph_editor,
         "wf_file_dialog_fill":       wf_file_dialog_fill,
         "wf_file_dialog_native":     wf_file_dialog_native,
+        "wf_dialog_table_combo":     wf_dialog_table_combo,
+        "wf_import_blender":         wf_import_blender,
         "wf_timeline":               wf_timeline,
         "wf_buttons":                wf_buttons,
         "wf_pivot":                  wf_pivot,
@@ -10226,6 +10306,9 @@ def _auto_patch_server() -> None:
             # ActorMIXER PRO: Create Mixer Assets (safety gate)
             "create_actor_mixer":      ["confirm_create"],
         })
+
+    if hasattr(srv, "POST_ROUTES"):
+        _patch_ui_routes(srv)
 
     print("[CC5 MCP Bridge] Auto-patched ACTION_MAP + routes")
 
