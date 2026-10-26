@@ -18,9 +18,9 @@ The MCP server communicates with Claude via **stdio** transport and forwards com
 
 ## Features
 
-### MCP Tools (85)
+### MCP Tools (99)
 
-The MCP server provides 85 tools (registered in 18 modules under `src/tools/`) for controlling CC5. This list matches the code: there is one `server.tool(` call per tool in `src/tools/*.ts` (85 in total, all with unique names).
+The MCP server provides 99 tools (registered in 22 modules under `src/tools/`) for controlling CC5. This list matches the code: there is one `server.tool(` call per tool in `src/tools/*.ts` (99 in total, all with unique names).
 
 #### Scene & Avatar Management (8)
 | Tool | Description |
@@ -95,7 +95,7 @@ The MCP server provides 85 tools (registered in 18 modules under `src/tools/`) f
 | `set_camera_focal_length` | Set camera focal length |
 | `frame_camera` | Move the viewport camera to a preset view (face close-up, home, ...) |
 | `list_cameras` | List cameras with position, focal length, angle of view and whether scripts can move them (the Preview Camera cannot) |
-| `dolly_camera` | Move the viewport camera toward/away from the subject like the mouse wheel (15 cm per notch at the face view), without moving the user's mouse |
+| `dolly_camera` | Move the viewport camera toward/away from the subject like the mouse wheel (15 cm per notch at the face view at first; **the step size can change during a session**, it became 42 cm once, so use `capture_framed_crop` to compare options at equal size), without moving the user's mouse |
 | `list_avatar_parts` | List brows, eyelashes, beard, eyes, teeth and other avatar parts (HD brows are parts, not hairs) |
 | `remove_avatar_part` | Remove brow or beard parts by name or type |
 
@@ -125,6 +125,22 @@ The MCP server provides 85 tools (registered in 18 modules under `src/tools/`) f
 
 **Automatic warning (Japanese):** while a dialog is open, *every* tool result starts with `⚠ CC5 に小窓が出ています ...` (or `ℹ Reallusion Hub に小窓 ...`) showing title / body / buttons. Dialogs that look like agreements, purchases, logins, updates, deletes or overwrites are flagged "人が判断". Scans are cached ~4 s (about 1 s when a rescan is needed). Implemented by `scripts/list-dialogs.ps1` (EnumWindows + UI Automation), independent of the bridge. Set `CC5_DIALOG_WATCH=0` to disable, `CC5_DIALOG_WATCH_IGNORE_HUB=1` to hide Hub-only notices.
 
+#### UI automation: presets, SkinGen, windows, framed capture (9) -- no mouse
+
+See [UI automation without the mouse](#ui-automation-without-the-mouse) for how it works and what it will and will not press.
+
+| Tool | Description |
+|------|-------------|
+| `apply_preset` | Apply preset file(s) to the avatar with `RFileIO.LoadFile`: eyelash presets (`.ccAvatarPreset`), eyelash strips (`.rlEyelashElement`), SkinGen makeup (`.ccSkinGenPreset`), hair, cloth, ... (a fixed list of types; never a project, character or FBX). Answers only the known question windows (Apply Character Preset / Eyelash Elements, add-or-replace layer, exit SkinGen editing mode) and reports every other window with a screenshot. Reports what was added/removed in the scene |
+| `list_presets` | List preset files that are on disk, by category (`eyelash_preset`, `eyelash_element`, `makeup_lip`, `makeup_eye`, `makeup_eyelash`, ...) or `$/...` content folder; `names` shows which wanted presets are missing (cloud items are not on disk) |
+| `skingen_state` | Read the SkinGen editor: on/off, tab, layers (visible / HIDDEN, selected) and the selected layer's opacity |
+| `skingen_editor` | Turn the SkinGen editor on/off; off bakes (~10 s), answers "exit SkinGen editing mode?" and waits until CC5 is quiet |
+| `skingen_layer` | Select / show / hide / set opacity (0-100) / delete a SkinGen layer, by index or name; reads the result back. Delete needs `confirm_delete=true`; a confirmation window is never answered |
+| `list_cc5_windows` | The pop-up / question windows CC5 has open right now, read inside CC5 with Qt: title, text, buttons, check boxes, progress or needs-a-person flags, plus a PNG of each (`QWidget.grab`). Read-only; works behind an ssh tunnel |
+| `get_ui_job` | Look at or wait for a job the tools above started (use the job id from a "Still running" reply) |
+| `find_ui_widgets` | Read-only finder for CC5's own Qt widgets by objectName / class / text, to discover names for new automation |
+| `capture_framed_crop` | Frame a preset view, render it big (default 3600 px) and cut a fixed box, so options are compared at the same scale (does not depend on `dolly_camera`) |
+
 #### MetaHuman (2)
 | Tool | Description |
 |------|-------------|
@@ -153,7 +169,7 @@ These tools drive the `/workflow/*` routes. They work without the GUI and are me
 | `conform_cloth` | Conform a cloth item to the body with 1-10 iterations and optional conform values |
 | `get_transform` | Read an item's move, rotate and scale values |
 | `set_transform` | Set an item's move, rotate and/or scale values |
-| `save_project` | Save the current project, optionally to a new path |
+| `save_project` | Save the current project. `file_path` (or `path`, the same thing) saves under that name; **no path overwrites the open project in place**. Unknown arguments are refused and nothing is saved (a mistyped "save as" used to overwrite the open project). The reply says when it overwrote something |
 | `export_obj` | Export the scene, or one item with `item_name`, to OBJ (current pose and materials by default) |
 | `offset_mesh` | Move every vertex of an item's mesh by a world offset in cm, keeping skin weights (moves a cloth item; needs that item's OBJ from `export_obj` with `current_pose` false) |
 | `get_floor_contact` | Read the current floor-contact settings |
@@ -314,6 +330,67 @@ The tool reproduces the CC5 "Export FBX (InstaLOD)" dialog. The recommended Unre
 
 Passing a bare filename (no directory component) exports into `D:\CC5Export` by default — override the folder with the `CC5_EXPORT_DIR` environment variable. Absolute paths are used as-is. Omitting `motion_range` keeps the dialog default "All".
 
+## UI automation without the mouse
+
+Since 2026-10-26 the bridge can apply presets, work the SkinGen editor and read CC5's pop-ups from
+a script (`/ui/*` routes, tools in the table above). What was found working on a real CC5: the
+`LoadFile` call for presets with a Qt timer that answers the question windows, the Activate Editor
+switch, the layer table. The steps to check each piece on a real CC5 are in
+[docs/ui-automation-test-steps_ja.md](docs/ui-automation-test-steps_ja.md) (Japanese).
+
+**What is pressed automatically -- only this.**
+
+| Window | Answer |
+|--------|--------|
+| title `Apply Character Preset` or `Apply Eyelash Elements` | `Apply`; the check box "Restore neutral lash strip" is ticked (`restore_neutral_lash`) |
+| "...add a new layer or replace the current layer?" (buttons only Add / Replace / Cancel) | `Replace` or `Add` (`layer_choice`) |
+| "...exit SkinGen editing mode?" (buttons only Yes / No / Cancel) | `Yes` or `No` (`exit_answer`) |
+
+Everything else is left alone and reported (with a PNG): delete / overwrite questions, unknown
+windows, and **every window that mentions a licence, purchase, login, update, terms, activation,
+subscription, payment or trial** (the whole text of the window is checked: labels, buttons, check
+boxes, text boxes, group titles; case, accents, invisible characters, words split by tags or `&`, and
+Japanese / Korean / Chinese / German / French / Spanish / Russian words are covered; a password field,
+a long document or text too long to check also counts). A window we answer must be plain English
+(look-alike letters from other scripts mean it is not ours), so a CC5 running in another UI language
+will not be answered. While a dialog that needs a person is open, nothing is pressed. Timers stop
+themselves and never press the same window more than three times. The text of line edits and text
+boxes (mail addresses, keys, passwords) is never returned by `find_ui_widgets`.
+
+**Jobs.** Slow work (apply, editor on/off, layer operations, framed capture) is a job: the route
+returns a job id at once and the work goes on inside CC5's Qt event loop in small steps. Poll
+`POST /ui/job {"job_id": ...}` (the MCP tools do it for you; `get_ui_job` shows a job later). While a
+window is open or CC5 bakes, `/ui/windows`, `/ui/widgets`, `/ui/job` and `/ui/skingen/state` still
+answer; **every other bridge command is refused until the job ends** (RLPy is not re-entrant inside
+`LoadFile` / the bake; set `CC5_UI_JOB_GUARD=0` to turn that off). One job at a time.
+
+**Routes** (all `POST`, JSON body; see the module docstrings for every field):
+
+| Route | What |
+|-------|------|
+| `/ui/preset/apply` (job), `/ui/preset/list` | apply preset files / list what is on disk |
+| `/ui/skingen/state`, `/ui/skingen/editor` (job), `/ui/skingen/layer` (job) | SkinGen editor |
+| `/ui/windows`, `/ui/widgets` | open windows (+ PNG) / widget finder |
+| `/ui/capture_crop` (job) | frame, render big, cut a fixed box |
+| `/ui/job` | state / result of a job |
+
+**From a script:** `scripts/ui_client.py` (Python standard library only) starts a job and polls it, e.g.
+`python scripts/ui_client.py apply "C:/.../Rouge.ccSkinGenPreset"`, `... editor off`, `... layer opacity --index 0 --opacity 60`,
+`... windows --shots D:/tmp/shots`, `... crop --crop 1230,1610,2190,1930 --out D:/tmp/eyes.png`.
+Exit code 2 means a window needs a person.
+
+**Helper modules.** The code lives in `cc5_ui.py` (jobs, windows, the answers), `cc5_uiview.py` (pictures,
+widget finder, framed capture), `cc5_skingen.py`, `cc5_content.py`, next to `cc5_api.py`. Copy all of
+them when you install by hand (`install-plugin.ps1` and `scripts/copy_to_installed.ps1` do); if one is
+missing the routes answer with an error that says so and the rest of the bridge keeps working.
+`GET /reload` re-reads all of them.
+
+**Limits.** Not run against every CC5 build: widget names come from CC5 on Qt 5.15 / bridge 1.2.0. The
+`/ui` routes are local (Host / Origin checks apply) but have no extra token; they are not behind
+`CC5_ALLOW_EXEC`. `skingen_layer delete` needs `confirm=true`, which is a guard against accidents and not a
+human confirmation. Content still in the cloud is not listed and cannot be applied; downloading
+is a person's job (it can bring the Reallusion Hub to the front).
+
 ## Configuration
 
 | Environment Variable | Default | Description |
@@ -328,6 +405,8 @@ Passing a bare filename (no directory component) exports into `D:\CC5Export` by 
 | `CC5_DIALOG_WATCH` | `1` | `0` disables the dialog warning that is prepended to tool results |
 | `CC5_DIALOG_WATCH_IGNORE_HUB` | *(unset)* | `1` hides Reallusion Hub-only dialogs from the warning |
 | `CC5_EXPORT_DIR` | `D:\CC5Export` | Default output folder for `export_fbx` when given a bare filename (no directory). Read by the bridge plugin. |
+| `CC5_UI_JOB_GUARD` | `1` | `0` lets other bridge commands run while a UI job (apply preset, SkinGen editor, framed capture) is running. Read by the bridge plugin |
+| `CC5_CONTENT_ROOTS` | `C:/Users/Public/Documents/Reallusion/Reallusion Templates` + `Reallusion Custom` | Folders `list_presets` reads when RLPy cannot list a content folder (path-separator list). Read by the bridge plugin |
 
 ## Development
 
@@ -347,7 +426,7 @@ npm run test:coverage # With coverage report
 npm run test:py      # Bridge plugin security tests (Python 3.10+, no CC5 needed)
 ```
 
-Current suite: 619 Vitest tests in 18 files, plus 36 Python security tests.
+Current suite: 803 Vitest tests in 23 files, plus 308 Python tests (bridge security, route tables, and the UI automation with a fake Qt in `tests/python/fake_qt.py`).
 
 ### Hot-Reload the Python Plugin
 
@@ -372,16 +451,16 @@ cc5-mcp-server/
 │   ├── cc5-bridge.ts       # HTTP client for CC5 bridge
 │   ├── types.ts            # Type definitions
 │   ├── util.ts             # Shared utilities (bridgeCall wrapper)
-│   ├── tools/              # MCP tool definitions (18 files, 85 tools total)
+│   ├── tools/              # MCP tool definitions (23 files, 99 tools total)
 │   │   ├── morph.ts        # Morph search, adjust, reset (5 tools)
 │   │   ├── scene.ts        # Scene/avatar management, viewport, subdivision (7 tools)
 │   │   ├── asset.ts        # Asset loading / FBX export (2 tools)
 │   │   ├── actor-mixer.ts  # ActorMIXER PRO mixer assets (1 tool)
 │   │   ├── character.ts    # Body presets, character description (2 tools)
-│   │   ├── content.ts      # Clothes, hair, accessories, browse (5 tools)
+│   │   ├── content.ts      # Clothes, hair, accessories, avatar parts, browse (7 tools)
 │   │   ├── color.ts        # Eye, hair, lip, skin color setters (4 tools)
 │   │   ├── material.ts     # Material info, colors, properties, shader parameters (9 tools)
-│   │   ├── camera.ts       # Camera info, focal length, framing (3 tools)
+│   │   ├── camera.ts       # Camera info, focal length, framing, dolly (5 tools)
 │   │   ├── light.ts        # Lights, ambient, IBL (9 tools)
 │   │   ├── visibility.ts   # Show/hide items, scene objects (2 tools)
 │   │   ├── edit.ts         # Undo/redo (2 tools)
@@ -389,15 +468,26 @@ cc5-mcp-server/
 │   │   ├── facial-profile.ts # Facial profile detect + convert (2 tools)
 │   │   ├── scripting.ts    # Python execution (1 tool)
 │   │   ├── metahuman.ts    # MetaHuman export (2 tools)
-│   │   └── workflow.ts     # Text-only workflow routes (25 tools)
+│   │   ├── dialogs.ts      # list_dialogs (1 tool)
+│   │   ├── presets.ts      # apply_preset, list_presets (2 tools)
+│   │   ├── skingen.ts      # SkinGen state / editor / layer (3 tools)
+│   │   ├── ui-windows.ts   # list_cc5_windows, get_ui_job, find_ui_widgets (3 tools)
+│   │   ├── framed-capture.ts # capture_framed_crop (1 tool)
+│   │   ├── ui-common.ts    # Shared helpers of the UI tools (job waiting, window text)
+│   │   └── workflow.ts     # Text-only workflow routes (26 tools)
 │   └── resources/
 │       └── morphs.ts       # Morph catalog & avatar state resources
 ├── cc5-plugin/             # CC5 Python plugin
 │   ├── main.py             # Plugin entry (initialize_plugin / uninitialize_plugin)
 │   ├── server.py           # HTTP bridge server (http.server)
 │   ├── cc5_api.py          # RLPy API wrapper
+│   ├── cc5_ui.py           # Qt core: jobs, windows, the answers we allow, job guard
+│   ├── cc5_uiview.py       # Window pictures, widget finder, framed capture
+│   ├── cc5_skingen.py      # SkinGen editor / layers
+│   ├── cc5_content.py      # Preset list / apply
 │   └── config.json         # Plugin configuration
-├── tests/                  # Vitest unit tests; tests/python = bridge security tests
+├── scripts/ui_client.py    # Stdlib client for the /ui routes (job polling, window PNGs)
+├── tests/                  # Vitest unit tests; tests/python = bridge + UI automation tests
 ├── start_bridge.py         # Manual bridge startup script
 ├── install-plugin.ps1      # Plugin installer (requires admin)
 └── claude-mcp-config.json  # Claude Code MCP config snippet

@@ -23,6 +23,7 @@ export function formatWidgets(result: UiWidgetsResult): string {
     if (w.current_text !== undefined) bits.push(`current='${w.current_text}'`);
     if (w.value !== undefined) bits.push(`value=${w.value}`);
     if (w.checked !== undefined) bits.push(`checked=${w.checked}`);
+    if (w.text_hidden) bits.push("(typed text is never shown)");
     bits.push(w.visible ? "visible" : "hidden", w.enabled ? "enabled" : "disabled");
     return `- ${bits.join(" ")}  (in: ${w.path || "top level"})`;
   });

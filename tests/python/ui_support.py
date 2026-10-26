@@ -5,6 +5,7 @@ fake Qt and fake clock for every test. Not a test module itself.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import unittest
@@ -62,4 +63,5 @@ class UiTestCase(unittest.TestCase):
         fake_qt.drain()
         job = cc5_ui.ui_job({"job_id": started["job_id"]})
         assert job["state"] in ("done", "failed"), job
+        json.dumps(job)                           # every job reply must be plain JSON (it goes over HTTP)
         return job["result"]

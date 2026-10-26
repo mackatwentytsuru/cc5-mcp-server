@@ -91,14 +91,19 @@ def _main_window_report(shoot: bool, max_width: int) -> dict[str, Any]:
 
 # --- widget finder -----------------------------------------------------------------------
 
-def widget_state(w: Any) -> dict[str, Any]:
-    """Name, class and the values a widget exposes, as plain data. The text of a password field
-    is never returned."""
+def _is_free_text(w: Any) -> bool:
+    """A text input (line edit, text box): what a person typed (a mail address, a key) is never read."""
     q = cc5_ui._qt()
+    return isinstance(w, (q.QLineEdit, q.QTextEdit, q.QPlainTextEdit))
+
+
+def widget_state(w: Any) -> dict[str, Any]:
+    """Name, class and the values a widget exposes, as plain data. The text of line edits and text
+    boxes (passwords, mail addresses, keys) is never returned."""
     safe = cc5_ui._safe
     out: dict[str, Any] = {"object_name": safe(w.objectName, ""), "class": cc5_ui._class_of(w),
                            "visible": bool(safe(w.isVisible, False)), "enabled": bool(safe(w.isEnabled, True))}
-    secret = isinstance(w, q.QLineEdit) and safe(w.echoMode, q.QLineEdit.Normal) != q.QLineEdit.Normal
+    secret = _is_free_text(w)
     for key, getter in (("text", "text"), ("current_text", "currentText"), ("value", "value"),
                         ("checked", "isChecked"), ("tooltip", "toolTip")):
         fn = getattr(w, getter, None)
@@ -109,7 +114,7 @@ def widget_state(w: Any) -> dict[str, Any]:
             if value is not None and value != "":
                 out[key] = cc5_ui.clean_text(value) if isinstance(value, str) else value
     if secret:
-        out["secret"] = True
+        out["text_hidden"] = True
     chain: list[str] = []
     parent = safe(w.parent)
     while parent is not None and len(chain) < 6:
@@ -143,7 +148,7 @@ def ui_widgets(body: dict[str, Any] | None = None) -> dict[str, Any]:
             continue
         if cls and str(cls).lower() not in (cc5_ui._class_of(w).lower(), type(w).__name__.lower()):
             continue
-        if text and str(text).lower() not in cc5_ui.clean_text(cc5_ui._safe(lambda: w.text(), "")).lower():
+        if text and (_is_free_text(w) or str(text).lower() not in cc5_ui.clean_text(cc5_ui._safe(lambda: w.text(), "")).lower()):
             continue
         if visible_only and not cc5_ui._safe(w.isVisible, False):
             continue
@@ -278,9 +283,11 @@ def ui_capture_crop(body: dict[str, Any] | None = None) -> dict[str, Any]:
     fraction = p.get("crop_fraction")
     if fraction is not None and not (0 <= fraction[0] < fraction[2] <= 1 and 0 <= fraction[1] < fraction[3] <= 1):
         return {"success": False, "error": "crop_fraction must satisfy 0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1"}
-    os.makedirs(os.path.dirname(p["output_path"]) or ".", exist_ok=True)
-    os.makedirs(os.path.dirname(p["full_path"]) or ".", exist_ok=True)
-    return cc5_ui.start_job("crop", _capture_crop_steps, p, max_seconds=300 + p["settle_ms"] / 1000)
+    started = cc5_ui.start_job("crop", _capture_crop_steps, p, max_seconds=300 + p["settle_ms"] / 1000)
+    if started.get("success"):                    # only a started job makes folders (the job runs a moment later)
+        for key in ("output_path", "full_path"):
+            os.makedirs(os.path.dirname(p[key]) or ".", exist_ok=True)
+    return started
 
 
 ROUTES: dict[str, tuple[str, Callable[..., dict[str, Any]]]] = {

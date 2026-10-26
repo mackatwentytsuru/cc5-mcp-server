@@ -22,7 +22,7 @@ Every route is a POST with a JSON body, and every reply is JSON.
 | `/workflow/conform` | `wf_conform_cloth` | `{item selector, "iterations": int 1..10 = 1, "values": {"<conform key>": number}?}` | `{"success":true,"name","before":{...},"after":{...}}` |
 | `/workflow/transform/get` | `wf_get_transform` | `{item selector}` | `{"success":true,"name","move":[x,y,z],"rotate":[x,y,z],"scale":[x,y,z]}` |
 | `/workflow/transform/set` | `wf_set_transform` | `{item selector, "move"?:[3], "rotate"?:[3], "scale"?:[3]}` | `{"success":true,"name","move","rotate","scale"}` (the values after the change) |
-| `/workflow/save` | `wf_save_project` | `{"file_path"?: string}` | `{"success":true,"path"}` |
+| `/workflow/save` | `wf_save_project` | `{"file_path"?: string, "path"?: string}` (no path = overwrite the open project; unknown keys are refused) | `{"success":true,"path","in_place","overwrote_existing"}` |
 | `/workflow/export_obj` | `wf_export_obj` | `{"file_path", "current_pose": bool=true, "with_materials": bool=true}` | `{"success":true,"path","bytes"}` |
 | `/workflow/floor_contact/get` | `wf_get_floor_contact` | `{}` | `{"success":true,"value":<raw>}` |
 | `/workflow/floor_contact/set` | `wf_set_floor_contact` | `{"value": <object as returned by get>}` | `{"success":true}` |

@@ -49,14 +49,18 @@ class WidgetFinderTest(UiTestCase):
         self.assertEqual(res["shown"], 1)
         self.assertGreater(res["count"], 1)
 
-    def test_a_password_field_never_gives_its_text(self) -> None:
+    def test_what_a_person_typed_is_never_read_nor_searched(self) -> None:
         root = fake_qt.Widget(name="login", visible=True)
         fake_qt.LineEdit(root, text="hunter2", echo=fake_qt.LineEdit.Password, name="qtPassword")
-        fake_qt.LineEdit(root, text="visible text", name="qtUser")
-        secret = cc5_uiview.ui_widgets({"object_name": "qtPassword"})["widgets"][0]
-        self.assertNotIn("text", secret)
-        self.assertTrue(secret["secret"])
-        self.assertEqual(cc5_uiview.ui_widgets({"object_name": "qtUser"})["widgets"][0]["text"], "visible text")
+        fake_qt.LineEdit(root, text="me@example.com", name="qtUser")
+        fake_qt.TextEdit(root, "a long note")
+        for name in ("qtPassword", "qtUser"):
+            state = cc5_uiview.ui_widgets({"object_name": name})["widgets"][0]
+            self.assertNotIn("text", state)
+            self.assertTrue(state["text_hidden"])
+        for needle in ("hunter2", "hunt", "h", "example", "long note"):
+            self.assertEqual(cc5_uiview.ui_widgets({"text_contains": needle})["count"], 0, needle)
+        self.assertEqual(cc5_uiview.ui_widgets({"class_name": "LineEdit"})["count"], 2)
 
 
 class WindowsRouteTest(UiTestCase):
@@ -200,10 +204,14 @@ class CaptureCropTest(UiTestCase):
         cc5_uiview._png_target(b, "output_path", "cc5_framed_crop", False)
         self.assertNotEqual(a["output_path"], b["output_path"])
 
-    def test_output_folders_are_created(self) -> None:
+    def test_output_folders_are_created_only_for_a_job_that_started(self) -> None:
         deep = os.path.join(self.dir.name, "a", "b", "crop.png").replace("\\", "/")
         self.run_crop(crop=[0, 0, 100, 100], output_path=deep)
         self.assertTrue(os.path.isdir(os.path.dirname(deep)))
+        cc5_ui.start_job("other", lambda p: {"success": True}, {})             # a job is running: refused
+        refused = os.path.join(self.dir.name, "never", "crop.png").replace("\\", "/")
+        self.assertFalse(cc5_uiview.ui_capture_crop({"output_path": refused, "full_path": self.full, "overwrite": True})["success"])
+        self.assertFalse(os.path.exists(os.path.dirname(refused)))
 
     def test_size_is_clamped(self) -> None:
         cc5_uiview.ui_capture_crop({"size": 99999, "full_path": self.full, "output_path": self.out})

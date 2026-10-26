@@ -100,6 +100,10 @@ describe("find_ui_widgets", () => {
     expect(formatWidgets({ success: false, error: "boom" })).toBe("Failed: boom");
     expect(formatWidgets({
       success: true,
+      widgets: [{ object_name: "qtUser", class: "QLineEdit", visible: true, enabled: true, text_hidden: true, path: "" }],
+    })).toContain("(typed text is never shown)");
+    expect(formatWidgets({
+      success: true,
       widgets: [{ object_name: "", class: "QCheckBox", visible: false, enabled: false, text: "Activate Editor", checked: true, current_text: "x", path: "" }],
     })).toContain("(no name) <QCheckBox> text='Activate Editor' current='x' checked=true hidden disabled  (in: top level)");
   });

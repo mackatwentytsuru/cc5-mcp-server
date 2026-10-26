@@ -16,6 +16,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.error
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
@@ -67,6 +68,24 @@ class UiClientTest(unittest.TestCase):
         stub = StubBridge(replies)
         self.addCleanup(stub.close)
         return stub
+
+    def test_only_a_local_bridge_is_accepted(self) -> None:
+        for url in ("http://10.0.0.5:5101", "http://example.com", "https://evil.test:5101"):
+            with self.assertRaises(ValueError):
+                ui_client._base(url)
+        for url in ("http://127.0.0.1:5101", "http://localhost:5199/", "http://[::1]:5101"):
+            self.assertTrue(ui_client._base(url).startswith("http://"))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(ui_client.main(["--base", "http://example.com", "layers"]), 1)
+        self.assertIn("must point to localhost", err.getvalue())
+
+    def test_an_unreachable_bridge_is_a_failure_result_not_a_traceback(self) -> None:
+        def down(*_args, **_kwargs):
+            raise urllib.error.URLError("connection refused")
+        res = ui_client.run_job("/ui/preset/apply", {}, "http://127.0.0.1:1", post_fn=down)
+        self.assertFalse(res["success"])
+        self.assertIn("unreachable", res["error"])
 
     def test_post_unwraps_the_result_and_returns_error_bodies(self) -> None:
         stub = self.bridge({"/ok": [(200, {"result": {"success": True, "n": 1}})],
