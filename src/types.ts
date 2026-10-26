@@ -786,6 +786,7 @@ export interface UiPresetListResult extends OperationResult {
   missing?: string[];
   truncated?: boolean;
   subfolders?: string[];
+  errors?: string[];
   note?: string;
 }
 
@@ -812,6 +813,8 @@ export interface UiApplyPresetResult extends OperationResult {
   avatar?: string;
   files?: UiApplyFileResult[];
   answered?: UiAnsweredWindow[];
+  /** Windows the answerer looked at and left alone, with the reason. */
+  blocked_windows?: Array<{ title: string; why: string }>;
   skipped?: string[];
   skingen?: { editor_active: boolean | null; layers: Array<string | null> };
   note?: string;
@@ -844,6 +847,7 @@ export interface SkinGenEditorResult extends OperationResult {
   editor_active?: boolean;
   waited_s?: number | null;
   answered?: UiAnsweredWindow[];
+  blocked_windows?: Array<{ title: string; why: string }>;
   blocked_by?: UiWindowInfo | null;
   windows?: UiWindowInfo[];
 }
@@ -945,6 +949,8 @@ export interface UiCaptureCropArgs {
   crop_fraction?: number[];
   output_path?: string;
   full_path?: string;
+  avatar_name?: string;
+  overwrite?: boolean;
   settle_ms?: number;
 }
 
@@ -956,6 +962,11 @@ export interface UiCaptureCropResult extends OperationResult {
   crop_box?: number[];
   crop_size?: number[];
   png_base64?: string;
+  /** Present when no crop box was given: the picture is a scaled-down preview of the whole render. */
+  preview_size?: number[];
+  /** full-render pixels per preview pixel (multiply preview coordinates by this to get render pixels). */
+  preview_scale?: number;
   warning?: string;
+  note?: string;
   path?: string;
 }

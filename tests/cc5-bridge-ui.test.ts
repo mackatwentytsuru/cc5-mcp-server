@@ -45,6 +45,11 @@ describe("lenient failure replies", () => {
     expect(reply).toEqual({ success: false, error: "file not found", path: "x" });
   });
 
+  it("a reply that says success: true in an error body is still a failure", async () => {
+    stubFetch([{ status: 400, body: { success: true, error: "weird" } }]);
+    expect((await bridge.uiApplyPreset({ file_path: "x" })).success).toBe(false);
+  });
+
   it("marks a reply that has only an error as a failure", async () => {
     stubFetch([busy]);
     const reply = await bridge.uiWindows();
@@ -126,6 +131,43 @@ describe("uiWaitJob", () => {
     });
     expect(outcome.finished).toBe(false);
     expect(outcome.status?.windows).toEqual(windows);
+  });
+
+  it("a poll that times out on our side counts as 'CC5 is busy', not as a failure", async () => {
+    const abort = Object.assign(new Error("aborted"), { name: "AbortError" });
+    const fetchFn = vi.fn()
+      .mockRejectedValueOnce(abort).mockRejectedValueOnce(abort).mockRejectedValueOnce(abort)
+      .mockRejectedValueOnce(abort).mockRejectedValueOnce(abort).mockRejectedValueOnce(abort).mockRejectedValueOnce(abort)
+      .mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({ result: { state: "done", result: { success: true } } }), text: () => Promise.resolve("") });
+    vi.stubGlobal("fetch", fetchFn);
+    const outcome = await bridge.uiWaitJob("j1", fastWait);
+    expect(outcome.finished).toBe(true);
+    expect(fetchFn).toHaveBeenCalledTimes(8);
+  });
+
+  it("job polls wait longer than the bridge's own limit", async () => {
+    vi.useFakeTimers();
+    try {
+      let aborted = false;
+      vi.stubGlobal("fetch", vi.fn().mockImplementation((_url: string, options: { signal: AbortSignal }) => new Promise((_resolve, reject) => {
+        options.signal.addEventListener("abort", () => { aborted = true; reject(Object.assign(new Error("aborted"), { name: "AbortError" })); });
+      })));
+      const pending = bridge.uiJob("j1").catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(35_000);
+      expect(aborted).toBe(false);                      // still waiting at 35 s: the bridge answers 504 at 30 s
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(aborted).toBe(true);
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("transient failures (503) are retried, then given up on", async () => {
+    stubFetch([{ status: 503, body: { error: "server busy, command queue full" } }]);
+    const outcome = await bridge.uiWaitJob("j1", fastWait);
+    expect(outcome.finished).toBe(false);
+    expect(outcome.status?.error).toContain("queue full");
   });
 
   it("reports an unknown job instead of waiting for ever", async () => {

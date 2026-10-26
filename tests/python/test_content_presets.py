@@ -223,7 +223,7 @@ class ApplyTest(UiTestCase):
         res = self.apply(file_path=path)
         self.assertFalse(res["success"])
         self.assertEqual(windows[0].findChildren(self.q.QPushButton)[0].clicks, 0)
-        self.assertEqual(res["files"][0]["blocked_by"]["needs_human"], "license")
+        self.assertEqual(res["files"][0]["blocked_by"]["needs_human"], "licen")
 
     def test_skingen_layer_question_defaults_to_replace(self) -> None:
         path = self.file("Nature.ccSkinGenPreset")
@@ -264,8 +264,82 @@ class ApplyTest(UiTestCase):
         with mock.patch.object(RLPy.RScene, "GetAvatars", return_value=[]):
             self.assertIn("avatar not found", cc5_content.ui_apply_preset({"file_path": path})["error"])
 
+    def test_only_listed_preset_types_can_be_applied(self) -> None:
+        for name in ("scene.ccProject", "char.ccAvatar", "char.iAvatar", "x.ini", "x.iso", "x.fbx", "x.iProject"):
+            self.assertIsNotNone(cc5_content.check_preset_path(self.file(name)), name)
+        for name in ("a.ccSkinGenPreset", "b.rlEyelashElement", "c.ccAvatarPreset", "d.iMtl", "e.rlHairStyle"):
+            self.assertIsNone(cc5_content.check_preset_path(self.file(name)), name)
+
+    def test_network_and_stream_paths_are_refused(self) -> None:
+        for path in ("//host/share/a.ccAvatarPreset", "C:/x/a.ccAvatarPreset:stream"):
+            self.assertIsNotNone(cc5_content.check_preset_path(path), path)
+
+    def test_both_file_arguments_at_once_are_refused(self) -> None:
+        path = self.file("a.ccAvatarPreset")
+        self.assertFalse(cc5_content.ui_apply_preset({"file_path": path, "file_paths": [path]})["success"])
+
+    def test_the_avatar_is_looked_up_again_for_every_file(self) -> None:
+        first, second = mock.Mock(), mock.Mock()
+        for av in (first, second):
+            av.GetName.return_value = "Beyon"
+        seen = []
+        RLPy.RScene.SelectObject.side_effect = seen.append
+        RLPy.RScene.GetAvatars.side_effect = None
+        RLPy.RScene.GetAvatars.return_value = [self.avatar]
+        a, b = self.file("a.ccAvatarPreset"), self.file("b.ccAvatarPreset")
+        lookups = iter([first, second])
+        original = cc5_content._avatar
+
+        def fresh_avatar(name=""):
+            return next(lookups) if seen is not None and len(seen) < 2 and name == "Beyon" else original(name)
+        with mock.patch.object(cc5_content, "_avatar", side_effect=fresh_avatar):
+            res = self.apply(file_paths=[a, b])
+        RLPy.RScene.SelectObject.side_effect = None
+        self.assertTrue(res["success"], res)
+        self.assertEqual(len(seen), 2)
+        self.assertIsNot(seen[0], seen[1])
+
+    def test_a_licence_window_during_the_load_is_reported(self) -> None:
+        path = self.file("Nature.ccSkinGenPreset")
+        self.on_load = lambda p: self.dialog("License", "Your license has expired", ["OK"])
+        res = self.apply(file_path=path)
+        self.assertFalse(res["success"])
+        self.assertTrue(res["blocked_windows"])
+        self.assertEqual(res["answered"], [])
+
+    def test_the_time_limits_cover_the_whole_batch(self) -> None:
+        self.assertGreaterEqual(cc5_content._apply_budget(10, 900), 10 * 900)
+        paths = [self.file(f"{n}.ccAvatarPreset") for n in range(3)]
+        started = cc5_content.ui_apply_preset({"file_paths": paths, "timeout_s": 600})
+        self.assertTrue(started["success"])
+        self.assertGreaterEqual(cc5_ui.running_job()["max_seconds"], 3 * 600)
+
     def test_routes(self) -> None:
         self.assertEqual(set(cc5_content.ROUTES), {"/ui/preset/list", "/ui/preset/apply"})
+
+
+class ListReviewFixesTest(unittest.TestCase):
+    def setUp(self) -> None:
+        def files(folder):
+            if folder == "$/Broken":
+                raise RuntimeError("RLPy refused")
+            return TREE.get(folder, {"files": []})["files"]
+        for patcher in (mock.patch.object(RLPy.RApplication, "GetContentFilesInFolder", side_effect=files),
+                        mock.patch.object(RLPy.RApplication, "GetContentFoldersInFolder", side_effect=_folders),
+                        mock.patch.object(os.path, "isfile", return_value=True)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_names_that_exist_are_not_reported_missing_when_a_query_narrows_the_list(self) -> None:
+        res = cc5_content.ui_list_presets({"category": "makeup_lip", "query": "rouge", "names": ["Nature", "Rouge"]})
+        self.assertEqual([e["name"] for e in res["presets"]], ["Rouge"])
+        self.assertEqual(res["missing"], [])
+
+    def test_a_listing_error_is_not_mistaken_for_an_empty_folder(self) -> None:
+        res = cc5_content.ui_list_presets({"folder": "$/Broken"})
+        self.assertTrue(res["success"])
+        self.assertEqual(res["presets"], [])
+        self.assertIn("RLPy refused", res["errors"][0])
 
 
 if __name__ == "__main__":

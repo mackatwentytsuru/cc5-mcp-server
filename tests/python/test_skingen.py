@@ -10,6 +10,7 @@ The SkinGen panel is a small fake built from the widget names found on a real CC
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from skingen_panel import Panel
 from ui_support import UiTestCase, cc5_ui, fake_qt  # sets up sys.path and the RLPy stand-in
@@ -298,6 +299,78 @@ class RoutesTest(unittest.TestCase):
         self.assertEqual(set(cc5_skingen.ROUTES), {"/ui/skingen/state", "/ui/skingen/editor", "/ui/skingen/layer"})
         for _path, (action, fn) in cc5_skingen.ROUTES.items():
             self.assertTrue(action.startswith("ui_skingen_") and callable(fn))
+
+
+class ReviewFixesTest(UiTestCase):
+    def test_index_and_name_must_agree(self) -> None:
+        layers = [{"index": 0, "name": "Lips"}, {"index": 1, "name": "Blush"}]
+        self.assertEqual(cc5_skingen.resolve_layer(layers, index=1, name="blush"), (1, None))
+        self.assertIn("is named 'Blush'", cc5_skingen.resolve_layer(layers, index=1, name="Lips")[1])
+
+    def test_a_selection_that_does_not_take_is_a_failure(self) -> None:
+        panel = Panel()
+        panel.table.selectRow = lambda row: None              # the click did nothing
+        res = self.finish(cc5_skingen.ui_skingen_layer({"action": "opacity", "index": 1, "opacity": 10}))
+        self.assertFalse(res["success"])
+        self.assertIn("could not select", res["error"])
+        self.assertEqual(panel.spin.value(), 100)
+
+    def test_a_default_current_row_is_not_taken_for_a_selection(self) -> None:
+        panel = Panel()
+        panel.table.selected = []
+        panel.table.currentRow = lambda: 0                     # Qt reports row 0 when nothing is selected
+        self.assertIsNone(cc5_skingen.read_state()["selected"])
+
+    def test_opacity_that_is_not_a_finite_whole_number_is_refused(self) -> None:
+        Panel()
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            self.assertFalse(cc5_skingen.ui_skingen_layer({"action": "opacity", "index": 0, "opacity": bad})["success"])
+
+    def test_a_delete_that_removes_nothing_is_a_failure(self) -> None:
+        panel = Panel()
+        panel.delete_button._menu._actions[0].on_trigger = None   # the menu entry does nothing
+        res = self.finish(cc5_skingen.ui_skingen_layer({"action": "delete", "index": 0, "confirm": True}))
+        self.assertFalse(res["success"])
+        self.assertIn("did not drop", res["error"])
+
+    def test_delete_does_not_answer_anything(self) -> None:
+        panel = Panel()
+        cc5_ui.WindowAnswerer(cc5_ui.normalize_choices()).start()    # a leftover answerer from another job
+        self.finish(cc5_skingen.ui_skingen_layer({"action": "delete", "index": 0, "confirm": True}))
+        self.assertEqual(fake_qt.Timer.active_timers, [])
+        self.assertEqual(panel.deleted, ["selected:0"])
+
+    def test_the_state_is_read_in_one_pass_over_the_widgets(self) -> None:
+        Panel()
+        with mock.patch.object(self.q.QApplication, "allWidgets", wraps=self.q.QApplication.allWidgets) as spy:
+            cc5_skingen.read_state()
+        self.assertEqual(spy.call_count, 1)
+
+
+class EditorFailureTest(UiTestCase):
+    def test_a_switch_that_never_changes_reports_the_open_windows(self) -> None:
+        panel = Panel()
+        panel.switch.on_click = lambda: None
+        self.dialog("Mystery", "Something happened", ["OK"])
+        res = self.finish(cc5_skingen.ui_skingen_editor({"active": False}))
+        self.assertFalse(res["success"])
+        self.assertIn("did not change", res["error"])
+        self.assertEqual(res["windows"][0]["title"], "Mystery")
+        self.assertNotIn("_full", res["windows"][0])
+
+    def test_a_licence_window_is_reported_as_blocked(self) -> None:
+        panel = Panel()
+        panel.switch.on_click = lambda: self.dialog("License", "Your license has expired", ["OK"])
+        res = self.finish(cc5_skingen.ui_skingen_editor({"active": False, "timeout_s": 10}))
+        self.assertFalse(res["success"])
+        self.assertTrue(res["blocked_windows"])
+        self.assertEqual(res["answered"], [])
+
+    def test_the_job_may_take_as_long_as_its_budget(self) -> None:
+        Panel()
+        started = cc5_skingen.ui_skingen_editor({"active": False, "timeout_s": 300})
+        self.assertTrue(started["success"])
+        self.assertGreaterEqual(cc5_ui.running_job()["max_seconds"], cc5_skingen.EDITOR_FLIP_LIMIT_S + 2 * 300)
 
 
 if __name__ == "__main__":

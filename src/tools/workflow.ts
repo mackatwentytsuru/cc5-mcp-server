@@ -108,6 +108,12 @@ function toSelector(value: SelectorArgs): WorkflowItemSelector {
   return selector;
 }
 
+/** Same file name, ignoring the slash direction and case (Windows paths). */
+function samePath(a: string, b: string): boolean {
+  const norm = (p: string) => p.replace(/\\/g, "/").toLowerCase();
+  return norm(a) === norm(b);
+}
+
 // ── Result formatting ─────────────────────────────────────────────────────────
 
 const NO_GUI = "Works without the GUI and is meant for text-only models.";
@@ -481,7 +487,7 @@ export function registerWorkflowTools(server: McpServer, bridge: CC5Bridge): voi
       path: z.string().min(1).max(4096).optional().describe("Same as file_path"),
     },
     async ({ file_path, path }) => {
-      if (file_path !== undefined && path !== undefined && file_path !== path) {
+      if (file_path !== undefined && path !== undefined && !samePath(file_path, path)) {
         return schemaFailure("file_path and path are both given and differ; give one. Nothing was saved.");
       }
       const target = file_path ?? path;

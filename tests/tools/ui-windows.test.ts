@@ -3,9 +3,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { registerUiWindowTools, formatWidgets } from "../../src/tools/ui-windows.js";
-import { registerFramedCaptureTools, formatCropResult } from "../../src/tools/framed-capture.js";
-import { describeWindow, pathProblem, windowImages, stillRunningText, runUiJob } from "../../src/tools/ui-common.js";
+import { registerUiWindowTools, formatWidgets, formatJobStatus } from "../../src/tools/ui-windows.js";
+import { registerFramedCaptureTools, formatCropResult, fractionProblem } from "../../src/tools/framed-capture.js";
+import { describeWindow, pathProblem, windowImages, stillRunningText, runUiJob, refusedContent } from "../../src/tools/ui-common.js";
 import { bridgeCallRich } from "../../src/util.js";
 import { createMockServer } from "../helpers/mock-server.js";
 
@@ -15,6 +15,7 @@ function makeBridge() {
     uiWidgets: vi.fn(),
     uiCaptureCrop: vi.fn(),
     uiWaitJob: vi.fn(),
+    uiJob: vi.fn(),
   };
 }
 
@@ -120,8 +121,46 @@ describe("capture_framed_crop", () => {
     expect(images(result)).toHaveLength(1);
   });
 
-  it("without a box it tells how to measure one", () => {
-    expect(formatCropResult({ success: true, view: "face", full_path: "x.png", render_size: [3600, 3600] })).toContain("measure the part you want");
+  it("without a box it shows a preview and how to convert its coordinates", () => {
+    const text = formatCropResult({
+      success: true, view: "face", full_path: "x.png", render_size: [3600, 3600], preview_size: [1400, 1400], preview_scale: 2.5714,
+    });
+    expect(text).toContain("scaled-down preview (1400x1400)");
+    expect(text).toContain("x 2.5714 = pixels of the full render");
+    expect(text).toContain("Measure the part you want");
+  });
+
+  it("warns when the box was changed to fit, or the crop cannot be shown", () => {
+    const text = formatCropResult(
+      { success: true, view: "face", full_path: "x.png", render_size: [3600, 3600], crop_path: "c.png", crop_box: [0, 0, 3600, 100], crop_size: [3600, 100] },
+      [0, 0, 4000, 100],
+    );
+    expect(text).toContain("NOT the same size");
+    expect(text).toContain("too large to show here");
+  });
+
+  it("checks crop_fraction before the bridge", async () => {
+    expect(fractionProblem(undefined)).toBeUndefined();
+    expect(fractionProblem([0.1, 0.1, 0.9, 0.9])).toBeUndefined();
+    for (const bad of [[0.5, 0, 0.2, 1], [0, 0, 2, 1], [-0.1, 0, 1, 1], [0, 0.5, 1, 0.5]]) {
+      expect(fractionProblem(bad)).toContain("crop_fraction must satisfy");
+    }
+    expect(texts(await call("capture_framed_crop", { crop_fraction: [0.9, 0, 0.1, 1] }))).toContain("crop_fraction must satisfy");
+    expect(bridge.uiCaptureCrop).not.toHaveBeenCalled();
+  });
+
+  it("refuses the same file for the crop and the full render, and passes the new options", async () => {
+    expect(texts(await call("capture_framed_crop", { output_path: "C:/a.png", full_path: "C:/a.png" }))).toContain("different files");
+    bridge.uiCaptureCrop.mockResolvedValue({ success: true, job_id: "crop-9" });
+    bridge.uiWaitJob.mockResolvedValue({ finished: true, result: { success: true, view: "face", full_path: "f", render_size: [1, 1] } });
+    await call("capture_framed_crop", { overwrite: true, avatar_name: "Beyon", size: 3000 });
+    expect(bridge.uiCaptureCrop).toHaveBeenCalledWith({ overwrite: true, avatar_name: "Beyon", size: 3000 });
+  });
+
+  it("size is capped where Qt can still read the image back", () => {
+    const shape = server.tool.mock.calls.find((c: unknown[]) => c[0] === "capture_framed_crop")[2];
+    expect(shape.size.safeParse(5601).success).toBe(false);
+    expect(shape.size.safeParse(5600).success).toBe(true);
   });
 
   it("refuses both boxes, bad paths and non-png paths before the bridge", async () => {
@@ -172,14 +211,42 @@ describe("ui-common helpers", () => {
     expect(text.length).toBeLessThan(400);
   });
 
-  it("windowImages keeps at most three PNGs", () => {
+  it("windowImages keeps at most three PNGs and says how many it left out", () => {
     const wins = Array.from({ length: 5 }, (_, i) => ({ title: String(i), text: "", buttons: [], png_base64: "X" }));
-    expect(windowImages(wins)).toHaveLength(3);
+    const content = windowImages(wins);
+    expect(content.filter((c) => c.type === "image")).toHaveLength(3);
+    expect(content[3]).toEqual({ type: "text", text: expect.stringContaining("2 more window picture(s)") });
     expect(windowImages(undefined)).toEqual([]);
   });
 
-  it("stillRunningText lists the open windows", () => {
-    expect(stillRunningText("j1", 60, [{ title: "Baking", text: "wait", buttons: [] }])).toContain("- 'Baking'");
+  it("describeWindow survives a window with missing fields", () => {
+    expect(describeWindow({ title: "T" } as never)).toContain("buttons: (none)");
+  });
+
+  it("stillRunningText lists the open windows and a lost contact", () => {
+    const text = stillRunningText("j1", 60, {
+      success: false, error: "lost contact with CC5: socket hang up",
+      windows: [{ title: "Baking", text: "wait", buttons: [] }],
+    });
+    expect(text).toContain("- 'Baking'");
+    expect(text).toContain("Last contact failed: lost contact with CC5: socket hang up");
+    expect(text).toContain("get_ui_job");
+  });
+
+  it("refusedContent separates a busy start from a refusal", () => {
+    expect(refusedContent({ success: false, error: "Timeout waiting for CC5 to process command" })[0])
+      .toEqual({ type: "text", text: expect.stringContaining("MAY STILL RUN LATER") });
+    expect(refusedContent({ success: false, error: "file not found" })[0]).toEqual({ type: "text", text: "Failed: file not found" });
+    expect(refusedContent({ success: false })[0]).toEqual({ type: "text", text: expect.stringContaining("refused to start") });
+  });
+
+  it("runUiJob turns a lost wait into 'still running' with the job id", async () => {
+    bridge.uiWaitJob.mockRejectedValue(new Error("socket hang up"));
+    const run = await runUiJob(bridge as never, async () => ({ success: true, job_id: "j7" }), 10);
+    expect(run).toEqual({
+      jobId: "j7",
+      outcome: { finished: false, status: { success: false, error: "lost contact with CC5: socket hang up" } },
+    });
   });
 
   it("runUiJob stops at a refusal and passes the timeout to the wait", async () => {
@@ -189,6 +256,48 @@ describe("ui-common helpers", () => {
     const run = await runUiJob(bridge as never, async () => ({ success: true, job_id: "j9" }), 10, { intervalMs: 5 });
     expect(run).toMatchObject({ jobId: "j9" });
     expect(bridge.uiWaitJob).toHaveBeenCalledWith("j9", { timeoutMs: 10_000, intervalMs: 5 });
+  });
+});
+
+describe("get_ui_job", () => {
+  it("only reads the state when no wait is asked", async () => {
+    bridge.uiJob.mockResolvedValue({ success: true, job_id: "preset-3", kind: "preset", state: "running", elapsed_s: 4, windows: [{ title: "Baking", text: "Please wait", buttons: [], progress: true }] });
+    const text = texts(await call("get_ui_job", { job_id: "preset-3" }));
+    expect(bridge.uiWaitJob).not.toHaveBeenCalled();
+    expect(text).toContain("Job preset-3 (preset): running, 4s");
+    expect(text).toContain("progress window");
+  });
+
+  it("waits when asked and shows the result without pictures", async () => {
+    bridge.uiWaitJob.mockResolvedValue({
+      finished: true,
+      status: { success: true, job_id: "crop-1", kind: "crop", state: "done", elapsed_s: 12.5, result: { success: true, png_base64: "AAAA", crop_path: "c.png" } },
+    });
+    const text = texts(await call("get_ui_job", { job_id: "crop-1", wait_seconds: 60 }));
+    expect(bridge.uiWaitJob).toHaveBeenCalledWith("crop-1", { timeoutMs: 60_000 });
+    expect(text).toContain("Job crop-1 (crop): done, 12.5s");
+    expect(text).toContain("(picture omitted)");
+    expect(text).not.toContain("AAAA");
+  });
+
+  it("shows the windows when the job is still running after the wait", async () => {
+    bridge.uiWaitJob.mockResolvedValue({ finished: false, status: { success: true, job_id: "j", kind: "preset", state: "running" } });
+    bridge.uiWindows.mockResolvedValue({ success: true, windows: [{ title: "Mystery", text: "?", buttons: ["OK"], png_base64: "UE5H" }] });
+    const result = await call("get_ui_job", { job_id: "j", wait_seconds: 5 });
+    expect(images(result)).toHaveLength(1);
+  });
+
+  it("reports an unknown job and a silent CC5", async () => {
+    bridge.uiJob.mockResolvedValue({ success: false, error: "unknown job 'zzz'" });
+    expect(texts(await call("get_ui_job", { job_id: "zzz" }))).toBe("Failed: unknown job 'zzz'");
+    bridge.uiWaitJob.mockResolvedValue({ finished: false });
+    expect(texts(await call("get_ui_job", { job_id: "j", wait_seconds: 5 }))).toContain("no answer from CC5 within 5s");
+  });
+
+  it("cuts a very long result", () => {
+    const text = formatJobStatus({ success: true, job_id: "j", kind: "k", state: "done", result: { success: true, blob: "x".repeat(9000) } });
+    expect(text).toContain("(cut;");
+    expect(text.length).toBeLessThan(4000);
   });
 });
 

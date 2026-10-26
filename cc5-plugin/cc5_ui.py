@@ -1,58 +1,99 @@
 """
-Qt-side helpers that let the bridge work CC5's own windows without a mouse.
+Qt-side core for working CC5's own windows without a mouse (jobs, windows, the few answers we allow).
 
-Built from what worked on 2026-10-26 (eyelash presets, SkinGen lip makeup, see
+Built from what worked on 2026-10-26 (eyelash presets, SkinGen lip makeup; see
 docs/ui-automation-test-steps_ja.md):
 
   * answer the few question windows a script causes, and ONLY those (WINDOW_RULES);
-    licence / purchase / login / update / terms windows are never pressed;
-  * long UI work runs as a "job": the bridge call returns at once and the work goes on
-    in CC5's Qt event loop, one small step at a time, so the bridge keeps answering
-    (list windows, read state) while a question window is open or CC5 is baking;
-  * read the visible windows (title, text, buttons) and grab them as PNG with Qt
-    (QWidget.grab), so nobody needs a desktop screenshot over ssh;
-  * a read-only widget finder, to discover object names for new automation.
+    licence / purchase / login / update / terms windows are never pressed, and while one is open
+    nothing is pressed at all;
+  * long UI work runs as a "job": the bridge call returns at once and the work goes on in CC5's
+    Qt event loop, one small step at a time, so the bridge keeps answering (list windows, read
+    state) while a question window is open or CC5 is baking; other bridge commands are refused
+    while a job runs (install_job_guard) because RLPy is not re-entrant;
+  * read the visible windows (title, text, buttons, check boxes) as plain data.
 
-This module is loaded by cc5_api (see cc5_api._load_ui_modules). It must not import
-cc5_api at module level. PySide2 is imported lazily (_qt) so the logic runs in tests.
+Companions: cc5_uiview.py (widget finder, window pictures, framed capture), cc5_skingen.py,
+cc5_content.py. All are loaded by cc5_api (_load_ui_modules); none may import cc5_api at module
+level. PySide2 is imported lazily (_qt) so the logic runs in tests.
 """
 
 from __future__ import annotations
 
-import base64
 import dataclasses
 import html
 import inspect
 import os
 import re
 import sys
-import tempfile
 import time
 import types
+import unicodedata
 from typing import Any, Callable, Iterator
 
-import RLPy
+import RLPy  # noqa: F401  (kept so the module fails the same way as cc5_api outside CC5)
 
 # --- constants ---------------------------------------------------------------------------
 
 # Window text that means "CC5 is busy, this goes away by itself" (taken from the lip run).
 BUSY_WORDS = ("baking", "please wait", "mipmap", "processing", "loading", "dynamic", "generating")
 
-# A window mentioning any of these is never answered, whatever else it says.
-FORBIDDEN_RE = re.compile(
-    r"\b(licen[cs]e|purchas|buy|log ?in|sign ?in|password|updat|upgrad|agree|terms|eula|"
-    r"activat|subscri|payment|credit card|trial|serial)",
-    re.IGNORECASE,
-)
-
-MAX_TEXT_CHARS = 400
+MAX_TEXT_CHARS = 400                # window text returned to callers
+MAX_FULL_CHARS = 6000               # window text used for the safety check
+LONG_TEXT_CHARS = 600               # a text box this long is a licence / terms document
 JOB_KEEP = 30                       # finished jobs kept for /ui/job
-JOB_STALE_SECONDS = 900             # a "running" job older than this no longer blocks new ones
-ANSWERER_MAX_SECONDS = 600          # the answering timer stops itself after this
-MAX_PRESSES_PER_WINDOW = 3          # same window pressed more often than this means it is stuck
-PNG_MAX_BYTES = 1_500_000
+JOB_STALE_SECONDS = 900             # a "running" job older than this (unless it says more) no longer blocks
+ANSWERER_MAX_SECONDS = 600          # the answering timer stops itself after this (jobs pass their own)
+MAX_PRESSES_PER_WINDOW = 3          # the same window pressed more often than this is stuck
+MAX_TOTAL_PRESSES = 60              # presses per answerer run
+PRESS_PROPERTY = "cc5_ui_presses"   # Qt dynamic property that counts presses on a window
 
 _TAG_RE = re.compile(r"</?[A-Za-z][^>]*>")
+
+
+# --- the safety word list ----------------------------------------------------------------
+
+def norm(text: Any) -> str:
+    """Text for comparing: NFKD, no combining marks / invisible format characters, case-folded.
+    (So 'LİCENSE', 'Lic­ense' and full-width letters all read as plain 'license'.)"""
+    decomposed = unicodedata.normalize("NFKD", "" if text is None else str(text))
+    kept = "".join(ch for ch in decomposed if unicodedata.category(ch) not in ("Mn", "Cf"))
+    return kept.casefold()
+
+
+# Stems matched at the start of a word (so 'industrial' does not match 'trial').
+_WORD_STEMS = (
+    "licen", "purchas", "repurchas", "buy", "log in", "log-in", "login", "logging in", "sign in", "sign-in",
+    "signin", "password", "passcode", "updat", "upgrad", "agree", "terms", "eula", "activat", "deactivat",
+    "reactivat", "subscri", "unsubscri", "payment", "checkout", "credit card", "trial", "serial", "register",
+    "renew", "redeem", "coupon", "unlock", "account",
+)
+# Strong stems also searched with spaces and punctuation removed ('Lic ense', 'Lic<b>ense</b>').
+_COMPACT_STEMS = ("licen", "purchas", "password", "login", "subscri", "payment", "checkout", "eula")
+# Japanese: no word boundaries, matched anywhere (after norm(), which drops the dakuten marks).
+_JAPANESE_STEMS = ("ライセンス", "購入", "購買", "ログイン", "サインイン", "更新", "アップデート", "規約", "同意",
+                   "決済", "支払", "認証", "有効化", "アクティベ", "試用", "体験版", "パスワード", "シリアル",
+                   "登録", "会員", "課金", "契約")
+
+_WORD_RE = re.compile(r"(?<![a-z0-9])(?:" + "|".join(re.escape(norm(s)) for s in _WORD_STEMS) + ")")
+_COMPACT_NEEDLES = tuple(norm(s) for s in _COMPACT_STEMS)
+_JAPANESE_NEEDLES = tuple(norm(s) for s in _JAPANESE_STEMS)
+
+
+def forbidden_reason(*parts: Any) -> str | None:
+    """The word that makes a window off limits (licence, purchase, login, ...), or None."""
+    text = norm(" ".join(str(p) for p in parts if p))
+    match = _WORD_RE.search(text)
+    if match:
+        return match.group(0).strip()
+    compact = re.sub(r"[\W_]+", "", text)
+    for needle in _COMPACT_NEEDLES:
+        if needle in compact:
+            return needle
+    for needle in _JAPANESE_NEEDLES:
+        if needle in text:
+            return needle
+    return None
 
 
 # --- tiny helpers (patched in tests) -----------------------------------------------------
@@ -69,6 +110,8 @@ def _qt() -> Any:
         QCheckBox=QtWidgets.QCheckBox, QRadioButton=QtWidgets.QRadioButton,
         QProgressBar=QtWidgets.QProgressBar, QSpinBox=QtWidgets.QSpinBox,
         QComboBox=QtWidgets.QComboBox, QTableWidget=QtWidgets.QTableWidget,
+        QLineEdit=QtWidgets.QLineEdit, QTextEdit=QtWidgets.QTextEdit,
+        QPlainTextEdit=QtWidgets.QPlainTextEdit, QGroupBox=QtWidgets.QGroupBox,
         QTimer=QtCore.QTimer, QBuffer=QtCore.QBuffer, QByteArray=QtCore.QByteArray,
         QIODevice=QtCore.QIODevice, Qt=QtCore.Qt, QRect=QtCore.QRect, QImage=QtGui.QImage,
     )
@@ -114,8 +157,21 @@ def label_text(widget: Any) -> str:
 def _clamp_int(value: Any, lo: int, hi: int, default: int) -> int:
     try:
         return max(lo, min(hi, int(value)))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
+
+
+def path_problem(path: Any, allowed_exts: Any) -> str | None:
+    """Why a file path is refused (null byte, '..', network or stream path, wrong extension), or None."""
+    text = str(path or "").replace("\\", "/").strip()
+    if not text:
+        return "empty path"
+    if text.startswith("//"):
+        return "network (UNC) paths are not allowed"
+    rest = text[2:] if re.match(r"^[A-Za-z]:/", text) else text
+    if ":" in rest:
+        return "a ':' inside the path is not allowed (drive letter only)"
+    return _api()._validate_path(text, set(allowed_exts))
 
 
 def _holder() -> Any:
@@ -136,22 +192,27 @@ def _state(name: str, factory: Callable[[], Any]) -> Any:
 
 # --- windows: read and classify ----------------------------------------------------------
 
-def forbidden_reason(*parts: str) -> str | None:
-    """The word that makes a window off limits (licence, purchase, login, ...), or None."""
-    match = FORBIDDEN_RE.search(" ".join(parts))
-    return match.group(0).lower() if match else None
+def _texts(w: Any, cls: Any, getter: str) -> list[str]:
+    """Visible, non-empty, unique texts of the children of one class."""
+    out: list[str] = []
+    for child in _safe(lambda: w.findChildren(cls), []):
+        if not _safe(child.isVisible, True):
+            continue
+        text = clean_text(_safe(getattr(child, getter), ""))
+        if text and text not in out:
+            out.append(text)
+    return out
 
 
 def describe_window(w: Any, q: Any = None) -> dict[str, Any]:
-    """Title, text, buttons and check boxes of one top-level window, as plain data."""
+    """Title, text, buttons and check boxes of one top-level window, as plain data.
+
+    Keys starting with '_' are private (the full text used for the safety check): use
+    public_info() before returning a description to a caller.
+    """
     q = q or _qt()
     title = clean_text(_safe(w.windowTitle, ""))
-    labels: list[str] = []
-    for lab in _safe(lambda: w.findChildren(q.QLabel), []):
-        text = clean_text(_safe(lab.text, ""))
-        if text and _safe(lab.isVisible, True) and text not in labels:
-            labels.append(text)
-    text = " ".join(labels)
+    labels = _texts(w, q.QLabel, "text")
     buttons: list[str] = []
     boxes: list[dict[str, Any]] = []
     for b in _safe(lambda: w.findChildren(q.QAbstractButton), []):
@@ -162,11 +223,25 @@ def describe_window(w: Any, q: Any = None) -> dict[str, Any]:
             boxes.append({"text": label, "checked": bool(_safe(b.isChecked, False))})
         elif label:
             buttons.append(label)
-    lowered = f"{title} {text}".lower()
-    progress = bool(_safe(lambda: w.findChildren(q.QProgressBar), [])) or any(
-        word in lowered for word in BUSY_WORDS)
+    other = _group_titles(w, q)
+    long_text, secret = False, False
+    for cls in (q.QTextEdit, q.QPlainTextEdit):          # QTextBrowser is a QTextEdit
+        for edit in _safe(lambda cls=cls: w.findChildren(cls), []):
+            body = clean_text(_safe(edit.toPlainText, ""))
+            other.append(body)
+            long_text = long_text or len(body) > LONG_TEXT_CHARS
+    for line in _safe(lambda: w.findChildren(q.QLineEdit), []):
+        secret = secret or _safe(line.echoMode, q.QLineEdit.Normal) != q.QLineEdit.Normal
+        other.append(clean_text(_safe(line.placeholderText, "")))
+    text = " ".join(labels)
+    full = " ".join([title, text, *buttons, *(b["text"] for b in boxes), *other])[:MAX_FULL_CHARS]
+    needs_human = (forbidden_reason(full)
+                   or ("password field" if secret else None)
+                   or ("long text (a licence or terms?)" if long_text else None))
+    lowered = norm(f"{title} {text}")
+    progress = not needs_human and (
+        bool(_safe(lambda: w.findChildren(q.QProgressBar), [])) or any(word in lowered for word in BUSY_WORDS))
     rect = _safe(w.geometry)
-    geometry = [rect.x(), rect.y(), rect.width(), rect.height()] if rect is not None else None
     return {
         "title": title,
         "class": _safe(lambda: w.metaObject().className(), type(w).__name__),
@@ -175,13 +250,29 @@ def describe_window(w: Any, q: Any = None) -> dict[str, Any]:
         "checkboxes": boxes,
         "modal": bool(_safe(w.isModal, False)),
         "progress": progress,
-        "geometry": geometry,
-        "needs_human": forbidden_reason(title, text),
+        "geometry": [rect.x(), rect.y(), rect.width(), rect.height()] if rect is not None else None,
+        "needs_human": needs_human,
+        "dialog": True,
+        "_full": full,
     }
 
 
+def _group_titles(w: Any, q: Any) -> list[str]:
+    return [t for t in (clean_text(_safe(g.title, "")) for g in _safe(lambda: w.findChildren(q.QGroupBox), [])) if t]
+
+
+def public_info(info: dict[str, Any]) -> dict[str, Any]:
+    """A window description without the private keys, safe to return to a caller."""
+    return {k: v for k, v in info.items() if not k.startswith("_")}
+
+
+def window_key(info: dict[str, Any]) -> tuple[str, str]:
+    return (info["title"], info["class"])
+
+
 def scan_windows(include_other: bool = False) -> list[tuple[dict[str, Any], Any]]:
-    """Visible dialog-like top-level windows as (description, widget). Never the main window."""
+    """Visible top-level windows with something in them, as (description, widget); never the main
+    window or a menu. Dialogs (QDialog or modal) always; other windows only when include_other."""
     q = _qt()
     app = q.QApplication.instance()
     if app is None:
@@ -194,39 +285,50 @@ def scan_windows(include_other: bool = False) -> list[tuple[dict[str, Any], Any]
         if not is_dialog and not include_other:
             continue
         info = describe_window(w, q)
-        if not is_dialog and not (info["title"] or info["buttons"]):
-            continue                              # tool tips, drag handles, ...
+        info["dialog"] = is_dialog
+        if not (info["text"] or info["buttons"] or info["checkboxes"] or info["progress"]):
+            continue                              # empty frames, tool tips, drag handles, ...
         found.append((info, w))
     return found
+
+
+def baseline_keys() -> set[tuple[str, str]]:
+    """Windows already open now (and harmless): a job does not wait for those."""
+    return {window_key(info) for info, _w in scan_windows() if not info["needs_human"]}
 
 
 # --- windows: the answers we allow -------------------------------------------------------
 
 @dataclasses.dataclass(frozen=True)
 class WindowRule:
-    """A question window we may answer. key names the caller's choice; answers are the
-    button labels it may select (lower case)."""
+    """A question window we may answer. A window matches when its title is one of `titles`
+    (exact, normalised) and/or its text has `text_has`, and its buttons are within `allowed`."""
 
-    key: str
-    title_prefix: str
+    key: str                                    # name of the caller's choice
+    titles: tuple[str, ...]
     text_has: str
-    answers: tuple[str, ...]
+    allowed: frozenset[str] | None              # every button must be one of these (None: any)
+    answers: tuple[str, ...]                    # buttons the caller may select
     default: str
 
 
-# The ONLY windows that are ever answered automatically. Text rules come first, so a
-# question window wins over a generic "Apply" title (same order as the lip run).
+# The ONLY windows that are ever answered automatically.
 WINDOW_RULES: tuple[WindowRule, ...] = (
-    WindowRule("layer_choice", "", "add a new layer or replace", ("replace", "add"), "replace"),
-    WindowRule("skingen_exit", "", "exit skingen editing mode", ("yes", "no"), "yes"),
-    WindowRule("apply_preset", "apply", "", ("apply",), "apply"),   # Apply Character Preset / Apply Eyelash Elements
+    WindowRule("layer_choice", (), "add a new layer or replace", frozenset({"add", "replace", "cancel"}),
+               ("replace", "add"), "replace"),
+    WindowRule("skingen_exit", (), "exit skingen editing mode", frozenset({"yes", "no", "cancel"}),
+               ("yes", "no"), "yes"),
+    WindowRule("apply_preset", ("apply character preset", "apply eyelash elements"), "", None,
+               ("apply",), "apply"),
 )
 RESTORE_LASH_FRAGMENT = "neutral lash"          # "Restore neutral lash strip" check box
 DEFAULT_CHOICES: dict[str, Any] = {"layer_choice": "replace", "skingen_exit": "yes", "restore_neutral_lash": True}
 
 
-def normalize_choices(raw: dict[str, Any] | None = None) -> dict[str, Any]:
+def normalize_choices(raw: Any = None) -> dict[str, Any]:
     """Validate the caller's answers. Unknown keys and values are refused, not ignored."""
+    if raw is not None and not isinstance(raw, dict):
+        raise ValueError("answers must be an object like {\"layer_choice\": \"replace\"}")
     out = dict(DEFAULT_CHOICES)
     by_key = {rule.key: rule for rule in WINDOW_RULES}
     for key, value in (raw or {}).items():
@@ -245,18 +347,22 @@ def normalize_choices(raw: dict[str, Any] | None = None) -> dict[str, Any]:
 
 
 def decide(info: dict[str, Any], choices: dict[str, Any]) -> dict[str, Any] | None:
-    """What to do with one window: {"rule", "press", "ticks"} or {"rule", "blocked"} or None."""
-    title = info["title"].lower()
-    text = info["text"].lower()
-    buttons = {label.lower() for label in info["buttons"]}
+    """What to do with one window: {"rule", "press", "ticks"}, or {"rule", "blocked"}, or None
+    (not one of ours)."""
+    title = " ".join(norm(info["title"]).split())
+    haystack = norm(info.get("_full") or info["text"])
+    buttons = {norm(label) for label in info["buttons"]}
     for rule in WINDOW_RULES:
-        if rule.title_prefix and not title.startswith(rule.title_prefix):
+        if rule.titles and title not in rule.titles:
             continue
-        if rule.text_has and rule.text_has not in text:
+        if rule.text_has and rule.text_has not in haystack:
             continue
-        bad = forbidden_reason(title, text)
-        if bad:
-            return {"rule": rule.key, "blocked": f"window mentions '{bad}': a person must decide"}
+        if not rule.titles and not rule.text_has:
+            continue
+        if rule.allowed is not None and not buttons <= rule.allowed:
+            continue                            # a window of another shape that mentions the question
+        if info.get("needs_human"):
+            return {"rule": rule.key, "blocked": f"window mentions '{info['needs_human']}': a person must decide"}
         want = rule.default if rule.key == "apply_preset" else choices.get(rule.key, rule.default)
         if want not in buttons:
             return {"rule": rule.key, "blocked": f"no '{want}' button (buttons: {info['buttons']})"}
@@ -267,26 +373,32 @@ def decide(info: dict[str, Any], choices: dict[str, Any]) -> dict[str, Any] | No
     return None
 
 
+def _same_widget(a: Any, b: Any) -> bool:
+    return a is b or bool(_safe(lambda: a == b, False))
+
+
 class WindowAnswerer:
     """A repeating Qt timer that answers WINDOW_RULES windows while a script runs.
 
-    The timer fires inside CC5's nested event loops too, so it works while LoadFile or a
-    modal question blocks the caller. It stops itself after ANSWERER_MAX_SECONDS.
+    The timer fires inside CC5's nested event loops too, so it works while LoadFile or a modal
+    question blocks the caller. It never presses anything while a window that needs a person is
+    open, stops itself after max_seconds (touch() restarts the clock), and gives up on a window
+    it has pressed MAX_PRESSES_PER_WINDOW times.
     """
 
-    def __init__(self, choices: dict[str, Any], interval_ms: int = 250) -> None:
+    def __init__(self, choices: dict[str, Any], interval_ms: int = 250,
+                 max_seconds: float = ANSWERER_MAX_SECONDS, max_presses: int = MAX_TOTAL_PRESSES) -> None:
         self.choices = choices
         self.interval_ms = interval_ms
+        self.max_seconds = max_seconds
+        self.max_presses = max_presses
         self.log: list[dict[str, Any]] = []
         self.blocked: list[dict[str, Any]] = []
         self._timer: Any = None
         self._started = 0.0
-        self._presses: dict[int, int] = {}
 
     def start(self) -> "WindowAnswerer":
-        previous = getattr(_holder(), "_cc5_ui_answerer", None)
-        if previous is not None and previous is not self:
-            previous.stop()                       # never two pressers at once
+        stop_active_answerer()                    # never two pressers at once
         q = _qt()
         self._started = _now()
         self._timer = q.QTimer()
@@ -294,6 +406,10 @@ class WindowAnswerer:
         self._timer.start(self.interval_ms)
         _holder()._cc5_ui_answerer = self         # keeps the timer alive after the caller returns
         return self
+
+    def touch(self) -> None:
+        """Restart the time limit (a long batch calls this before each file)."""
+        self._started = _now()
 
     def stop(self) -> list[dict[str, Any]]:
         if self._timer is not None:
@@ -304,21 +420,32 @@ class WindowAnswerer:
             holder._cc5_ui_answerer = None
         return list(self.log)
 
+    def _note(self, info: dict[str, Any], why: str) -> None:
+        if not any(b["title"] == info["title"] and b["why"] == why for b in self.blocked):
+            self.blocked.append({"title": info["title"], "why": why})
+
     def tick(self) -> None:
         if self._timer is None:
             return
-        if _now() - self._started > ANSWERER_MAX_SECONDS:
+        if _now() - self._started > self.max_seconds:
             self.stop()
             return
         try:
-            for info, w in scan_windows():
+            windows = scan_windows(include_other=True)
+            for info, _w in windows:
+                if info["dialog"] and info["needs_human"]:
+                    self._note(info, f"mentions '{info['needs_human']}': nothing is pressed while it is open")
+                    return
+            for info, w in windows:
                 decision = decide(info, self.choices)
                 if decision is None:
                     continue
                 if "blocked" in decision:
-                    if not any(b["title"] == info["title"] for b in self.blocked):
-                        self.blocked.append({"title": info["title"], "why": decision["blocked"]})
+                    self._note(info, decision["blocked"])
                     continue
+                if len(self.log) >= self.max_presses:
+                    self._note(info, f"already pressed {self.max_presses} times in this run")
+                    return
                 if self._answer(info, w, decision):
                     return                        # one answer per tick, like the verified script
         except Exception as exc:                  # a timer callback must never raise
@@ -326,23 +453,32 @@ class WindowAnswerer:
 
     def _answer(self, info: dict[str, Any], w: Any, decision: dict[str, Any]) -> bool:
         q = _qt()
-        count = self._presses.get(id(w), 0)
+        count = _clamp_int(_safe(lambda: w.property(PRESS_PROPERTY)), 0, 10_000, 0)
         if count >= MAX_PRESSES_PER_WINDOW:
+            self._note(info, f"pressed {count} times and still open")
             return False
         for fragment, want in decision.get("ticks", []):
-            for box in w.findChildren(q.QCheckBox):
-                if fragment in label_text(box).lower() and bool(box.isChecked()) != want:
+            for box in _safe(lambda: w.findChildren(q.QCheckBox), []):
+                if (fragment in norm(label_text(box)) and _safe(box.isVisible, True) and _safe(box.isEnabled, True)
+                        and _same_widget(_safe(box.window), w) and bool(box.isChecked()) != want):
                     box.setChecked(want)
-        for b in w.findChildren(q.QAbstractButton):
-            if isinstance(b, (q.QCheckBox, q.QRadioButton)):
+        for b in _safe(lambda: w.findChildren(q.QAbstractButton), []):
+            if isinstance(b, (q.QCheckBox, q.QRadioButton)) or not _same_widget(_safe(b.window), w):
                 continue
-            if label_text(b).lower() == decision["press"] and _safe(b.isVisible, True) and _safe(b.isEnabled, True):
-                self._presses[id(w)] = count + 1
+            if norm(label_text(b)) == decision["press"] and _safe(b.isVisible, True) and _safe(b.isEnabled, True):
+                _safe(lambda: w.setProperty(PRESS_PROPERTY, count + 1))
                 self.log.append({"rule": decision["rule"], "pressed": decision["press"],
                                  "window": info["title"], "text": info["text"][:80]})
                 b.click()
                 return True
         return False
+
+
+def stop_active_answerer() -> None:
+    """Stop the running answerer, if any (a job that must answer nothing calls this first)."""
+    previous = getattr(_holder(), "_cc5_ui_answerer", None)
+    if previous is not None:
+        previous.stop()
 
 
 # --- jobs: work that goes on after the bridge call returned ------------------------------
@@ -360,7 +496,7 @@ def _next_job_number() -> int:
 def running_job() -> dict[str, Any] | None:
     """A job that is still queued or running (and not stale), else None."""
     for job in _jobs().values():
-        if job["state"] in ("queued", "running") and _now() - job["started"] < JOB_STALE_SECONDS:
+        if job["state"] in ("queued", "running") and _now() - job["started"] < job.get("max_seconds", JOB_STALE_SECONDS):
             return job
     return None
 
@@ -382,25 +518,27 @@ def _advance(job: dict[str, Any], gen: Iterator[float]) -> None:
     """Run the job's next step; a yielded number is how many ms to wait before the one after."""
     try:
         delay = next(gen)
+        _later(max(0.0, float(delay)), lambda: _advance(job, gen))
     except StopIteration as stop:
         _finish(job, stop.value)
-        return
     except Exception as exc:
+        gen.close()                               # runs the generator's finally blocks
         _fail(job, exc)
-        return
-    _later(max(0.0, float(delay)), lambda: _advance(job, gen))
 
 
-def start_job(kind: str, make: Callable[[dict[str, Any]], Any], params: dict[str, Any]) -> dict[str, Any]:
+def start_job(kind: str, make: Callable[[dict[str, Any]], Any], params: dict[str, Any],
+              max_seconds: float | None = None) -> dict[str, Any]:
     """Queue make(params) to run on the Qt main thread. make returns a dict, or is a generator
-    that yields waits (ms) and returns the result dict. One job at a time."""
+    that yields waits (ms) and returns the result dict. One job at a time. max_seconds is how
+    long the job may take (after that it no longer blocks the next job)."""
     busy = running_job()
     if busy is not None:
         return {"success": False, "error": f"another UI job is still running: {busy['id']} ({busy['kind']}); "
-                                           "wait for it (ui/job) before starting the next"}
+                                           "wait for it (/ui/job, tool get_ui_job) before starting the next"}
     jobs = _jobs()
     job: dict[str, Any] = {"id": f"{kind}-{_next_job_number()}", "kind": kind, "state": "queued",
-                           "started": _now(), "finished": None, "result": None}
+                           "started": _now(), "finished": None, "result": None,
+                           "max_seconds": float(max_seconds or JOB_STALE_SECONDS)}
     jobs[job["id"]] = job
     for old in list(jobs)[:-JOB_KEEP]:
         jobs.pop(old, None)
@@ -417,7 +555,11 @@ def start_job(kind: str, make: Callable[[dict[str, Any]], Any], params: dict[str
         else:
             _finish(job, out)
 
-    _later(0, begin)
+    try:
+        _later(0, begin)
+    except Exception as exc:
+        _fail(job, exc)
+        return {"success": False, "error": f"could not schedule the job: {exc}"}
     return {"success": True, "job_id": job["id"], "state": "queued"}
 
 
@@ -432,48 +574,93 @@ def ui_job(body: dict[str, Any] | None = None) -> dict[str, Any]:
     if job["state"] in ("done", "failed"):
         out["result"] = job["result"]
     else:
-        out["windows"] = [{k: info[k] for k in ("title", "text", "buttons", "progress", "needs_human")}
+        out["windows"] = [{k: public_info(info)[k] for k in ("title", "text", "buttons", "progress", "needs_human")}
                           for info, _w in scan_windows()][:5]
     return out
+
+
+# While a job runs, other bridge commands are refused: LoadFile and the bake run nested Qt event
+# loops, and the bridge's own timer would otherwise run other RLPy calls inside them.
+GUARD_ALLOWED = frozenset({"ui_job", "ui_windows", "ui_widgets", "ui_skingen_state"})
+GUARD_SKIP = GUARD_ALLOWED | {"ui_apply_preset", "ui_skingen_editor", "ui_skingen_layer", "ui_capture_crop",
+                              "ui_modules_missing"}
+
+
+def job_guard_message(action: str) -> str | None:
+    """Why `action` must wait because a UI job is running, or None."""
+    if action in GUARD_ALLOWED or os.environ.get("CC5_UI_JOB_GUARD", "1") == "0":
+        return None
+    job = running_job()
+    if job is None:
+        return None
+    return (f"CC5 is busy with the UI job {job['id']} ({job['kind']}); '{action}' was NOT run. "
+            "Read progress with /ui/job (tool get_ui_job) or /ui/windows, and send this again when it is done. "
+            "(CC5_UI_JOB_GUARD=0 turns this check off.)")
+
+
+def install_job_guard(action_map: dict[str, Callable[..., Any]]) -> None:
+    """Wrap every bridge action (except the read-only UI ones) with the job guard. Safe to repeat."""
+    def guarded(action: str, fn: Callable[..., Any]) -> Callable[..., Any]:
+        def wrapper(params: Any) -> Any:
+            message = job_guard_message(action)
+            if message:
+                return {"success": False, "error": message}
+            return fn(params)
+
+        wrapper._cc5_guarded = fn                  # type: ignore[attr-defined]
+        return wrapper
+
+    for action, handler in list(action_map.items()):
+        original = getattr(handler, "_cc5_guarded", handler)
+        action_map[action] = original if action in GUARD_SKIP else guarded(action, original)
 
 
 # --- waiting until CC5 is quiet ----------------------------------------------------------
 
 def settle_steps(limit_s: float, choices: dict[str, Any], extra_ok: Callable[[], bool] | None = None,
                  quiet_needed: int = 2, poll_ms: int = 1000, grace_s: float = 4.0,
-                 answerable: bool = True) -> Iterator[float]:
+                 answerable: bool = True, baseline: set[tuple[str, str]] | None = None) -> Iterator[float]:
     """Generator (use with `yield from`): wait until no window is open for quiet_needed polls in a
-    row. Progress windows (baking, loading) are waited out; a question the answerer will press
-    is waited out (answerable=False: nothing is being answered, so it stops the wait too); any
-    other window stops the wait. Returns {"ok", "waited_s", "blocked_by"}."""
-    t0 = _now()
+    row. A window that needs a person stops the wait at once; progress windows (baking, loading)
+    are waited out; a question the answerer will press is waited out (answerable=False: nothing
+    is answered, so it stops the wait too); any other window stops the wait after grace_s;
+    windows in `baseline` (open before the job began) are ignored. The time limit counts the
+    polls, not the minutes CC5 spent frozen. Returns {"ok", "waited_s", "blocked_by"}."""
+    waited = 0.0
+    last = _now()
     quiet = 0
-    unknown_since: float | None = None
-    while _now() - t0 < limit_s:
-        windows = scan_windows()
-        stuck = None
-        for info, _w in windows:
-            if info["progress"]:
-                continue
-            decision = decide(info, choices) if answerable else None
-            if decision is not None and "press" in decision:
-                continue
-            stuck = info
-            break
+    unknown_for = 0.0
+    while waited < limit_s:
+        now = _now()
+        step = min(now - last, 2 * poll_ms / 1000.0)
+        last = now
+        waited += max(step, 0.0)
+        windows = [(i, w) for i, w in scan_windows()
+                   if i["needs_human"] or baseline is None or window_key(i) not in baseline]
+        stuck = next((i for i, _w in windows if i["needs_human"]), None)
+        if stuck is None:
+            for info, _w in windows:
+                if info["progress"]:
+                    continue
+                decision = decide(info, choices) if answerable else None
+                if decision is not None and "press" in decision:
+                    continue
+                stuck = info
+                break
         if stuck is not None:
-            unknown_since = unknown_since if unknown_since is not None else _now()
-            if stuck["needs_human"] or _now() - unknown_since >= grace_s:
-                return {"ok": False, "waited_s": round(_now() - t0, 1), "blocked_by": stuck}
+            unknown_for += max(step, 0.0)
+            if stuck["needs_human"] or unknown_for >= grace_s:
+                return {"ok": False, "waited_s": round(waited, 1), "blocked_by": public_info(stuck)}
         else:
-            unknown_since = None
+            unknown_for = 0.0
         if not windows and (extra_ok is None or _safe(extra_ok, False)):
             quiet += 1
             if quiet >= quiet_needed:
-                return {"ok": True, "waited_s": round(_now() - t0, 1), "blocked_by": None}
+                return {"ok": True, "waited_s": round(waited, 1), "blocked_by": None}
         else:
             quiet = 0
         yield poll_ms
-    return {"ok": False, "waited_s": round(_now() - t0, 1), "blocked_by": None, "timeout": True}
+    return {"ok": False, "waited_s": round(waited, 1), "blocked_by": None, "timeout": True}
 
 
 def settle_error(settled: dict[str, Any]) -> str:
@@ -485,231 +672,35 @@ def settle_error(settled: dict[str, Any]) -> str:
     return "CC5 was still busy when the time limit ran out"
 
 
-# --- widgets: finding and reading --------------------------------------------------------
+# --- widgets: lookup by name -------------------------------------------------------------
 
 def _class_of(w: Any) -> str:
     return str(_safe(lambda: w.metaObject().className(), type(w).__name__))
 
 
-def find_by_name(object_name: str, within: Any = None, visible_first: bool = True) -> list[Any]:
-    """Every widget with this objectName (under `within` when given); visible ones first."""
-    q = _qt()
-    pool = _safe(lambda: within.findChildren(q.QWidget), []) if within is not None else q.QApplication.allWidgets()
-    hits = [w for w in pool if _safe(w.objectName, "") == object_name]
-    if visible_first:
-        hits.sort(key=lambda w: 0 if _safe(w.isVisible, False) else 1)
+def find_by_names(names: Any) -> dict[str, list[Any]]:
+    """One pass over every widget: {objectName: [widgets, visible ones first]} for the names given."""
+    wanted = set(names)
+    hits: dict[str, list[Any]] = {name: [] for name in wanted}
+    for w in _qt().QApplication.allWidgets():
+        name = _safe(w.objectName, "")
+        if name in wanted:
+            hits[name].append(w)
+    for found in hits.values():
+        found.sort(key=lambda w: 0 if _safe(w.isVisible, False) else 1)
     return hits
 
 
-def widget_state(w: Any) -> dict[str, Any]:
-    """Name, class and the values a widget exposes, as plain data."""
-    out: dict[str, Any] = {"object_name": _safe(w.objectName, ""), "class": _class_of(w),
-                           "visible": bool(_safe(w.isVisible, False)), "enabled": bool(_safe(w.isEnabled, True))}
-    for key, getter in (("text", "text"), ("current_text", "currentText"), ("value", "value"),
-                        ("checked", "isChecked"), ("tooltip", "toolTip")):
-        fn = getattr(w, getter, None)
-        if callable(fn):
-            value = _safe(fn)
-            if value is not None and value != "":
-                out[key] = clean_text(value) if isinstance(value, str) else value
-    chain: list[str] = []
-    parent = _safe(w.parent)
-    while parent is not None and len(chain) < 6:
-        chain.append(_safe(parent.objectName, "") or _class_of(parent))
-        parent = _safe(parent.parent)
-    out["path"] = " < ".join(chain)
-    return out
-
-
-def ui_widgets(body: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Route /ui/widgets: read-only widget finder.
-
-    Body: object_name (exact) | name_contains | class_name | text_contains (at least one),
-    ancestor (objectName or class of a parent), visible_only (default true), limit (default 50).
-    """
-    p = body or {}
-    name, contains, cls, text = (p.get("object_name"), p.get("name_contains"),
-                                 p.get("class_name"), p.get("text_contains"))
-    if not any((name, contains, cls, text)):
-        return {"success": False, "error": "give at least one of object_name, name_contains, class_name, text_contains"}
-    limit = _clamp_int(p.get("limit", 50), 1, 200, 50)
-    visible_only = p.get("visible_only", True) is not False
-    ancestor = str(p.get("ancestor") or "").lower()
-    out: list[dict[str, Any]] = []
-    total = 0
-    for w in _qt().QApplication.allWidgets():
-        wname = _safe(w.objectName, "")
-        if name and wname != name:
-            continue
-        if contains and str(contains).lower() not in wname.lower():
-            continue
-        if cls and str(cls).lower() not in (_class_of(w).lower(), type(w).__name__.lower()):
-            continue
-        if text and str(text).lower() not in clean_text(_safe(lambda: w.text(), "")).lower():
-            continue
-        if visible_only and not _safe(w.isVisible, False):
-            continue
-        state = widget_state(w)
-        if ancestor and ancestor not in state["path"].lower():
-            continue
-        total += 1
-        if len(out) < limit:
-            out.append(state)
-    return {"success": True, "count": total, "shown": len(out), "widgets": out}
-
-
-# --- windows: report and grab ------------------------------------------------------------
-
-def _png_bytes(q: Any, image: Any) -> bytes | None:
-    """A QPixmap or QImage as PNG bytes, through a QBuffer."""
-    array = q.QByteArray()
-    buffer = q.QBuffer(array)
-    buffer.open(q.QIODevice.WriteOnly)
-    ok = image.save(buffer, "PNG")
-    buffer.close()
-    return bytes(array.data()) if ok else None
-
-
-def grab_png(widget: Any, max_width: int = 900) -> dict[str, Any]:
-    """QWidget.grab() as base64 PNG, scaled down until it fits PNG_MAX_BYTES."""
+def find_by_name(object_name: str, within: Any = None) -> list[Any]:
+    """Every widget with this objectName (under `within` when given); visible ones first."""
+    if within is None:
+        return find_by_names([object_name])[object_name]
     q = _qt()
-    pixmap = widget.grab()
-    if _safe(pixmap.isNull, True):
-        return {"error": "grab returned an empty image"}
-    width = pixmap.width()
-    target = min(width, max_width) if max_width else width
-    for _ in range(4):
-        shot = pixmap if target >= width else pixmap.scaledToWidth(target, q.Qt.SmoothTransformation)
-        data = _png_bytes(q, shot)
-        if data is not None and len(data) <= PNG_MAX_BYTES:
-            return {"png_base64": base64.b64encode(data).decode("ascii"),
-                    "png_size": [shot.width(), shot.height()]}
-        target = max(200, target // 2)
-    return {"error": "image too large to return"}
-
-
-def ui_windows(body: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Route /ui/windows: the windows CC5 has open right now (read-only).
-
-    Body: screenshot (PNG of each, default false), max_width (default 900), target
-    "dialogs" (default) | "main" (also the main window) , include_other (floating tool windows).
-    Works while a question window is open (the bridge still drains its queue in the modal loop).
-    """
-    p = body or {}
-    shoot = bool(p.get("screenshot", False))
-    max_width = _clamp_int(p.get("max_width", 900), 200, 2400, 900)
-    windows: list[dict[str, Any]] = []
-    for index, (info, w) in enumerate(scan_windows(bool(p.get("include_other", False)))):
-        entry = {"index": index, **info}
-        decision = decide(info, dict(DEFAULT_CHOICES)) or {}
-        entry["answerable_as"] = decision.get("rule") if "press" in decision else None
-        if "blocked" in decision:
-            entry["blocked_reason"] = decision["blocked"]
-        if shoot:
-            entry.update(grab_png(w, max_width))
-        windows.append(entry)
-    out: dict[str, Any] = {"success": True, "count": len(windows), "windows": windows}
-    if p.get("target") == "main":
-        out["main_window"] = _main_window_report(shoot, max_width)
-    return out
-
-
-def _main_window_report(shoot: bool, max_width: int) -> dict[str, Any]:
-    q = _qt()
-    for w in q.QApplication.instance().topLevelWidgets():
-        if isinstance(w, q.QMainWindow) and _safe(w.isVisible, False):
-            report: dict[str, Any] = {"title": clean_text(_safe(w.windowTitle, ""))}
-            if shoot:
-                report.update(grab_png(w, max_width))
-            return report
-    return {"error": "main window not found"}
-
-
-# --- framed capture: render big, cut a fixed box ----------------------------------------
-
-def _crop_box(p: dict[str, Any], width: int, height: int) -> tuple[int, int, int, int] | None:
-    """(x0, y0, x1, y1) in pixels from p["crop"] (pixels) or p["crop_fraction"] (0..1)."""
-    box = p.get("crop")
-    if box is None and p.get("crop_fraction") is not None:
-        fx0, fy0, fx1, fy1 = (float(v) for v in p["crop_fraction"])
-        box = [fx0 * width, fy0 * height, fx1 * width, fy1 * height]
-    if box is None:
-        return None
-    x0, y0, x1, y1 = (int(round(float(v))) for v in box)
-    x0, x1 = max(0, min(x0, x1)), min(width, max(x0, x1))
-    y0, y1 = max(0, min(y0, y1)), min(height, max(y0, y1))
-    return (x0, y0, x1, y1) if x1 - x0 >= 2 and y1 - y0 >= 2 else None
-
-
-def _capture_crop_steps(p: dict[str, Any]) -> Iterator[float]:
-    api = _api()
-    framed = api.frame_camera(p["view"])
-    if isinstance(framed, dict) and framed.get("success") is False:
-        return {"success": False, "error": f"frame_camera failed: {framed.get('error')}"}
-    yield p["settle_ms"]
-    full_path = p["full_path"]
-    cap = api.capture_viewport(full_path, p["size"], p["size"])
-    if not cap.get("success"):
-        return {"success": False, "error": f"capture failed: {cap.get('error')}"}
-    if cap.get("fallback"):
-        return {"success": False, "path": full_path, "error":
-                "RenderImage failed, so the capture is a window screenshot and not a "
-                f"{p['size']}x{p['size']} render; the crop would not be comparable. {cap.get('warning', '')}"}
-    q = _qt()
-    image = q.QImage(full_path)
-    if _safe(image.isNull, True):
-        return {"success": False, "path": full_path, "error": "cannot read the capture back as an image"}
-    width, height = image.width(), image.height()
-    out: dict[str, Any] = {"success": True, "view": p["view"], "full_path": full_path,
-                           "render_size": [width, height]}
-    if (width, height) != (p["size"], p["size"]):
-        out["warning"] = f"asked {p['size']}x{p['size']} but the render is {width}x{height}"
-    box = _crop_box(p, width, height)
-    if box is None:
-        if p.get("crop") is not None or p.get("crop_fraction") is not None:
-            return {"success": False, "path": full_path, "error": f"crop box is outside the {width}x{height} render"}
-        return out
-    x0, y0, x1, y1 = box
-    piece = image.copy(q.QRect(x0, y0, x1 - x0, y1 - y0))
-    if not piece.save(p["output_path"], "PNG"):
-        return {"success": False, "error": f"cannot save the crop to {p['output_path']}"}
-    out.update({"crop_path": p["output_path"], "crop_box": [x0, y0, x1, y1], "crop_size": [x1 - x0, y1 - y0]})
-    data = _png_bytes(q, piece)
-    if data is not None and len(data) <= PNG_MAX_BYTES:
-        out["png_base64"] = base64.b64encode(data).decode("ascii")
-    return out
-
-
-def ui_capture_crop(body: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Route /ui/capture_crop: frame the face, render BIG, cut a fixed box. Starts a job.
-
-    Same framing every time (no dolly), so crops of different options are the same scale.
-    Body: view (default "face"), size (default 3600, square), crop [x0,y0,x1,y1] in render
-    pixels OR crop_fraction [x0,y0,x1,y1] in 0..1, output_path (.png, default temp),
-    full_path (.png, default temp), settle_ms (default 800).
-    """
-    p = dict(body or {})
-    api = _api()
-    p["view"] = str(p.get("view") or "face")
-    p["size"] = _clamp_int(p.get("size", 3600), 256, 8192, 3600)
-    p["settle_ms"] = _clamp_int(p.get("settle_ms", 800), 0, 10000, 800)
-    tmp = tempfile.gettempdir()
-    p["output_path"] = str(p.get("output_path") or os.path.join(tmp, "cc5_framed_crop.png")).replace("\\", "/")
-    p["full_path"] = str(p.get("full_path") or os.path.join(tmp, "cc5_framed_full.png")).replace("\\", "/")
-    for key in ("output_path", "full_path"):
-        error = api._validate_path(p[key], {".png"})
-        if error:
-            return {"success": False, "error": f"{key}: {error}"}
-    for key in ("crop", "crop_fraction"):
-        value = p.get(key)
-        if value is not None and not (isinstance(value, (list, tuple)) and len(value) == 4):
-            return {"success": False, "error": f"{key} must be 4 numbers [x0, y0, x1, y1]"}
-    return start_job("crop", lambda params: _capture_crop_steps(params), p)
+    found = [w for w in _safe(lambda: within.findChildren(q.QWidget), []) if _safe(w.objectName, "") == object_name]
+    found.sort(key=lambda w: 0 if _safe(w.isVisible, False) else 1)
+    return found
 
 
 ROUTES: dict[str, tuple[str, Callable[..., dict[str, Any]]]] = {
-    "/ui/windows": ("ui_windows", ui_windows),
-    "/ui/widgets": ("ui_widgets", ui_widgets),
     "/ui/job": ("ui_job", ui_job),
-    "/ui/capture_crop": ("ui_capture_crop", ui_capture_crop),
 }

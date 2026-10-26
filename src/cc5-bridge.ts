@@ -105,6 +105,8 @@ const _rawTimeout = parseInt(process.env.CC5_REQUEST_TIMEOUT_MS ?? "30000", 10);
 const REQUEST_TIMEOUT_MS = Number.isFinite(_rawTimeout) && _rawTimeout > 0 && _rawTimeout <= 300_000
   ? _rawTimeout
   : 30_000;
+/** Job polls wait a little longer than the bridge's own 30 s limit, so its "CC5 is busy" 504 arrives first. */
+const JOB_POLL_TIMEOUT_MS = Math.max(REQUEST_TIMEOUT_MS, 30_000) + 10_000;
 
 export class CC5Bridge {
   private baseUrl: string;
@@ -128,16 +130,17 @@ export class CC5Bridge {
   /**
    * `lenient`: a failure reply with a JSON body (HTTP 400 {"success": false, "error": ...}, or the 504
    * "CC5 is busy" reply) comes back as the result instead of a thrown error, so a tool can show the
-   * details (open windows, what was answered).
+   * details (open windows, what was answered). success is always false in such a reply.
    */
   private async request<T>(
     path: string,
     method: "GET" | "POST" = "GET",
     body?: unknown,
-    lenient = false
+    lenient = false,
+    timeoutMs = REQUEST_TIMEOUT_MS
   ): Promise<T> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const options: RequestInit = {
@@ -155,7 +158,7 @@ export class CC5Bridge {
       if (!response.ok) {
         const errorBody = await response.text();
         const parsed = lenient ? parseJsonObject(errorBody) : undefined;
-        if (parsed) return { success: false, ...parsed } as T;
+        if (parsed) return { ...parsed, success: false } as T;
         throw new Error(
           `CC5 bridge error (${response.status}): ${errorBody}`
         );
@@ -885,8 +888,8 @@ export class CC5Bridge {
 
   // --- UI automation (/ui/ routes). Failure replies come back as results (lenient). ---
 
-  private ui<T>(path: string, body: unknown = {}): Promise<T> {
-    return this.request<T>(path, "POST", body, true);
+  private ui<T>(path: string, body: unknown = {}, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
+    return this.request<T>(path, "POST", body, true, timeoutMs);
   }
 
   async uiApplyPreset(args: UiApplyPresetArgs): Promise<UiJobStart> {
@@ -922,13 +925,14 @@ export class CC5Bridge {
   }
 
   async uiJob<T extends OperationResult = OperationResult>(jobId: string): Promise<UiJobStatus<T>> {
-    return this.ui<UiJobStatus<T>>("/ui/job", { job_id: jobId });
+    return this.ui<UiJobStatus<T>>("/ui/job", { job_id: jobId }, JOB_POLL_TIMEOUT_MS);
   }
 
   /**
    * Poll a job until it is done. The bridge answers 504 ("CC5 is busy") while CC5 bakes or a window is
-   * open; that is not an error, keep polling. Returns finished=false with the last status when
-   * timeoutMs passes (the job keeps running in CC5).
+   * open (and a poll can also time out on our side first); neither is an error, keep polling. Other
+   * failures (503 queue full, a dropped connection) are counted and give up after a few in a row.
+   * Returns finished=false with the last status when timeoutMs passes (the job keeps running in CC5).
    */
   async uiWaitJob<T extends OperationResult = OperationResult>(
     jobId: string,
@@ -945,25 +949,38 @@ export class CC5Bridge {
       await sleep(intervalMs);
       try {
         last = await this.uiJob<T>(jobId);
-        failures = 0;
       } catch (err) {
+        if (isAbort(err)) continue;                 // our poll timed out: CC5 is busy, not broken
         failures += 1;
         if (failures > 5) throw err;
         continue;
       }
-      if (isBusyReply(last)) continue;
+      if (isBusyReply(last)) {
+        failures = 0;
+        continue;
+      }
       if (last.state === "done" || last.state === "failed") return { finished: true, result: last.result, status: last };
       if (last.success === false) {
-        return { finished: true, result: { success: false, error: last.error } as T, status: last };
+        if (String(last.error ?? "").startsWith("unknown job")) {
+          return { finished: true, result: { success: false, error: last.error } as T, status: last };
+        }
+        failures += 1;                              // 503 / 403 / ...: maybe temporary
+        if (failures > 5) return { finished: false, status: last };
+        continue;
       }
+      failures = 0;
     }
     return { finished: false, status: last };
   }
 }
 
-/** The bridge's 504 body: CC5's main thread is busy, the request was not run. */
-function isBusyReply(reply: { error?: string }): boolean {
+/** The bridge's 504 body: CC5's main thread did not answer in time. The request stays queued in CC5 and may run later. */
+export function isBusyReply(reply: { error?: string }): boolean {
   return typeof reply.error === "string" && reply.error.startsWith("Timeout waiting for CC5");
+}
+
+function isAbort(err: unknown): boolean {
+  return typeof err === "object" && err !== null && (err as { name?: string }).name === "AbortError";
 }
 
 function parseJsonObject(text: string): Record<string, unknown> | undefined {
