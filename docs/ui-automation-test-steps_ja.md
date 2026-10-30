@@ -76,7 +76,7 @@
 
 ## 2026-10-30 の追加: ボタンを 1 つ押す(click_ui_button)と、exec の切りかえを 1 つに
 
-これも**実機ではまだ試していません**(偽の Qt のテストだけ)。
+10-30 の 15 時台に、金剛の CC5(5.2)で A〜G を全部試して、**全部合格**した。結果は、この節の終わりの「実機の結果」に書いた。
 
 - 足したもの: `cc5_uiclick.py`(新しい)。変えたもの: `cc5_api.py`・`cc5_ui.py`・`server.py`。
 - 入れ方: `cc5_*.py` を全部と `server.py` を入れる。`install-plugin.ps1` なら両方入る。`scripts\copy_to_installed.ps1` は
@@ -92,9 +92,57 @@
 | C | 壊れてよい窓で `click_ui_button window=<題名> text=<ふつうのボタン>` | `Pressed ...`、窓の絵、小窓の一覧。ボタンの働きが起きる |
 | D | 同じ窓で、文字に Points / Delete などがあるボタンを指す | `refused: ... mentions 'point'` などで、何も押されない |
 | E | 画面に鍵がかかった金剛で C をする | 押せる(マウスは効かないが Qt の click は効く、を確かめる) |
-| F | Body Wrap の 💾▾ を `object_name` で指し、`menu_item` なし | 断られ、項目の一覧(Load Skeleton / Save Skeleton)が出る。ここで本当の objectName と項目の名前を記録する |
+| F | Body Wrap の 💾▾ を `object_name` で指し、`menu_item` なし | 断られ、項目の一覧が出る。実機では 💾 = `qtSaveIniToolButton` の Save Skeleton / Save Wrap Project(下の「実機の結果」) |
 | G | 先に `POST /workflow/dialog/native {"enable": false}`、そのあと `menu_item="Save Skeleton"` | `click_returned: false` と保存の小窓が出る。`POST /workflow/dialog/file_fill {"path": 新しい名前, "save": true}` で保存し、`native` を true に戻す |
 
-まだ分かっていないこと: Body Wrap の窓の本当の題名と objectName、💾 がメニュー付きの QToolButton か、メニューの中身が
-開く前から入っているか(開くときに作るメニューなら「Entries: (empty)」と出て押せない)、Save Skeleton が Qt の
-ファイルの小窓を開くか(Windows の小窓なら中から名前を入れられない)。
+### 実機の結果(2026-10-30、金剛の CC5 5.2)
+
+用意: プラグインの古い版を `CC5_MCP_Bridge\_backup_2026-10-30\` に控え、`cc5_*.py` 全部と `server.py` を入れた(f5502e7)。
+CC5 は `CC5_ALLOW_EXEC` と `CC5_DEV_MODE` を消した環境で、空のプロジェクトで起動した(`/health` は `exec_allowed: false`)。
+MCP は新しい `build/index.js` を自前の stdio の client で動かした(道具 100 個、`click_ui_button` あり)。
+入力は Tripo の素の体 `C:\cos-work\cc5_tripo_wrap\in\bare_body_158cm.fbx`(`/workflow/import_fbx` で Prop「BareBody」として入った)。
+
+| # | 結果 | 見えたこと |
+|---|---|---|
+| A | 合格 | `exec_python: off (CC5_ALLOW_EXEC is not on ...)` の行が出た |
+| B | 合格 | `'exec_python' is disabled ... decided ONLY by CC5_ALLOW_EXEC ...` で断られた |
+| C | 合格 | `window=MainWindow object_name=qtBodyWrapToolbarAction` → 押せて、モーダルの「Point Mapping」が開いた(`click_returned: false`、何も答えていない)。Body Wrap の中の `qtCamMoveToolButton`(Move)も押せて、checked が false → true |
+| D | 合格 | 「Point Mapping」の `qtFreePointsToolButton` → `refused: ... mentions 'point'`。選びは Template-based のまま。モーダルが開いている間に本体の窓のボタンを指すと「the modal window 'Point Mapping' is open」で断られた |
+| E | 合格 | 画面に鍵がかかった状態(WTS の SessionFlags=0、LockApp 起動中)で Move を押して checked が false → true、Select で戻せた |
+| F | 合格 | `qtSaveIniToolButton` を `menu_item` なしで指すと断られ、項目「'Save Skeleton', 'Save Wrap Project'」が出た |
+| G | 合格 | 鍵の間に `native` を false → `menu_item="Save Skeleton"` で Qt の「Save As」(INI Files (*.ini))が開いた → `file_fill {"path": 新しい名前, "save": true}` で保存できた(19,636 バイト。DETECT JOINTS の前なので中身は `IsGuideOnly = true`)→ `native` を true に戻した |
+
+Body Wrap の本当の名前:
+
+- 開き方: 本体の道具の列の `qtBodyWrapToolbarAction`(QToolButton「Body Wrap」、窓の名前は `MainWindow`)。
+  Prop を選んでいると、Modify の欄にも「Wrap into CC5 HD Actor」(`qtBodyWrapImageTextButton`)がある。
+- 押すと、先にモーダルの「Point Mapping」が出る(objectName `:/plugin/CCBodyWrap/BodyDetectionOptions.ui` の中の
+  `BodyDetectionOptions`)。中身は `qtTemplateBasesToolButton`(Template-based、初めから選ばれている)・
+  `qtFreePointsToolButton`(Free Points。名前に point があるので、この道具では押せない)・
+  「Position asset at world origin」(初めからオン)・`qtOKButton`・`qtCancelButton`。OK で Body Wrap の窓が開く。
+- Body Wrap の窓: 題名 `Body Wrap`、objectName `:/plugin/CCBodyWrap/CCBodyWrapDlg.ui`、クラス `IC::CBodyWrapDlg`
+  (本体に付く窓。中の QWidget は `BodyWrapDlg`)。`list_cc5_windows` には `include_other=true` のときだけ出る。
+  `click_ui_button` では `window="Body Wrap"` で見つかる。開いたときは「1 DETECT JOINTS」の段(押してはいない)。
+- 💾▾ = `qtSaveIniToolButton`(QToolButton、文字「Save Skeleton」、メニュー付き): **Save Skeleton / Save Wrap Project**。
+  📂▾ = `qtLoadIniToolButton`(文字「Load Skeleton」): **Load Skeleton / Load Wrap Project**。
+  どちらも、メニューは開く前から中身が入っている(そのまま `menu_item` で押せる)。
+- そのほかの道具の列: `qtSelectToolButton`(Select)・`qtCamMoveToolButton`(Move)・`qtCamRotateToolButton`(Orbit)・
+  `qtCamZoomToolButton`(Zoom)・`qtCamViewDirectionToolButton`(Front)・`qtFocusToolButton`・`qtRenderToolButton`。
+- Save Skeleton の小窓: `native` を false にすると Qt の「Save As」(`QFileDialog`、ファイル名の欄あり、INI Files (*.ini))。
+  前に使ったフォルダを覚えている(10-30 は `C:\cos-work\cc5_anime_wrap\export` で開いた)。
+
+気づいたこと:
+
+- 道具 `import_fbx` は、取り込みが成功したのに「Failed: unknown error」と返した。ブリッジの `/workflow/import_fbx` は
+  始めるだけで、結果は `GET /workflow/import_fbx/status` に出る形なのに、MCP の道具がそれを見に行かず `item` が無いため。
+  (直していない。いまは status を読めば分かる)
+- 10-30 の金剛は、操作が無くても 30 分間鍵がかからなかった(CC5 が開いていたためかもしれない)。E は
+  `rundll32 user32.dll,LockWorkStation` をデスクトップのセッションで動かして鍵をかけてから試した。
+  鍵の間でも、`CopyFromScreen` の画面の撮影は失敗しなかった(中身は見ていない。10-29 の「handle is invalid」と違う)。
+- 鍵がかかったか・開いたかは、`Microsoft-Windows-Winlogon/Operational` の通知(811/812)の「通知イベント (4)」(鍵)と
+  「(5)」(開く)の時刻でも分かる(10-30 は 4 が鍵をかけた 15:34:04、5 が誰か(本人と思われる)が開けた 15:35:04。時刻から読んだ対応)。
+  G の保存は 15:35:01 で、鍵の間に終わっていた。
+
+まだ確かめていないこと: DETECT JOINTS より先(Generate Skeleton・点の合わせ・REFINE MESH)、手で直した骨を
+Save Skeleton で保存して Load Skeleton で戻せるか、Save Wrap Project / Load Wrap Project の中身、
+骨を出した後に Save Skeleton で `IsGuideOnly` がどうなるか。
