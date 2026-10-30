@@ -8,7 +8,10 @@ background thread stands in for CC5's QTimer that drains the command queue.
 
 What is checked:
   * exec_python and the silent Export Head routes are refused by default and run
-    only when CC5_ALLOW_EXEC is set; CC5_DEV_MODE does not enable them.
+    only when CC5_ALLOW_EXEC is set; CC5_DEV_MODE does not enable them. That
+    switch in CC5's environment is the only one (the MCP server has none of its
+    own); GET /health reports it as exec_allowed, and the refusal says how to turn
+    it on / off and not to go around it.
   * Requests with a non-loopback Host (DNS rebinding), any Origin header, or a
     browser Sec-Fetch-Site other than "none" are refused before anything runs.
   * Ordinary routes keep working for the clients the project uses.
@@ -111,8 +114,26 @@ class ExecGateTests(BridgeTestCase):
         status, data = self.request("POST", "/exec/python", {"code": "6*7"})
         self.assertEqual(status, 403)
         self.assertIn("'exec_python' is disabled", data["error"])
-        self.assertIn("CC5_ALLOW_EXEC=1", data["error"])
         self.assertIn("setx CC5_ALLOW_EXEC 1", data["error"])
+
+    def test_refusal_says_who_decides_how_to_switch_and_not_to_go_around_it(self) -> None:
+        _status, data = self.request("POST", "/exec/python", {"code": "6*7"})
+        message = data["error"]
+        self.assertIn("decided ONLY by CC5_ALLOW_EXEC in the environment Character Creator 5 was started from", message)
+        self.assertIn("the MCP server has no switch of its own", message)
+        self.assertIn("setx CC5_ALLOW_EXEC 1", message)          # on
+        self.assertIn("setx CC5_ALLOW_EXEC 0", message)          # off
+        self.assertIn("restart CC5", message)
+        self.assertIn("calling the HTTP bridge", message)
+        self.assertIn("ask the owner", message)
+        self.assertNotIn("MCP server's env", message)            # the old two-switch advice is gone
+
+    def test_health_reports_the_one_switch_read_per_request(self) -> None:
+        _status, data = self.request("GET", "/health")
+        self.assertIs(data["result"]["exec_allowed"], False)
+        os.environ["CC5_ALLOW_EXEC"] = "1"
+        _status, data = self.request("GET", "/health")
+        self.assertIs(data["result"]["exec_allowed"], True)
 
     def test_refused_exec_never_reaches_cc5(self) -> None:
         stubs = self.stub_actions(exec_python={"success": True, "result": "ran"})
@@ -373,6 +394,11 @@ class Cc5ApiGateTests(unittest.TestCase):
     def test_exec_python_runs_with_allow_exec(self) -> None:
         os.environ["CC5_ALLOW_EXEC"] = "1"
         self.assertEqual(cc5_api.exec_python("6*7"), {"success": True, "result": "42"})
+
+    def test_refusal_text_is_the_same_on_both_sides(self) -> None:
+        for action in ("exec_python", "silent_finalize"):
+            with self.subTest(action=action):
+                self.assertEqual(cc5_api._exec_gate(action)["error"], server.exec_disabled_error(action))
 
 
 class CaptureFallbackTests(unittest.TestCase):

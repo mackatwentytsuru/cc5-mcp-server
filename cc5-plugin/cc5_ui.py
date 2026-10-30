@@ -14,8 +14,9 @@ docs/ui-automation-test-steps_ja.md):
   * read the visible windows (title, text, buttons, check boxes) as plain data.
 
 Companions: cc5_uiview.py (widget finder, window pictures, framed capture), cc5_skingen.py,
-cc5_content.py. All are loaded by cc5_api (_load_ui_modules); none may import cc5_api at module
-level. PySide2 is imported lazily (_qt) so the logic runs in tests.
+cc5_content.py, cc5_uiclick.py (press one named button). All are loaded by cc5_api
+(_load_ui_modules); none may import cc5_api at module level. PySide2 is imported lazily (_qt) so
+the logic runs in tests.
 """
 
 from __future__ import annotations
@@ -120,6 +121,7 @@ def _qt() -> Any:
         QComboBox=QtWidgets.QComboBox, QTableWidget=QtWidgets.QTableWidget,
         QLineEdit=QtWidgets.QLineEdit, QTextEdit=QtWidgets.QTextEdit,
         QPlainTextEdit=QtWidgets.QPlainTextEdit, QGroupBox=QtWidgets.QGroupBox,
+        QDockWidget=QtWidgets.QDockWidget,
         QTimer=QtCore.QTimer, QBuffer=QtCore.QBuffer, QByteArray=QtCore.QByteArray,
         QIODevice=QtCore.QIODevice, Qt=QtCore.Qt, QRect=QtCore.QRect, QImage=QtGui.QImage,
     )

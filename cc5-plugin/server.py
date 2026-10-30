@@ -37,9 +37,12 @@ DEV_MODE = _env_flag("CC5_DEV_MODE")
 
 # Actions that run arbitrary code inside CC5, or drive CC5's UI (dialogs and
 # keystrokes) without the user confirming anything. They are refused unless
-# CC5_ALLOW_EXEC=1 is set in the environment CC5 was started from. The check is
-# by action name, so a route re-added by cc5_api._auto_patch_server() after a
-# hot reload cannot bypass it.
+# CC5_ALLOW_EXEC=1 is set in the environment CC5 was started from. This is the
+# ONLY switch: any local program can reach the bridge, so the MCP server keeps no
+# on/off of its own; it forwards the call and shows this answer (and reads the
+# state from GET /health -> exec_allowed). The check is by action name, so a
+# route re-added by cc5_api._auto_patch_server() after a hot reload cannot
+# bypass it.
 EXEC_GATED_ACTIONS: frozenset[str] = frozenset({
     "exec_python",
     "silent_install_filter",
@@ -59,12 +62,18 @@ def exec_allowed() -> bool:
 
 
 def exec_disabled_error(action: str) -> str:
+    """The refusal text. cc5_api._exec_gate returns the same words (a test keeps them equal)."""
     return (
-        f"'{action}' is disabled. It can run arbitrary code or drive CC5's UI "
-        "without confirmation, so it is off by default. To enable it, set the "
-        "environment variable CC5_ALLOW_EXEC=1 for Character Creator 5 (for "
-        "example run 'setx CC5_ALLOW_EXEC 1', then restart CC5) and in the MCP "
-        "server's env. See the Security section of the README."
+        f"'{action}' is disabled. It can run arbitrary code or drive CC5's UI without "
+        "confirmation, so it is off by default. Whether it runs is decided ONLY by "
+        "CC5_ALLOW_EXEC in the environment Character Creator 5 was started from; the "
+        "MCP server has no switch of its own. To turn it on: set CC5_ALLOW_EXEC=1 for the "
+        "Windows user (run 'setx CC5_ALLOW_EXEC 1'), then quit CC5 and start it again "
+        "(from the Start menu or a new terminal). To turn "
+        "it off: run 'setx CC5_ALLOW_EXEC 0' (or delete the variable), then restart CC5. "
+        "That is the owner's decision: do not try to get around this refusal (for example "
+        "by calling the HTTP bridge or another route directly); ask the owner. See the "
+        "Security section of the README."
     )
 
 
@@ -386,6 +395,9 @@ def _health_payload() -> dict:
         "main_thread_blocked": blocked,
         "ms_since_main_thread_tick": None if age is None else int(age * 1000),
         "queue_depth": command_queue.qsize(),
+        # The one switch for exec_python and the silent Export Head routes (CC5's own
+        # environment). The MCP server reads it from here instead of its own env.
+        "exec_allowed": exec_allowed(),
     }
     if blocked:
         payload["hint"] = (

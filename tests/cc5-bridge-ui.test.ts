@@ -62,6 +62,19 @@ describe("lenient failure replies", () => {
     await expect(bridge.uiSkinGenState()).rejects.toThrow("CC5 bridge error (500)");
   });
 
+  it("execPython returns the bridge's 403 refusal as the result (CC5's switch decides, we only show it)", async () => {
+    stubFetch([{ status: 403, body: { error: "'exec_python' is disabled. ... ask the owner." } }]);
+    expect(await bridge.execPython("6*7")).toEqual({ success: false, error: "'exec_python' is disabled. ... ask the owner." });
+  });
+
+  it("execPython returns a Python error (400) with its output", async () => {
+    const fetchFn = stubFetch([{ status: 400, body: { success: false, error: "NameError: x", output: "partial" } }]);
+    expect(await bridge.execPython("x")).toEqual({ success: false, error: "NameError: x", output: "partial" });
+    const [url, options] = fetchFn.mock.calls[0];
+    expect(url).toBe("http://localhost:5101/exec/python");
+    expect(JSON.parse(options.body)).toEqual({ code: "x" });
+  });
+
   it("ordinary methods keep throwing on a 400", async () => {
     stubFetch([{ status: 400, body: { success: false, error: "nope" } }]);
     await expect(bridge.getAvatars()).rejects.toThrow("CC5 bridge error (400)");
@@ -78,6 +91,7 @@ describe("request shapes", () => {
     ["uiWindows", () => bridge.uiWindows({ screenshot: true }), "/ui/windows", { screenshot: true }],
     ["uiWidgets", () => bridge.uiWidgets({ object_name: "qtSpinBox" }), "/ui/widgets", { object_name: "qtSpinBox" }],
     ["uiCaptureCrop", () => bridge.uiCaptureCrop({ size: 3600 }), "/ui/capture_crop", { size: 3600 }],
+    ["uiClick", () => bridge.uiClick({ window: "Body Wrap", text: "Paste" }), "/ui/click", { window: "Body Wrap", text: "Paste" }],
     ["uiJob", () => bridge.uiJob("preset-1"), "/ui/job", { job_id: "preset-1" }],
   ])("%s posts to %s", async (_name, call, path, body) => {
     const fetchFn = stubFetch([ok({ success: true })]);

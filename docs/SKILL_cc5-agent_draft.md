@@ -222,7 +222,7 @@ The OBJ is CC5's "Character With Current Pose" export (Z-up, cm) with materials;
   `set_visible` / `remove_item` tools instead, addressed by id)
 **Assets/export:** load_asset, export_fbx, set_subdivision_level, capture_viewport,
   bake_skin_textures, export_head_metahuman
-**Edit/advanced:** undo, redo, exec_python (gated by CC5_DEV_MODE/CC5_ALLOW_EXEC)
+**Edit/advanced:** undo, redo, exec_python (gated only by CC5_ALLOW_EXEC in CC5's environment; on a refusal, ask the owner)
 
 ## Realistic faces — DON'T start from create_avatar (avoids the "mannequin/yokai" trap)
 

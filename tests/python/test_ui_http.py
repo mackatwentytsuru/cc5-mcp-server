@@ -104,7 +104,8 @@ class UiOverHttpTest(unittest.TestCase):
 
     def test_every_ui_route_is_registered_on_the_real_server(self) -> None:
         for path in ("/ui/windows", "/ui/widgets", "/ui/job", "/ui/capture_crop", "/ui/skingen/state",
-                     "/ui/skingen/editor", "/ui/skingen/layer", "/ui/preset/list", "/ui/preset/apply"):
+                     "/ui/skingen/editor", "/ui/skingen/layer", "/ui/preset/list", "/ui/preset/apply",
+                     "/ui/click"):
             self.assertIn(path, server.POST_ROUTES)
             self.assertNotEqual(server.POST_ROUTES[path], "ui_modules_missing", path)
 
@@ -155,6 +156,9 @@ class UiOverHttpTest(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("was NOT run", data["error"])
         self.assertIn(job_id, data["error"])
+        status, data = self.request("/ui/click", {"window": "Body Wrap", "text": "Paste"})
+        self.assertEqual(status, 400)
+        self.assertIn("was NOT run", data["error"])
         for path in ("/ui/windows", "/ui/skingen/state"):
             self.assertEqual(self.request(path, {})[0], 200, path)
         status, data = self.request("/ui/job", {"job_id": job_id})
@@ -165,6 +169,24 @@ class UiOverHttpTest(unittest.TestCase):
 
         self.hold.clear()
         self.assertTrue(self.wait_job(job_id)["result"]["success"])
+
+    def test_click_presses_one_named_button_and_refusals_are_400(self) -> None:
+        win = fake_qt.Widget(name="BodyWrapWindow", title="Body Wrap")
+        win._is_window = True
+        paste = fake_qt.PushButton("Paste", win, name="qtPasteButton")
+        points = fake_qt.PushButton("Generate Wrap Points", win, name="qtGeneratePoints")
+        self.q.app.tops.append(win)
+        self.addCleanup(self.q.app.tops.remove, win)
+        status, data = self.request("/ui/click", {"window": "Body Wrap", "text": "Paste", "wait_ms": 200})
+        self.assertEqual(status, 200, data)
+        result = self.wait_job(data["result"]["job_id"])["result"]
+        self.assertTrue(result["success"], result)
+        self.assertEqual(paste.clicks, 1)
+        self.assertTrue(result["png_base64"])
+        status, data = self.request("/ui/click", {"window": "Body Wrap", "text": "Generate Wrap Points"})
+        self.assertEqual(status, 400)
+        self.assertIn("mentions 'point'", data["error"])
+        self.assertEqual(points.clicks, 0)
 
 
 if __name__ == "__main__":

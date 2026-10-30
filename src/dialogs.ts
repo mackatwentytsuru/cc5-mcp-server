@@ -5,8 +5,9 @@
  * still answers /health but nothing executes. This module asks Windows directly (via
  * scripts/list-dialogs.ps1: EnumWindows + UI Automation), so it works while CC5 is stuck.
  *
- * It is READ-ONLY. There is deliberately no tool that clicks a dialog: agreements,
- * purchases, logins, updates, deletes and overwrites must be decided by a human.
+ * It is READ-ONLY. Agreements, purchases, logins, updates, deletes and overwrites must be
+ * decided by a human. The one tool that presses a button by name is click_ui_button
+ * (cc5-plugin/cc5_uiclick.py), and it refuses exactly those buttons.
  */
 
 import { execFile } from "node:child_process";

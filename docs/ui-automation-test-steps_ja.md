@@ -73,3 +73,28 @@
 ## 元に戻すとき
 
 古い `cc5_api.py` に戻して `/reload` する。新しい 4 つのファイルが残っていても害はありません(使われないだけ)。
+
+## 2026-10-30 の追加: ボタンを 1 つ押す(click_ui_button)と、exec の切りかえを 1 つに
+
+これも**実機ではまだ試していません**(偽の Qt のテストだけ)。
+
+- 足したもの: `cc5_uiclick.py`(新しい)。変えたもの: `cc5_api.py`・`cc5_ui.py`・`server.py`。
+- 入れ方: `cc5_*.py` を全部と `server.py` を入れる。`install-plugin.ps1` なら両方入る。`scripts\copy_to_installed.ps1` は
+  `cc5_*.py` だけなので、`server.py` は別に写す。
+  - ボタンの道具は `/reload` で使えるようになる(`/reload` は `CC5_DEV_MODE=1` のときだけ)。
+  - exec の新しい断りの文と `/health` の `exec_allowed` は `server.py` の変更なので、**CC5 の再起動が要る**。
+- MCP 側: `npm run build` のあと Claude Code の MCP をつなぎ直すと、道具が 100 個になる(`click_ui_button` が増える)。
+
+| # | すること | 正しい姿 |
+|---|---|---|
+| A | `check_cc5_connection` | `exec_python: off`(または ON)の行が出る。`unknown` なら、新しい `server.py` がまだ動いていない |
+| B | `exec_python code="result=1"`(CC5 を `CC5_ALLOW_EXEC` なしで起動したとき) | 「decided ONLY by CC5_ALLOW_EXEC ...」で断られる。MCP 側の設定は関係ない |
+| C | 壊れてよい窓で `click_ui_button window=<題名> text=<ふつうのボタン>` | `Pressed ...`、窓の絵、小窓の一覧。ボタンの働きが起きる |
+| D | 同じ窓で、文字に Points / Delete などがあるボタンを指す | `refused: ... mentions 'point'` などで、何も押されない |
+| E | 画面に鍵がかかった金剛で C をする | 押せる(マウスは効かないが Qt の click は効く、を確かめる) |
+| F | Body Wrap の 💾▾ を `object_name` で指し、`menu_item` なし | 断られ、項目の一覧(Load Skeleton / Save Skeleton)が出る。ここで本当の objectName と項目の名前を記録する |
+| G | 先に `POST /workflow/dialog/native {"enable": false}`、そのあと `menu_item="Save Skeleton"` | `click_returned: false` と保存の小窓が出る。`POST /workflow/dialog/file_fill {"path": 新しい名前, "save": true}` で保存し、`native` を true に戻す |
+
+まだ分かっていないこと: Body Wrap の窓の本当の題名と objectName、💾 がメニュー付きの QToolButton か、メニューの中身が
+開く前から入っているか(開くときに作るメニューなら「Entries: (empty)」と出て押せない)、Save Skeleton が Qt の
+ファイルの小窓を開くか(Windows の小窓なら中から名前を入れられない)。
