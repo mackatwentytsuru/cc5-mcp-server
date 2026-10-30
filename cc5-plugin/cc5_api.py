@@ -3312,29 +3312,38 @@ def reset_all_morphs(avatar_name: str = "") -> dict[str, Any]:
 # --- Opt-in gate for code execution and silent UI automation ---
 #
 # exec_python and the silent Export Head steps are refused unless CC5_ALLOW_EXEC
-# is set (1 / true / yes). CC5_DEV_MODE and CC5_RELOAD_SECRET do NOT enable them:
-# running code must always be an explicit opt-in. server.py checks the same thing
-# per route; it is repeated here because cc5_api is hot-reloaded on its own, so
-# the gate must hold even when an older server.py is the one that is loaded.
+# is set (1 / true / yes) in the environment CC5 was started from. That is the ONE
+# switch: the MCP server has none of its own (it forwards the call and shows this
+# answer). CC5_DEV_MODE and CC5_RELOAD_SECRET do NOT enable them: running code must
+# always be an explicit opt-in. server.py checks the same thing per route; it is
+# repeated here because cc5_api is hot-reloaded on its own, so the gate must hold
+# even when an older server.py is the one that is loaded.
 
 def _exec_allowed() -> bool:
     return os.environ.get("CC5_ALLOW_EXEC", "").strip().lower() in ("1", "true", "yes")
+
+
+def _exec_refusal(action: str) -> str:
+    """Same words as server.exec_disabled_error (a test keeps them equal)."""
+    return (
+        f"'{action}' is disabled. It can run arbitrary code or drive CC5's UI without "
+        "confirmation, so it is off by default. Whether it runs is decided ONLY by "
+        "CC5_ALLOW_EXEC in the environment Character Creator 5 was started from; the "
+        "MCP server has no switch of its own. To turn it on: set CC5_ALLOW_EXEC=1 for the "
+        "Windows user (run 'setx CC5_ALLOW_EXEC 1'), then quit CC5 and start it again "
+        "(from the Start menu or a new terminal). To turn "
+        "it off: run 'setx CC5_ALLOW_EXEC 0' (or delete the variable), then restart CC5. "
+        "That is the owner's decision: do not try to get around this refusal (for example "
+        "by calling the HTTP bridge or another route directly); ask the owner. See the "
+        "Security section of the README."
+    )
 
 
 def _exec_gate(action: str) -> dict[str, Any] | None:
     """Return a refusal result when CC5_ALLOW_EXEC is off, else None."""
     if _exec_allowed():
         return None
-    return {
-        "success": False,
-        "error": (
-            f"'{action}' is disabled. It can run arbitrary code or drive CC5's UI "
-            "without confirmation, so it is off by default. To enable it, set the "
-            "environment variable CC5_ALLOW_EXEC=1 for Character Creator 5 (for "
-            "example run 'setx CC5_ALLOW_EXEC 1', then restart CC5) and in the MCP "
-            "server's env. See the Security section of the README."
-        ),
-    }
+    return {"success": False, "error": _exec_refusal(action)}
 
 
 # --- Python Script Execution ---
@@ -9913,11 +9922,11 @@ def wf_physics_set_collision(
 # its routes into a clear error and never stops the bridge. They are re-imported on every
 # _auto_patch_server() call, so GET /reload picks up edits of any of them.
 
-_UI_MODULES = ("cc5_ui", "cc5_uiview", "cc5_skingen", "cc5_content")
+_UI_MODULES = ("cc5_ui", "cc5_uiview", "cc5_skingen", "cc5_content", "cc5_uiclick")
 _UI_ROUTE_PATHS = (
     "/ui/windows", "/ui/widgets", "/ui/job", "/ui/capture_crop",
     "/ui/skingen/state", "/ui/skingen/editor", "/ui/skingen/layer",
-    "/ui/preset/list", "/ui/preset/apply",
+    "/ui/preset/list", "/ui/preset/apply", "/ui/click",
 )
 
 
@@ -9940,8 +9949,8 @@ def _ui_modules_missing(body: dict[str, Any] | None = None) -> dict[str, Any]:
         "success": False,
         "error": (
             "The Qt UI helper modules are not installed next to cc5_api.py (or failed to load; see the "
-            "CC5 console). Copy cc5_ui.py, cc5_uiview.py, cc5_skingen.py and cc5_content.py into the "
-            "plugin folder (install-plugin.ps1 does) and call GET /reload."
+            "CC5 console). Copy cc5_ui.py, cc5_uiview.py, cc5_skingen.py, cc5_content.py and cc5_uiclick.py "
+            "into the plugin folder (install-plugin.ps1 does) and call GET /reload."
         ),
     }
 

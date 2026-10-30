@@ -22,6 +22,16 @@ function validateCapturePath(filePath: string): string | null {
   return null;
 }
 
+/** The exec_python switch as the bridge reports it (CC5's own environment is the only switch). */
+export function execLine(allowed: boolean | undefined): string {
+  if (allowed === undefined) {
+    return "exec_python: unknown (this bridge plugin does not report it; reinstall the plugin and restart CC5).";
+  }
+  return allowed
+    ? "exec_python: ON (CC5_ALLOW_EXEC is set in the environment CC5 was started from)."
+    : "exec_python: off (CC5_ALLOW_EXEC is not on in the environment CC5 was started from; only the owner turns it on).";
+}
+
 export function registerSceneTools(server: McpServer, bridge: CC5Bridge) {
   server.tool(
     "list_avatars",
@@ -80,14 +90,15 @@ export function registerSceneTools(server: McpServer, bridge: CC5Bridge) {
                 (age === null ? "" : ` (no tick for ${age} ms)`) +
                 `, queue_depth=${h.queue_depth}.\n` +
                 "A modal dialog in CC5 is the usual cause. Commands sent now will NOT execute " +
-                "until it is dismissed. Do not retry blindly -- report this and wait.",
+                "until it is dismissed. Do not retry blindly -- report this and wait.\n" +
+                execLine(h.exec_allowed),
             }],
           };
         }
         return {
           content: [{
             type: "text" as const,
-            text: `CC5 bridge is connected and ready. (main thread alive, queue_depth=${h.queue_depth})`,
+            text: `CC5 bridge is connected and ready. (main thread alive, queue_depth=${h.queue_depth})\n${execLine(h.exec_allowed)}`,
           }],
         };
       } catch {

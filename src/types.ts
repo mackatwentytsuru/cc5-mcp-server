@@ -11,7 +11,18 @@ export interface CC5Health {
   main_thread_blocked: boolean;
   ms_since_main_thread_tick: number | null;
   queue_depth: number;
+  /** CC5_ALLOW_EXEC in the environment CC5 was started from: the ONE switch for exec_python and the
+   *  silent Export Head routes. Missing on plugins older than this field. */
+  exec_allowed?: boolean;
   hint?: string;
+}
+
+/** Reply of POST /exec/python (a refusal or a Python error comes back with success: false). */
+export interface ExecPythonResult {
+  success: boolean;
+  output?: string;
+  result?: string;
+  error?: string;
 }
 
 export interface CC5Avatar {
@@ -954,6 +965,35 @@ export interface UiCaptureCropArgs {
   avatar_name?: string;
   overwrite?: boolean;
   settle_ms?: number;
+}
+
+/** Body of POST /ui/click: press ONE named button (or one entry of its drop-down menu). */
+export interface UiClickArgs {
+  window: string;
+  object_name?: string;
+  text?: string;
+  menu_item?: string;
+  wait_ms?: number;
+  screenshot?: boolean;
+  max_width?: number;
+}
+
+export interface UiClickResult extends OperationResult {
+  window?: string;
+  pressed?: { text?: string; object_name?: string; class?: string; tooltip?: string; menu_item?: string };
+  /** false while the click has not returned (a window it opened is still up, or CC5 is still working). */
+  click_returned?: boolean;
+  waited_ms?: number;
+  checked_before?: boolean;
+  checked_after?: boolean;
+  hidden_skipped?: number;
+  window_open?: boolean;
+  png_base64?: string;
+  png_size?: number[];
+  screenshot_error?: string;
+  /** The dialogs open after the click (none of them is answered). */
+  dialogs?: UiWindowInfo[];
+  note?: string;
 }
 
 export interface UiCaptureCropResult extends OperationResult {

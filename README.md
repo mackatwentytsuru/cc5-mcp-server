@@ -18,9 +18,9 @@ The MCP server communicates with Claude via **stdio** transport and forwards com
 
 ## Features
 
-### MCP Tools (99)
+### MCP Tools (100)
 
-The MCP server provides 99 tools (registered in 22 modules under `src/tools/`) for controlling CC5. This list matches the code: there is one `server.tool(` call per tool in `src/tools/*.ts` (99 in total, all with unique names).
+The MCP server provides 100 tools (registered in 23 modules under `src/tools/`) for controlling CC5. This list matches the code: there is one `server.tool(` call per tool in `src/tools/*.ts` (100 in total, all with unique names).
 
 #### Scene & Avatar Management (8)
 | Tool | Description |
@@ -121,11 +121,11 @@ The MCP server provides 99 tools (registered in 22 modules under `src/tools/`) f
 #### Pop-up (dialog) detection
 | Tool | Description |
 |------|-------------|
-| `list_dialogs` | List the dialogs currently open in CC5 and Reallusion Hub (title, body text, button labels, process, foreground) with a PNG of each when Windows can render it. **Read-only**; works even while CC5's main thread is blocked by a modal dialog. There is deliberately no tool that clicks dialogs. |
+| `list_dialogs` | List the dialogs currently open in CC5 and Reallusion Hub (title, body text, button labels, process, foreground) with a PNG of each when Windows can render it. **Read-only**; works even while CC5's main thread is blocked by a modal dialog. It never clicks. The only tool that presses a button by name is `click_ui_button` (below), and it refuses licence / purchase / delete / login buttons and presses nothing while such a window is open. |
 
 **Automatic warning (Japanese):** while a dialog is open, *every* tool result starts with `⚠ CC5 に小窓が出ています ...` (or `ℹ Reallusion Hub に小窓 ...`) showing title / body / buttons. Dialogs that look like agreements, purchases, logins, updates, deletes or overwrites are flagged "人が判断". Scans are cached ~4 s (about 1 s when a rescan is needed). Implemented by `scripts/list-dialogs.ps1` (EnumWindows + UI Automation), independent of the bridge. Set `CC5_DIALOG_WATCH=0` to disable, `CC5_DIALOG_WATCH_IGNORE_HUB=1` to hide Hub-only notices.
 
-#### UI automation: presets, SkinGen, windows, framed capture (9) -- no mouse
+#### UI automation: presets, SkinGen, windows, framed capture, one button (10) -- no mouse
 
 See [UI automation without the mouse](#ui-automation-without-the-mouse) for how it works and what it will and will not press.
 
@@ -140,6 +140,7 @@ See [UI automation without the mouse](#ui-automation-without-the-mouse) for how 
 | `get_ui_job` | Look at or wait for a job the tools above started (use the job id from a "Still running" reply) |
 | `find_ui_widgets` | Read-only finder for CC5's own Qt widgets by objectName / class / text, to discover names for new automation |
 | `capture_framed_crop` | Frame a preset view, render it big (default 3600 px) and cut a fixed box, so options are compared at the same scale (does not depend on `dolly_camera`) |
+| `click_ui_button` | Press ONE named button of a CC5 window, dialog or dock panel with Qt's `click()` (works while the Windows screen is locked), or one entry of its drop-down menu (`menu_item`). Refuses ambiguous, hidden or disabled buttons and every button about points, buying, deleting / removing, licences, activation, upgrades, credits, subscriptions or payment. Returns a picture of the window and the dialogs that are open; never answers a window it opened. See [Pressing one named button](#pressing-one-named-button-click_ui_button) |
 
 #### MetaHuman (2)
 | Tool | Description |
@@ -150,7 +151,7 @@ See [UI automation without the mouse](#ui-automation-without-the-mouse) for how 
 #### Advanced (1)
 | Tool | Description |
 |------|-------------|
-| `exec_python` | Execute Python code inside CC5's RLPy environment. **Off by default** -- works only when `CC5_ALLOW_EXEC=1` is set, see [Security](#security) |
+| `exec_python` | Execute Python code inside CC5's RLPy environment. **Off by default** -- runs only when `CC5_ALLOW_EXEC=1` is set in the environment CC5 was started from (the bridge decides; the MCP server has no switch of its own and shows the bridge's answer), see [Security](#security) |
 
 #### Text-only workflow tools (25)
 
@@ -372,6 +373,7 @@ answer; **every other bridge command is refused until the job ends** (RLPy is no
 | `/ui/skingen/state`, `/ui/skingen/editor` (job), `/ui/skingen/layer` (job) | SkinGen editor |
 | `/ui/windows`, `/ui/widgets` | open windows (+ PNG) / widget finder |
 | `/ui/capture_crop` (job) | frame, render big, cut a fixed box |
+| `/ui/click` (job) | press one named button (or one entry of its drop-down menu) |
 | `/ui/job` | state / result of a job |
 
 **From a script:** `scripts/ui_client.py` (Python standard library only) starts a job and polls it, e.g.
@@ -380,8 +382,8 @@ answer; **every other bridge command is refused until the job ends** (RLPy is no
 Exit code 2 means a window needs a person.
 
 **Helper modules.** The code lives in `cc5_ui.py` (jobs, windows, the answers), `cc5_uiview.py` (pictures,
-widget finder, framed capture), `cc5_skingen.py`, `cc5_content.py`, next to `cc5_api.py`. Copy all of
-them when you install by hand (`install-plugin.ps1` and `scripts/copy_to_installed.ps1` do); if one is
+widget finder, framed capture), `cc5_skingen.py`, `cc5_content.py`, `cc5_uiclick.py` (one named button),
+next to `cc5_api.py`. Copy all of them when you install by hand (`install-plugin.ps1` and `scripts/copy_to_installed.ps1` do); if one is
 missing the routes answer with an error that says so and the rest of the bridge keeps working.
 `GET /reload` re-reads all of them.
 
@@ -391,6 +393,53 @@ missing the routes answer with an error that says so and the rest of the bridge 
 human confirmation. Content still in the cloud is not listed and cannot be applied; downloading
 is a person's job (it can bring the Reallusion Hub to the front).
 
+### Pressing one named button (click_ui_button)
+
+Added on 2026-10-30. While the Windows screen is locked, mouse clicks (real or simulated) do nothing, so a
+worker could not press Body Wrap's "Save Skeleton" and hand-fixed points were lost when the window closed.
+Qt's `QAbstractButton.click()` still works on a locked screen (tried with Headshot's Paste button), so the
+bridge can press a button for you: tool `click_ui_button`, route `POST /ui/click` (a job, like the others).
+
+| Argument | Meaning |
+|----------|---------|
+| `window` (required) | Title of the CC5 window, dialog or dock panel (case-insensitive), or its objectName. Floating tool windows such as Body Wrap show up in `list_cc5_windows include_other=true` |
+| `object_name` and / or `text` | The button: exact objectName, and / or exact visible text (case and the `&` shortcut marker are ignored). Find names with `find_ui_widgets` |
+| `menu_item` | Exact text of one entry in the button's own drop-down menu (for example "Save Skeleton" under a disk button): that entry is triggered instead of the button |
+| `wait_ms` | How long to wait after the click before the picture (default 1000, 200-15000) |
+| `screenshot`, `max_width` | PNG of the window and of every open dialog (default true, 900 px) |
+
+**It refuses (and presses nothing) when:**
+
+- the window or button matches nothing, or more than one **visible** thing (hidden buttons never count and are never pressed);
+- the button or menu entry is disabled or hidden;
+- its text, objectName or tool tip contains one of these words (any case, also with spaces or tags inside the word):
+  `point` / `ポイント`, `buy` / `購入` / `purchase`, `delete` / `削除` / `remove`, `license` / `licence` / `ライセンス` / `activate`,
+  `upgrade`, `credit` / `クレジット`, `subscribe`, `pay` / `支払` -- or a word of the window safety list above (login, update, terms, trial, ...);
+- a window that needs a person (licence, purchase, login, ...) is open;
+- a modal window is open and the button is not in it (a person could not press it either);
+- the button opens a drop-down menu and no `menu_item` was given (the menu would stay open on a locked screen).
+
+The click runs on CC5's main thread from a Qt timer, so if it opens a modal window (a file dialog, a
+question) the job still finishes: the reply says `click_returned: false` and lists that window with its
+picture. **Nothing in it is answered.** Look at it and ask the owner when it is not routine. The checks
+live in the bridge (`cc5_uiclick.py`), because any local program can call it; the MCP tool only forwards.
+
+### ボタンを 1 つ押す(click_ui_button、日本語)
+
+2026-10-30 に足しました。Windows の画面に鍵がかかっている間は、マウスのクリックが効きません。そのため、Body Wrap の
+「Save Skeleton」を押せず、手で直した点が消えました。Qt の `click()` は鍵の間も効く(Headshot の Paste で確認)ので、
+ブリッジがボタンを押せるようにしました。道具は `click_ui_button`、ルートは `POST /ui/click`(ジョブ)です。
+
+- **指定のしかた**: `window` に窓・小窓・ドックの題名(大文字小文字は問わない)か objectName。ボタンは `object_name`(完全一致)か
+  `text`(見えている文字の完全一致。大文字小文字と `&` は問わない)、または両方。▾ のメニューの中の項目は `menu_item` に項目の文字を書く。
+- **断るとき(何も押さない)**: 当たるものがない・見えているものが 2 つ以上ある。隠れている・灰色(無効)のボタンや項目。
+  文字・objectName・ツールチップに次の語があるもの: `point`/`ポイント`、`buy`/`購入`/`purchase`、`delete`/`削除`/`remove`、
+  `license`/`licence`/`ライセンス`/`activate`、`upgrade`、`credit`/`クレジット`、`subscribe`、`pay`/`支払`(ほかに login・update・
+  規約・体験版など、上の窓の安全の語も)。人が決める窓(ライセンス・購入・ログインなど)が開いている間。モーダルの窓が開いていて、
+  押すボタンがその中にないとき。▾ のメニューを持つボタンで `menu_item` がないとき。
+- **返すもの**: 押したもの、`click_returned`(押した結果の窓が開いたままなら false)、窓の絵、開いている小窓の一覧と絵。
+  押した結果に開いた窓には**何も答えません**。絵を見て、決まった手順でないときは本人に聞いてください。
+
 ## Configuration
 
 | Environment Variable | Default | Description |
@@ -398,7 +447,7 @@ is a person's job (it can bring the Reallusion Hub to the front).
 | `CC5_BRIDGE_URL` | `http://127.0.0.1:5101` | Full URL of the CC5 bridge HTTP server |
 | `CC5_BRIDGE_PORT` | `5101` | Port for the bridge server (set in `cc5-plugin/main.py`) |
 | `CC5_DEV_MODE` | `0` | Development helpers in the bridge plugin: `GET /reload` without a token and the full `GET /api` route list. Accepts `1`, `true` or `yes`. Read from the environment CC5 starts from. It does **not** enable code execution |
-| `CC5_ALLOW_EXEC` | *(unset)* | Enables `exec_python` (`POST /exec/python`) and the silent Export Head routes (`POST /export/head_mh/silent/*`). Accepts `1`, `true` or `yes`. Set it for CC5 **and** for the MCP server -- see [Security](#security) |
+| `CC5_ALLOW_EXEC` | *(unset)* | Enables `exec_python` (`POST /exec/python`) and the silent Export Head routes (`POST /export/head_mh/silent/*`). Accepts `1`, `true` or `yes`. Read **only by the bridge plugin**, from the environment CC5 was started from; the MCP server does not read it -- see [Security](#security) |
 | `CC5_RELOAD_SECRET` | *(empty)* | Auth token for the `/reload` endpoint. If set, requests must include `X-Reload-Token` header |
 | `CC5_REQUEST_TIMEOUT_MS` | `30000` | HTTP request timeout in milliseconds (MCP server side) |
 | `CC5_ROOT` | `C:\Program Files\Reallusion\Character Creator 5` | CC5 installation path (used for default avatar loading) |
@@ -426,7 +475,7 @@ npm run test:coverage # With coverage report
 npm run test:py      # Bridge plugin security tests (Python 3.10+, no CC5 needed)
 ```
 
-Current suite: 803 Vitest tests in 23 files, plus 308 Python tests (bridge security, route tables, and the UI automation with a fake Qt in `tests/python/fake_qt.py`).
+Current suite: 813 Vitest tests in 24 files, plus 345 Python tests (bridge security, route tables, and the UI automation with a fake Qt in `tests/python/fake_qt.py`).
 
 ### Hot-Reload the Python Plugin
 
@@ -451,7 +500,7 @@ cc5-mcp-server/
 │   ├── cc5-bridge.ts       # HTTP client for CC5 bridge
 │   ├── types.ts            # Type definitions
 │   ├── util.ts             # Shared utilities (bridgeCall wrapper)
-│   ├── tools/              # MCP tool definitions (23 files, 99 tools total)
+│   ├── tools/              # MCP tool definitions (24 files, 100 tools total)
 │   │   ├── morph.ts        # Morph search, adjust, reset (5 tools)
 │   │   ├── scene.ts        # Scene/avatar management, viewport, subdivision (7 tools)
 │   │   ├── asset.ts        # Asset loading / FBX export (2 tools)
@@ -473,6 +522,7 @@ cc5-mcp-server/
 │   │   ├── skingen.ts      # SkinGen state / editor / layer (3 tools)
 │   │   ├── ui-windows.ts   # list_cc5_windows, get_ui_job, find_ui_widgets (3 tools)
 │   │   ├── framed-capture.ts # capture_framed_crop (1 tool)
+│   │   ├── ui-click.ts     # click_ui_button (1 tool)
 │   │   ├── ui-common.ts    # Shared helpers of the UI tools (job waiting, window text)
 │   │   └── workflow.ts     # Text-only workflow routes (26 tools)
 │   └── resources/
@@ -485,6 +535,7 @@ cc5-mcp-server/
 │   ├── cc5_uiview.py       # Window pictures, widget finder, framed capture
 │   ├── cc5_skingen.py      # SkinGen editor / layers
 │   ├── cc5_content.py      # Preset list / apply
+│   ├── cc5_uiclick.py      # Press one named button (/ui/click) and its refusals
 │   └── config.json         # Plugin configuration
 ├── scripts/ui_client.py    # Stdlib client for the /ui routes (job polling, window PNGs)
 ├── tests/                  # Vitest unit tests; tests/python = bridge + UI automation tests
@@ -501,7 +552,7 @@ The bridge exposes one HTTP route per tool. The tables below list the core route
 
 | Endpoint | Description | Response |
 |----------|-------------|----------|
-| `GET /health` | Health check | `{"result": {"status": "ok", "service": "cc5-mcp-bridge", "version": "..."}}` |
+| `GET /health` | Health check; also whether CC5's main thread runs and whether `CC5_ALLOW_EXEC` is on for CC5 | `{"result": {"status": "ok", "service": "cc5-mcp-bridge", "version": "...", "main_thread_blocked": false, "exec_allowed": false, ...}}` |
 | `GET /api` | API discovery (all endpoints and required params, dev mode) | `{"result": {"service": "...", "endpoints": {...}}}` |
 | `GET /reload` | Hot-reload cc5_api module (needs `CC5_DEV_MODE=1` or `CC5_RELOAD_SECRET`) | `{"result": {"success": true}}` |
 | `GET /avatars` | List all scene avatars | `{"result": [{"name": "...", "id": "...", "type": "..."}]}` |
@@ -546,27 +597,31 @@ The bridge is a local HTTP server running inside CC5. It has these protections:
 | `POST /export/head_mh/silent/*` (4 routes) | Drives CC5's Export Head dialogs and types the save path with simulated keystrokes, without asking you | `CC5_ALLOW_EXEC=1` |
 | `GET /reload` without a token, full `GET /api` route list | Development helpers | `CC5_DEV_MODE=1` |
 
-Neither `CC5_DEV_MODE` nor `CC5_RELOAD_SECRET` enables code execution. While a feature is off, the bridge answers HTTP 403 and the MCP tool returns an error; both explain how to turn it on. When the plugin starts, CC5's Python console prints which of these are on.
+Neither `CC5_DEV_MODE` nor `CC5_RELOAD_SECRET` enables code execution. While a feature is off, the bridge answers HTTP 403 with a message that says who decides, how to turn it on and off, and not to go around it; the `exec_python` tool shows that message as it is. When the plugin starts, CC5's Python console prints which of these are on, and `GET /health` reports `exec_allowed` (shown by `check_cc5_connection`).
 
-### Turning on exec_python and the silent Export Head routes
+### One switch: CC5_ALLOW_EXEC in CC5's environment
 
-`CC5_ALLOW_EXEC` must be set in two places, because CC5 and the MCP server each read their own environment:
+Whether `exec_python` and the silent Export Head routes run is decided **only** by `CC5_ALLOW_EXEC` in the environment Character Creator 5 was started from. The bridge checks it on every call (in `server.py` by action name, and again inside `cc5_api.py`).
 
-1. **For CC5 (the bridge plugin)** -- set it for your Windows user, then restart CC5:
-   ```powershell
-   setx CC5_ALLOW_EXEC 1
-   ```
-   `setx` only reaches programs started after it. Start CC5 from the Start menu or from a new terminal; a terminal or app that was already open keeps its old environment until it is restarted.
-2. **For the MCP server** -- add it to the server's `env` (needed for the `exec_python` tool; the silent routes are called on the bridge directly, so they only need step 1):
-   ```json
-   "env": { "CC5_BRIDGE_URL": "http://127.0.0.1:5101", "CC5_ALLOW_EXEC": "1" }
-   ```
+The MCP server has **no switch of its own**: the `exec_python` tool always forwards the call and shows the bridge's answer. It used to check its own copy of `CC5_ALLOW_EXEC` too, and when only that copy said no, a worker called `POST /exec/python` on the bridge directly and got past it. Any program on the computer can reach the bridge, so the bridge is the only place where the decision can be enforced. **Calling the bridge directly (or through another route) to get around a refusal is not allowed: ask the owner.**
 
-To turn it off again, remove both settings and restart CC5 and your MCP client. For the Windows user variable:
+**Turn it on** -- set it for your Windows user, then quit CC5 and start it again:
 
 ```powershell
+setx CC5_ALLOW_EXEC 1
+```
+
+`setx` only reaches programs started after it. Start CC5 from the Start menu or from a new terminal; a terminal or app that was already open keeps its old environment until it is restarted.
+
+**Turn it off** -- set it to `0` (or delete the variable), then restart CC5:
+
+```powershell
+setx CC5_ALLOW_EXEC 0
+# or delete it:
 [Environment]::SetEnvironmentVariable("CC5_ALLOW_EXEC", $null, "User")
 ```
+
+A `CC5_ALLOW_EXEC` entry in the MCP server's `env` (from older instructions) is ignored now; you can remove it.
 
 ### What turning it on risks
 
@@ -579,6 +634,7 @@ To turn it off again, remove both settings and restart CC5 and your MCP client. 
 - `exec_python` used to be on by default (through `CC5_DEV_MODE`, which defaulted to `1`). It is now off until you set `CC5_ALLOW_EXEC=1` as described above.
 - `CC5_DEV_MODE` now defaults to `0`. Set `CC5_DEV_MODE=1` for CC5 if you use `GET /reload` while working on the plugin.
 - Rebuild the MCP server (`npm run build`), reinstall the plugin and restart CC5. `GET /health` reports `"version": "1.2.0"` once the new plugin is running. Note that `install-plugin.ps1` replaces the whole `CC5_MCP_Bridge` folder, so move anything you keep in it first.
+- Since 2026-10-30 the MCP server no longer reads `CC5_ALLOW_EXEC` (see [One switch](#one-switch-cc5_allow_exec-in-cc5s-environment)). `GET /health` has `exec_allowed` once the plugin of that date runs (server.py changed, so restart CC5).
 
 ## セキュリティ(日本語)
 
@@ -598,27 +654,31 @@ To turn it off again, remove both settings and restart CC5 and your MCP client. 
 | `POST /export/head_mh/silent/*`(4 つ) | CC5 の Export Head の画面を自動で操作し、保存先をキー入力で打ち込む(確認なし) | `CC5_ALLOW_EXEC=1` |
 | トークンなしの `GET /reload`、`GET /api` の全ルート一覧 | 開発用の機能 | `CC5_DEV_MODE=1` |
 
-`CC5_DEV_MODE` や `CC5_RELOAD_SECRET` では、コードの実行は有効になりません。無効のあいだは、ブリッジは HTTP 403、MCP ツールはエラーを返し、どうすれば有効にできるかを知らせます。プラグインが起動すると、CC5 の Python コンソールに、どれが有効かが表示されます。
+`CC5_DEV_MODE` や `CC5_RELOAD_SECRET` では、コードの実行は有効になりません。無効のあいだは、ブリッジが HTTP 403 を返し、誰が決めるか・どう切りかえるか・断りを回り道で越えないこと、を知らせます。`exec_python` ツールは、その文をそのまま見せます。プラグインが起動すると、CC5 の Python コンソールにどれが有効かが表示され、`GET /health` の `exec_allowed` にも出ます(`check_cc5_connection` が表示します)。
 
-### exec_python と silent ルートを有効にする
+### 切りかえは 1 つだけ: CC5 の環境の CC5_ALLOW_EXEC
 
-`CC5_ALLOW_EXEC` は 2 か所に設定します。CC5 と MCP サーバーは、それぞれ自分の環境変数を読むからです。
+`exec_python` と silent ルートを動かすかどうかは、**CC5 を起動したときの環境の `CC5_ALLOW_EXEC` だけ**で決まります。ブリッジが毎回たしかめます(`server.py` が命令の名前で、`cc5_api.py` の中でももう一度)。
 
-1. **CC5(ブリッジ)用** -- Windows のユーザー環境変数に設定して、CC5 を再起動します。
-   ```powershell
-   setx CC5_ALLOW_EXEC 1
-   ```
-   `setx` は、このあとに起動したプログラムにだけ効きます。CC5 はスタートメニューか、新しく開いたターミナルから起動してください。前から開いているターミナルやアプリは、再起動するまで古い設定のままです。
-2. **MCP サーバー用** -- サーバーの `env` に足します(`exec_python` ツールに必要です。silent ルートはブリッジを直接呼ぶので、1 だけで動きます)。
-   ```json
-   "env": { "CC5_BRIDGE_URL": "http://127.0.0.1:5101", "CC5_ALLOW_EXEC": "1" }
-   ```
+MCP サーバーには**自分の切りかえがありません**。`exec_python` ツールは、いつもブリッジに渡して、ブリッジの答えを見せます。前は MCP サーバーも自分の `CC5_ALLOW_EXEC` を読んでいて、そちらだけが断ったとき、作業役がブリッジの `POST /exec/python` を直接呼んで、断りを越えてしまいました。ブリッジにはこのパソコンのどのプログラムからも届くので、決まりを守らせられるのはブリッジだけです。**断られたときに、ブリッジを直接(または別のルートで)呼んで越えるのは禁止です。本人に聞いてください。**
 
-無効に戻すときは、両方の設定を消して、CC5 と MCP クライアントを再起動します。Windows のユーザー環境変数は次のコマンドで消せます。
+**有効にする** -- Windows のユーザー環境変数に設定して、CC5 を終了してから起動し直します。
 
 ```powershell
+setx CC5_ALLOW_EXEC 1
+```
+
+`setx` は、このあとに起動したプログラムにだけ効きます。CC5 はスタートメニューか、新しく開いたターミナルから起動してください。前から開いているターミナルやアプリは、再起動するまで古い設定のままです。
+
+**無効に戻す** -- `0` にする(または変数を消す)して、CC5 を再起動します。
+
+```powershell
+setx CC5_ALLOW_EXEC 0
+# または消す:
 [Environment]::SetEnvironmentVariable("CC5_ALLOW_EXEC", $null, "User")
 ```
+
+MCP サーバーの `env` に前の説明どおり `CC5_ALLOW_EXEC` を書いていても、今は読まれません。消してかまいません。
 
 ### 有効にすると何が危ないか
 
@@ -631,6 +691,7 @@ To turn it off again, remove both settings and restart CC5 and your MCP client. 
 - これまでは `CC5_DEV_MODE` の初期値が `1` だったため、`exec_python` が初期状態で有効でした。今は、上のとおり `CC5_ALLOW_EXEC=1` を設定するまで無効です。
 - `CC5_DEV_MODE` の初期値は `0` になりました。プラグインの開発で `GET /reload` を使うときは、CC5 用に `CC5_DEV_MODE=1` を設定してください。
 - MCP サーバーを作り直し(`npm run build`)、プラグインを入れ直して、CC5 を再起動します。新しいプラグインが動いていれば、`GET /health` が `"version": "1.2.0"` を返します。`install-plugin.ps1` は `CC5_MCP_Bridge` フォルダーを丸ごと入れ替えるので、そこに置いているものは先に移してください。
+- 2026-10-30 から、MCP サーバーは `CC5_ALLOW_EXEC` を読みません(上の「切りかえは 1 つだけ」)。この日のプラグインが動くと、`GET /health` に `exec_allowed` が出ます(`server.py` を変えたので、CC5 の再起動が要ります)。
 
 ## License
 

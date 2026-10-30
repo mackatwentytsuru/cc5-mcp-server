@@ -18,8 +18,10 @@ export function registerDialogTools(server: McpServer, watcher?: DialogWatcher, 
     "List the dialogs / pop-up windows currently open in Character Creator 5 and Reallusion Hub " +
       "(title, body text, button labels, process, foreground) and optionally capture an image of each. " +
       "Works even when CC5's main thread is blocked by a modal dialog (so other tools hang). " +
-      "READ-ONLY: this server has no tool that clicks dialogs; agreements, purchases, logins, updates, " +
-      "deletes and overwrites must be decided by a human. Report what you see and ask.",
+      "READ-ONLY: this tool never clicks. The only tool that presses a button by name is click_ui_button " +
+      "(one named button; it refuses licence, purchase, delete, login and similar buttons, and presses " +
+      "nothing while such a window is open). Agreements, purchases, logins, updates, deletes and overwrites " +
+      "must be decided by a human. Report what you see and ask.",
     { screenshot: z.boolean().optional().describe("Also capture a PNG of each dialog (default true)") },
     async (args: { screenshot?: boolean }) => {
       const wantShot = args?.screenshot !== false;

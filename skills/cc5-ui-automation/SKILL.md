@@ -1,6 +1,6 @@
 ---
 name: cc5-ui-automation
-description: Apply Character Creator 5 presets (eyelash presets and strips, SkinGen makeup such as lipstick and eyeshadow), work the SkinGen editor (layers, visibility, opacity, bake), notice CC5 pop-up windows, and shoot equal-size comparison crops, all through the cc5 MCP without the mouse. Trigger on: SkinGen, makeup, lipstick, lip, eyeshadow, eyelash, preset, apply preset, layer opacity, bake, pop-up, popup, dialog, window, メイク, 口紅, まつげ, 型, プリセット, ポップアップ, 小窓, 濃さ.
+description: Apply Character Creator 5 presets (eyelash presets and strips, SkinGen makeup such as lipstick and eyeshadow), work the SkinGen editor (layers, visibility, opacity, bake), notice CC5 pop-up windows, press one named button of a CC5 window (also while the screen is locked, e.g. Body Wrap's Save Skeleton), and shoot equal-size comparison crops, all through the cc5 MCP without the mouse. Trigger on: SkinGen, makeup, lipstick, lip, eyeshadow, eyelash, preset, apply preset, layer opacity, bake, pop-up, popup, dialog, window, click button, press button, locked screen, Save Skeleton, click_ui_button, メイク, 口紅, まつげ, 型, プリセット, ポップアップ, 小窓, 濃さ, ボタンを押す, 画面の鍵.
 origin: user-project
 ---
 
@@ -22,6 +22,17 @@ layer". Everything goes through the cc5 MCP tools below (or `scripts/ui_client.p
    hand-made scripts, never type into it.
 3. Do not add answers to `WINDOW_RULES` (cc5_ui.py) without the owner's OK. Widening a title or a text match is
    how a wrong window gets pressed.
+4. `click_ui_button` presses ONE button you name. CC5 refuses (and presses nothing) any button or menu entry whose
+   text, objectName or tool tip mentions points / ポイント, buy / 購入 / purchase, delete / 削除 / remove, license /
+   licence / ライセンス / activate, upgrade, credit / クレジット, subscribe, pay / 支払 (and login, update, terms, trial,
+   ...); hidden, disabled or ambiguous buttons; anything while a licence / purchase / login window is open; anything
+   outside an open modal window. **A refusal is final**: never get around it (another route, `exec_python`, the
+   bridge directly, a different name for the same button). Tell the owner and wait. Do not edit `DENY_WORDS`
+   (cc5_uiclick.py) without the owner's OK. A window the click opens is not answered: look at its picture and ask
+   the owner unless the next step is routine (e.g. a file name you were told to use).
+5. `exec_python` runs only when `CC5_ALLOW_EXEC=1` is set in the environment CC5 was started from. That is the only
+   switch (the MCP server has none). When it is refused, do not call `POST /exec/python` on the bridge directly or
+   look for another way in: ask the owner.
 
 ## Tools
 
@@ -33,8 +44,9 @@ layer". Everything goes through the cc5 MCP tools below (or `scripts/ui_client.p
 | What is on screen? | `list_cc5_windows` (text + PNG of each window), `get_ui_job` (a job that said "Still running") |
 | Name of a widget | `find_ui_widgets` (read-only) |
 | Same-size comparison shots | `capture_framed_crop` (preset view, big render, fixed box) |
+| Press one named button (works on a locked screen) | `click_ui_button` (`window`, `object_name` and/or `text`, `menu_item` for a ▾ menu, `wait_ms`) |
 
-`apply_preset`, `skingen_editor`, `skingen_layer` and `capture_framed_crop` run as a job inside CC5. The tool
+`apply_preset`, `skingen_editor`, `skingen_layer`, `capture_framed_crop` and `click_ui_button` run as a job inside CC5. The tool
 waits for it. While it runs, other bridge commands are refused ("was NOT run"); only the read-only tools work.
 If a start request timed out, do **not** send it again: look first (`list_cc5_windows`, `skingen_state`).
 
@@ -59,6 +71,20 @@ Strips can also be applied one by one: `apply_preset file_paths=[<Upper>.rlEyela
 different dolly counts had different sizes. Call `capture_framed_crop` once without `crop` (it returns a preview
 and `preview_scale`), measure the box on the preview (x `preview_scale` = render pixels), then pass the same
 `crop` for every option. It refuses to crop a window screenshot (RenderImage failed) because the scale would be wrong.
+
+**Pressing a button on a locked screen** (金剛 locks itself after ~20 minutes; mouse clicks then do nothing, Qt's
+`click()` still works):
+1. Find the window: `list_cc5_windows include_other=true` (floating tool windows such as Body Wrap only show with
+   `include_other`). Find the button: `find_ui_widgets ancestor=<window objectName> class_name=QToolButton` (or
+   `text_contains=...`). Icon buttons have no text: use `object_name`.
+2. `click_ui_button window="Body Wrap" object_name=<name>`; for an entry of a ▾ menu add `menu_item="Save Skeleton"`
+   (a ▾ button without `menu_item` is refused and the reply lists its entries).
+3. Read the reply: `click_returned: false` + a dialog in the list means the click opened a window (often a file
+   dialog). Nothing in it was pressed.
+4. A file dialog it opens (untested for Save Skeleton): the way that worked on 10-22 is
+   `POST /workflow/dialog/native {"enable": false}` BEFORE the click (CC5's own Qt file dialog), then
+   `POST /workflow/dialog/file_fill {"path": "<new file>", "save": true}`, then `{"enable": true}` again.
+   Save under a NEW name; never overwrite the owner's files.
 
 **Seeing a pop-up.** After any failure or "Still running": `list_cc5_windows`. Progress windows (Baking, Please
 wait, Mipmap, Loading) go away by themselves; question windows need the owner. Check `check_cc5_connection`
@@ -94,4 +120,6 @@ Import `run_job(path, body)` and `post(path, body)` from it for your own loops (
 
 - New widget? `find_ui_widgets` first; add the objectName to `cc5-plugin/cc5_skingen.py` (or a new module with
   a `ROUTES` table, registered in `cc5_api._UI_MODULES`), write the fake-Qt test in `tests/python/`, then the MCP tool.
+- A one-off press of a named button needs no new code: `click_ui_button`. Its checks are in `cc5-plugin/cc5_uiclick.py`
+  (tests: `tests/python/test_ui_click.py`).
 - Test steps for a real CC5 and what is still unverified: `docs/ui-automation-test-steps_ja.md`.

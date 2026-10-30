@@ -208,10 +208,15 @@ s, r = call("POST", "/skin/bake", {}, timeout=120); ok("bake_skin_textures (resp
 s, r = call("GET", "/export/head_mh/status"); ok("export_head_mh status", s == 200 and is_resp(r))
 s, r = call("POST", "/undo"); ok("undo", res(r).get("success") is not False and is_resp(r))
 s, r = call("POST", "/redo"); ok("redo", res(r).get("success") is not False and is_resp(r))
-# exec_python is off unless CC5 was started with CC5_ALLOW_EXEC=1. This script
-# cannot see CC5's environment, so it expects whatever its own shell has set.
+# exec_python is off unless CC5 was started with CC5_ALLOW_EXEC=1. That switch in CC5's
+# environment is the only one; the bridge reports it in GET /health (exec_allowed). An
+# older plugin does not report it: then this script's own shell setting is the guess.
+_hs, _hr = call("GET", "/health")
+exec_on = res(_hr).get("exec_allowed") if isinstance(res(_hr), dict) else None
+if exec_on is None:
+    exec_on = os.environ.get("CC5_ALLOW_EXEC", "").strip().lower() in ("1", "true", "yes")
 s, r = call("POST", "/exec/python", {"code": "result=6*7"})
-if os.environ.get("CC5_ALLOW_EXEC", "").strip().lower() in ("1", "true", "yes"):
+if exec_on:
     ok("exec_python (CC5_ALLOW_EXEC on)", s == 200 and str(res(r).get("result")) == "42", r)
 else:
     ok("exec_python refused by default", s == 403 and "CC5_ALLOW_EXEC" in str((r or {}).get("error", "")), r)

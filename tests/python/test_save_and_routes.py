@@ -138,9 +138,11 @@ class RouteTableTest(UiTestCase):
         self.assertNotEqual(srv.POST_ROUTES["/ui/windows"], "ui_modules_missing")
         self.assertEqual(srv.POST_ROUTES["/ui/preset/apply"], "ui_modules_missing")
         self.assertEqual(srv.POST_ROUTES["/ui/skingen/layer"], "ui_modules_missing")
+        self.assertEqual(srv.POST_ROUTES["/ui/click"], "ui_modules_missing")
         res = srv.ACTION_MAP["ui_modules_missing"]({})
         self.assertFalse(res["success"])
         self.assertIn("cc5_content.py", res["error"])
+        self.assertIn("cc5_uiclick.py", res["error"])
         self.assertIn("cc5_uiview.py", res["error"])
 
     def test_load_survives_a_broken_module(self) -> None:

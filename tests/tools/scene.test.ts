@@ -237,6 +237,18 @@ describe("check_cc5_connection handler", () => {
     expect(text).not.toContain("connected and ready");
   });
 
+  it("reports the exec_python switch as the bridge sees it (CC5's environment)", async () => {
+    const handler = server.getRegisteredTool("check_cc5_connection");
+    bridge.healthDetail.mockResolvedValue({ ...HEALTHY, exec_allowed: false });
+    expect((await handler({})).content[0].text).toContain("exec_python: off (CC5_ALLOW_EXEC is not on in the environment CC5 was started from");
+    bridge.healthDetail.mockResolvedValue({ ...HEALTHY, exec_allowed: true });
+    expect((await handler({})).content[0].text).toContain("exec_python: ON");
+    bridge.healthDetail.mockResolvedValue(HEALTHY);
+    expect((await handler({})).content[0].text).toContain("exec_python: unknown");
+    bridge.healthDetail.mockResolvedValue({ ...HEALTHY, main_thread_blocked: true, exec_allowed: false });
+    expect((await handler({})).content[0].text).toContain("exec_python: off");
+  });
+
   it("omits the tick age when the main thread never ticked", async () => {
     bridge.healthDetail.mockResolvedValue({ ...HEALTHY, main_thread_blocked: true, ms_since_main_thread_tick: null });
     const handler = server.getRegisteredTool("check_cc5_connection");

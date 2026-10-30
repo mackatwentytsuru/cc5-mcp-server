@@ -98,6 +98,8 @@ import type {
   SkinGenEditorArgs,
   SkinGenLayerArgs,
   UiCaptureCropArgs,
+  UiClickArgs,
+  ExecPythonResult,
 } from "./types.js";
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:5101";
@@ -622,8 +624,12 @@ export class CC5Bridge {
     return this.request<SceneObject[]>("/scene/objects");
   }
 
-  async execPython(code: string): Promise<{ success: boolean; output?: string; result?: string; error?: string }> {
-    return this.request<{ success: boolean; output?: string; result?: string; error?: string }>("/exec/python", "POST", { code });
+  /**
+   * Lenient: the bridge's refusal (HTTP 403 while CC5_ALLOW_EXEC is off in CC5's environment) and a
+   * Python error (HTTP 400) come back as the result, so the tool can show the bridge's own words.
+   */
+  async execPython(code: string): Promise<ExecPythonResult> {
+    return this.request<ExecPythonResult>("/exec/python", "POST", { code }, true);
   }
 
   // --- Facial profile ---
@@ -922,6 +928,10 @@ export class CC5Bridge {
 
   async uiCaptureCrop(args: UiCaptureCropArgs): Promise<UiJobStart> {
     return this.ui<UiJobStart>("/ui/capture_crop", args);
+  }
+
+  async uiClick(args: UiClickArgs): Promise<UiJobStart> {
+    return this.ui<UiJobStart>("/ui/click", args);
   }
 
   async uiJob<T extends OperationResult = OperationResult>(jobId: string): Promise<UiJobStatus<T>> {

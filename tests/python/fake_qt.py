@@ -41,6 +41,7 @@ class Widget:
         self.children: list[Widget] = []
         self._enabled = True
         self._modal = False
+        self._tooltip = ""
         self.grabbed = 0
         self._props: dict[str, Any] = {}
         if parent is not None:
@@ -83,6 +84,9 @@ class Widget:
 
     def isModal(self) -> bool:
         return self._modal
+
+    def toolTip(self) -> str:
+        return self._tooltip
 
     def findChildren(self, cls: type) -> list["Widget"]:
         out: list[Widget] = []
@@ -136,6 +140,10 @@ class Dialog(Widget):
 
 class Menu(Widget):
     pass
+
+
+class DockWidget(Widget):
+    """A dock panel: docked, its window() is the main window it sits in (as in Qt)."""
 
 
 class Label(Widget):
@@ -236,9 +244,16 @@ class PlainTextEdit(TextEdit):
 
 
 class Action:
-    def __init__(self, text: str, enabled: bool = True, on_trigger: Callable[[], None] | None = None) -> None:
+    def __init__(self, text: str, enabled: bool = True, on_trigger: Callable[[], None] | None = None,
+                 visible: bool = True, tooltip: str = "", separator: bool = False, submenu: Any = None,
+                 name: str = "") -> None:
         self._text = text
         self._enabled = enabled
+        self._visible = visible
+        self._tooltip = tooltip
+        self._separator = separator
+        self._submenu = submenu
+        self._name = name
         self.triggered = 0
         self.on_trigger = on_trigger
 
@@ -247,6 +262,21 @@ class Action:
 
     def isEnabled(self) -> bool:
         return self._enabled
+
+    def isVisible(self) -> bool:
+        return self._visible
+
+    def toolTip(self) -> str:
+        return self._tooltip
+
+    def isSeparator(self) -> bool:
+        return self._separator
+
+    def menu(self) -> Any:
+        return self._submenu
+
+    def objectName(self) -> str:
+        return self._name
 
     def trigger(self) -> None:
         self.triggered += 1
@@ -498,6 +528,7 @@ def make_qt() -> types.SimpleNamespace:
         QSpinBox=SpinBox,
         QComboBox=ComboBox,
         QTableWidget=Table,
+        QDockWidget=DockWidget,
         QTimer=Timer,
         QBuffer=_buffer_factory,
         QByteArray=ByteArray,
