@@ -15,6 +15,8 @@ What it refuses (nothing is pressed; the reason comes back as HTTP 400):
   * a window name or button that matches nothing, or more than one VISIBLE thing (hidden buttons
     never count and are never pressed);
   * a disabled or hidden button or menu entry;
+  * (exception, owner 2026-10-31: inside the window "Body Wrap" the buttons with exactly the text
+    "Generate Wrap Points" / "Align Points" are pressed; see POINT_EXCEPTION_BUTTONS)
   * a button or menu entry whose text, objectName or tool tip contains a DENY_WORDS word (points,
     buy, purchase, delete, remove, licence, activate, upgrade, credit, subscribe, pay and the
     Japanese words) or a word of cc5_ui.forbidden_reason (login, update, terms, trial, ...);
@@ -56,6 +58,14 @@ DENY_WORDS: tuple[str, ...] = (
 _DENY_NEEDLES = tuple((word, cc5_ui.norm(word)) for word in DENY_WORDS)
 _COMPACT_MIN_CHARS = 5
 
+# The owner's exception (2026-10-31, "いいよ、進めて"): the two Body Wrap steps that only place wrap
+# points on the mesh (they do not use AI points) may be pressed although their text says "points".
+# Exact, whole-text match, and only inside the window titled "Body Wrap"; every OTHER deny word in
+# the text, objectName or tool tip still refuses, and so does any similar name ("AI Points", ...).
+POINT_EXCEPTION_WINDOW = "body wrap"
+POINT_EXCEPTION_BUTTONS = frozenset({"generate wrap points", "align points"})
+_POINT_WORDS = frozenset({"point", "ポイント"})
+
 
 def _call(obj: Any, method: str, default: Any = None) -> Any:
     """obj.method(), or the default when the method is missing or raises (a dead Qt wrapper)."""
@@ -65,11 +75,12 @@ def _call(obj: Any, method: str, default: Any = None) -> Any:
 
 # --- the safety words ---------------------------------------------------------------------
 
-def deny_reason(*parts: Any) -> str | None:
+def deny_reason(*parts: Any, skip_words: frozenset[str] = frozenset()) -> str | None:
     """The word that puts a button or menu entry off limits, or None.
 
     Each part (text, objectName, tool tip) is checked on its own, with tags removed both with and
     without a space ('<b>Del</b>ete'), so words cannot hide across parts or inside rich text.
+    skip_words names deny words that are not counted (only the owner's point exception uses it).
     """
     for part in parts:
         if not part:
@@ -78,6 +89,8 @@ def deny_reason(*parts: Any) -> str | None:
             text = cc5_ui.norm(variant)
             compact = re.sub(r"[\W_]+", "", text)
             for word, needle in _DENY_NEEDLES:
+                if word in skip_words:
+                    continue
                 if needle in text or (len(needle) >= _COMPACT_MIN_CHARS and needle in compact):
                     return word
     return cc5_ui.forbidden_reason(*parts)
@@ -237,11 +250,21 @@ def find_menu_entry(menu: Any, item: str) -> tuple[Any | None, str | None]:
     return entry, None
 
 
-def _target_problem(button: Any, menu_item: str | None) -> tuple[Any | None, str | None]:
+def _point_exception(button: Any, scope: Any, menu_item: str | None) -> bool:
+    """True for the owner's two Body Wrap buttons: exact text, inside the window titled "Body Wrap"."""
+    return (menu_item is None and scope is not None
+            and label_key(_title(_top(scope))) == POINT_EXCEPTION_WINDOW
+            and label_key(cc5_ui.label_text(button)) in POINT_EXCEPTION_BUTTONS)
+
+
+def _target_problem(button: Any, menu_item: str | None,
+                    scope: Any | None = None) -> tuple[Any | None, str | None]:
     """(what to press: the button or one of its menu entries, refusal)."""
     if not _call(button, "isEnabled", True):
         return None, f"the button {_button_desc(button)} is disabled (greyed out) and cannot be pressed now"
-    word = deny_reason(cc5_ui.label_text(button), _call(button, "objectName", ""), _call(button, "toolTip", ""))
+    skip = _POINT_WORDS if _point_exception(button, scope, menu_item) else frozenset()
+    word = deny_reason(cc5_ui.label_text(button), _call(button, "objectName", ""), _call(button, "toolTip", ""),
+                       skip_words=skip)
     if word:
         return None, (f"refused: the button {_button_desc(button)} mentions '{word}'. Buttons about points, buying, "
                       "deleting / removing, licences, activation, upgrades, credits, subscriptions or payment "
@@ -306,7 +329,7 @@ def resolve(p: dict[str, Any]) -> dict[str, Any]:
     button, error, hidden = find_button(q, window, p.get("object_name"), p.get("text"))
     if error:
         return {"error": error}
-    target, error = _target_problem(button, p.get("menu_item"))
+    target, error = _target_problem(button, p.get("menu_item"), window)
     if error:
         return {"error": error}
     return {"window": window, "button": button, "target": target, "hidden_skipped": hidden}

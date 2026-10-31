@@ -174,7 +174,8 @@ class UiOverHttpTest(unittest.TestCase):
         win = fake_qt.Widget(name="BodyWrapWindow", title="Body Wrap")
         win._is_window = True
         paste = fake_qt.PushButton("Paste", win, name="qtPasteButton")
-        points = fake_qt.PushButton("Generate Wrap Points", win, name="qtGeneratePoints")
+        points = fake_qt.PushButton("Generate AI Points", win, name="qtGeneratePoints")
+        align = fake_qt.PushButton("Align Points", win, name="qtAlignPoints")
         self.q.app.tops.append(win)
         self.addCleanup(self.q.app.tops.remove, win)
         status, data = self.request("/ui/click", {"window": "Body Wrap", "text": "Paste", "wait_ms": 200})
@@ -183,10 +184,14 @@ class UiOverHttpTest(unittest.TestCase):
         self.assertTrue(result["success"], result)
         self.assertEqual(paste.clicks, 1)
         self.assertTrue(result["png_base64"])
-        status, data = self.request("/ui/click", {"window": "Body Wrap", "text": "Generate Wrap Points"})
+        status, data = self.request("/ui/click", {"window": "Body Wrap", "text": "Generate AI Points"})
         self.assertEqual(status, 400)
         self.assertIn("mentions 'point'", data["error"])
         self.assertEqual(points.clicks, 0)
+        status, data = self.request("/ui/click", {"window": "Body Wrap", "text": "Align Points", "wait_ms": 200})
+        self.assertEqual(status, 200, data)             # the owner's exception (2026-10-31)
+        self.assertTrue(self.wait_job(data["result"]["job_id"])["result"]["success"])
+        self.assertEqual(align.clicks, 1)
 
 
 if __name__ == "__main__":

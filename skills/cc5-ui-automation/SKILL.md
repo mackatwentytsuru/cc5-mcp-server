@@ -28,7 +28,10 @@ layer". Everything goes through the cc5 MCP tools below (or `scripts/ui_client.p
    ...); hidden, disabled or ambiguous buttons; anything while a licence / purchase / login window is open; anything
    outside an open modal window. **A refusal is final**: never get around it (another route, `exec_python`, the
    bridge directly, a different name for the same button). Tell the owner and wait. Do not edit `DENY_WORDS`
-   (cc5_uiclick.py) without the owner's OK. A window the click opens is not answered: look at its picture and ask
+   (cc5_uiclick.py) without the owner's OK. **One owner exception (2026-10-31):** inside the window titled "Body Wrap"
+   the two buttons whose whole text is exactly "Generate Wrap Points" and "Align Points" can be pressed (they do not use
+   AI points); a similar name ("AI Points"...) or any other deny word in the text, objectName or tool tip is still
+   refused. A window the click opens is not answered: look at its picture and ask
    the owner unless the next step is routine (e.g. a file name you were told to use).
 5. `exec_python` runs only when `CC5_ALLOW_EXEC=1` is set in the environment CC5 was started from. That is the only
    switch (the MCP server has none). When it is refused, do not call `POST /exec/python` on the bridge directly or
