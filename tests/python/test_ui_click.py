@@ -127,7 +127,7 @@ class MatchingTest(ClickTestCase):
 
 class RefusalTest(ClickTestCase):
     REFUSED = (
-        "Generate Wrap Points", "ALIGN POINTS", "ポイントを使う", "Buy Now", "ＢＵＹ", "購入する", "Purchase",
+        "Generate AI Points", "Align Points (AI)", "Get AI Points", "Wrap Points", "ポイントを使う", "Buy Now", "ＢＵＹ", "購入する", "Purchase",
         "pUrChAsE", "Pur chase", "Delete", "削除", "Remove Layer", "License", "Licence info", "ライセンス",
         "Activate", "Deactivate", "Upgrade", "Credits", "クレジット", "Subscribe", "Pay", "支払い",
         "Log In", "Update", "Terms of Use",
@@ -150,6 +150,31 @@ class RefusalTest(ClickTestCase):
         points._tooltip = "Replace the hand-fixed points"
         self.assert_refused(self.click(object_name="qtGo"), "mentions 'point'")
         self.assertEqual((trash.clicks, tip.clicks, points.clicks), (0, 0, 0))
+
+    def test_owner_exception_presses_exactly_the_two_wrap_point_buttons(self) -> None:
+        gen = fake_qt.PushButton("GENERATE WRAP POINTS", self.win, name="qtGenerateWrapPointsButton")
+        gen._tooltip = "Generate the wrap points"
+        align = fake_qt.PushButton("&Align Points", self.win, name="qtAlignPointsButton")
+        self.run_click(text="Generate Wrap Points")
+        self.run_click(object_name="qtAlignPointsButton")
+        self.assertEqual((gen.clicks, align.clicks), (1, 1))
+
+    def test_exception_still_refuses_any_other_deny_word_and_similar_names(self) -> None:
+        credit = fake_qt.PushButton("Align Points", self.win, name="qtAlignCredit")
+        credit._tooltip = "Costs one credit"
+        buy = fake_qt.PushButton("Generate Wrap Points", self.win, name="qtBuyWrapPoints")
+        buy._tooltip = ""
+        self.assert_refused(self.click(object_name="qtAlignCredit"), "mentions 'credit'")
+        self.assert_refused(self.click(object_name="qtBuyWrapPoints"), "mentions 'buy'")
+        self.assertEqual((credit.clicks, buy.clicks), (0, 0))
+
+    def test_exception_is_only_inside_the_body_wrap_window_and_not_for_menu_entries(self) -> None:
+        other = self.tool_window("Headshot 3", name="HeadshotWindow")
+        elsewhere = fake_qt.PushButton("Align Points", other, name="qtAlignElsewhere")
+        self.assert_refused(self.click(window="Headshot 3", text="Align Points"), "mentions 'point'")
+        self.assertEqual(elsewhere.clicks, 0)
+        self.assertIsNone(cc5_uiclick.deny_reason("Generate Wrap Points", skip_words=frozenset({"point"})))
+        self.assertEqual(cc5_uiclick.deny_reason("Generate Wrap Points"), "point")
 
     def test_ordinary_buttons_are_not_caught_by_the_short_words(self) -> None:
         for label in ("Display", "Replay", "Repaint", "Detect Joints", "Paste", "Save Skeleton", "Load Skeleton",
