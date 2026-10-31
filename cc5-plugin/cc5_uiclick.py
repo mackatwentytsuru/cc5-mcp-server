@@ -16,7 +16,8 @@ What it refuses (nothing is pressed; the reason comes back as HTTP 400):
     never count and are never pressed);
   * a disabled or hidden button or menu entry;
   * (exception, owner 2026-10-31: inside the window "Body Wrap" the buttons with exactly the text
-    "Generate Wrap Points" / "Align Points" are pressed; see POINT_EXCEPTION_BUTTONS)
+    "Generate Wrap Points" / "Align Points", and the menu entries "Save Wrap Points" / "Load Wrap Points",
+    are pressed; see POINT_EXCEPTION_BUTTONS / POINT_EXCEPTION_MENU_ENTRIES)
   * a button or menu entry whose text, objectName or tool tip contains a DENY_WORDS word (points,
     buy, purchase, delete, remove, licence, activate, upgrade, credit, subscribe, pay and the
     Japanese words) or a word of cc5_ui.forbidden_reason (login, update, terms, trial, ...);
@@ -64,6 +65,9 @@ _COMPACT_MIN_CHARS = 5
 # the text, objectName or tool tip still refuses, and so does any similar name ("AI Points", ...).
 POINT_EXCEPTION_WINDOW = "body wrap"
 POINT_EXCEPTION_BUTTONS = frozenset({"generate wrap points", "align points"})
+# 2026-10-31 (second request, same owner OK "道具の決まりも変えていい"): the 💾 menu's two entries that
+# save / load the wrap points to a file. menu_item must be exactly one of these.
+POINT_EXCEPTION_MENU_ENTRIES = frozenset({"save wrap points", "load wrap points"})
 _POINT_WORDS = frozenset({"point", "ポイント"})
 
 
@@ -251,10 +255,12 @@ def find_menu_entry(menu: Any, item: str) -> tuple[Any | None, str | None]:
 
 
 def _point_exception(button: Any, scope: Any, menu_item: str | None) -> bool:
-    """True for the owner's two Body Wrap buttons: exact text, inside the window titled "Body Wrap"."""
-    return (menu_item is None and scope is not None
-            and label_key(_title(_top(scope))) == POINT_EXCEPTION_WINDOW
-            and label_key(cc5_ui.label_text(button)) in POINT_EXCEPTION_BUTTONS)
+    """True for the owner's Body Wrap buttons / menu entries: exact text, inside the window titled "Body Wrap"."""
+    if scope is None or label_key(_title(_top(scope))) != POINT_EXCEPTION_WINDOW:
+        return False
+    if menu_item is not None:
+        return label_key(menu_item) in POINT_EXCEPTION_MENU_ENTRIES
+    return label_key(cc5_ui.label_text(button)) in POINT_EXCEPTION_BUTTONS
 
 
 def _target_problem(button: Any, menu_item: str | None,
@@ -280,7 +286,8 @@ def _target_problem(button: Any, menu_item: str | None,
     entry, error = find_menu_entry(menu, menu_item)
     if error:
         return None, error
-    word = deny_reason(cc5_ui.label_text(entry), _call(entry, "objectName", ""), _call(entry, "toolTip", ""))
+    word = deny_reason(cc5_ui.label_text(entry), _call(entry, "objectName", ""), _call(entry, "toolTip", ""),
+                       skip_words=skip)
     if word:
         return None, (f"refused: the menu entry '{cc5_ui.label_text(entry)}' mentions '{word}'; it is pressed by "
                       "a person only. Ask the owner")

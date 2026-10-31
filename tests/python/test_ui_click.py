@@ -246,6 +246,34 @@ class MenuTest(ClickTestCase):
         self.assert_refused(self.click(object_name="qtPasteButton", menu_item="Save Skeleton"), "no drop-down menu")
         self.assertEqual(sum(a.triggered for a in self.entries), 0)
 
+    def test_owner_exception_wrap_points_menu_entries_in_body_wrap_only(self) -> None:
+        save, load = fake_qt.Action("Save Wrap Points"), fake_qt.Action("Load Wrap Points")
+        ai, credit = fake_qt.Action("Save AI Points"), fake_qt.Action("Load Wrap Points (1 credit)")
+        wp = fake_qt.ToolButton("", self.win, name="qtWrapPointsFileButton")
+        wp._tooltip = "Wrap points file"
+        wp._menu = fake_qt.ActionMenu([save, load, ai, credit])
+        self.run_click(object_name="qtWrapPointsFileButton", menu_item="Save Wrap Points")
+        self.run_click(object_name="qtWrapPointsFileButton", menu_item="load wrap points")
+        self.assertEqual((save.triggered, load.triggered), (1, 1))
+        self.assert_refused(self.click(object_name="qtWrapPointsFileButton", menu_item="Save AI Points"),
+                            "mentions 'point'")
+        self.assert_refused(self.click(object_name="qtWrapPointsFileButton", menu_item="Load Wrap Points (1 credit)"),
+                            "refused")
+        paid = fake_qt.Action("Save Wrap Points")
+        paid._tooltip = "Uses one credit"
+        pay_btn = fake_qt.ToolButton("", self.win, name="qtPaidFileButton")
+        pay_btn._menu = fake_qt.ActionMenu([paid])
+        self.assert_refused(self.click(object_name="qtPaidFileButton", menu_item="Save Wrap Points"),
+                            "mentions 'credit'")
+        self.assertEqual(paid.triggered, 0)
+        self.assertEqual((ai.triggered, credit.triggered), (0, 0))
+        other = self.tool_window("Headshot 3", name="HeadshotWindow")
+        hs = fake_qt.ToolButton("", other, name="qtHsFile")
+        hs._menu = fake_qt.ActionMenu([fake_qt.Action("Save Wrap Points")])
+        self.assert_refused(self.click(window="Headshot 3", object_name="qtHsFile", menu_item="Save Wrap Points"),
+                            "mentions 'point'")
+        self.assertEqual(hs._menu.actions()[0].triggered, 0)
+
 
 class JobTest(ClickTestCase):
     def test_the_click_runs_on_a_qt_timer_and_the_picture_comes_after_wait_ms(self) -> None:
