@@ -77,6 +77,29 @@ def exec_disabled_error(action: str) -> str:
     )
 
 
+DEFAULT_BRIDGE_PORT = 5101
+PORT_ENV_VAR = "CC5_BRIDGE_PORT"
+
+
+def resolve_bridge_port(value: str | None = None) -> int:
+    """The port the bridge listens on: CC5_BRIDGE_PORT from CC5's environment, else 5101.
+
+    Two CC5 on one machine, or a local CC5 next to an ssh tunnel that already holds
+    127.0.0.1:5101, need different ports. The value must be an integer 1024-65535;
+    anything else raises ValueError so the plugin fails loudly instead of guessing.
+    """
+    raw = os.environ.get(PORT_ENV_VAR) if value is None else value
+    if raw is None or not str(raw).strip():
+        return DEFAULT_BRIDGE_PORT
+    text = str(raw).strip()
+    if not text.isdigit():
+        raise ValueError(f"{PORT_ENV_VAR}={text[:20]!r} is not an integer port")
+    port = int(text)
+    if not 1024 <= port <= 65535:
+        raise ValueError(f"{PORT_ENV_VAR}={port} is outside 1024-65535")
+    return port
+
+
 def check_request_headers(headers: Any, port: int) -> str | None:
     """Return why a request must be refused, or None when it may proceed.
 

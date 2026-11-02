@@ -445,7 +445,7 @@ live in the bridge (`cc5_uiclick.py`), because any local program can call it; th
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
 | `CC5_BRIDGE_URL` | `http://127.0.0.1:5101` | Full URL of the CC5 bridge HTTP server |
-| `CC5_BRIDGE_PORT` | `5101` | Port for the bridge server (set in `cc5-plugin/main.py`) |
+| `CC5_BRIDGE_PORT` | `5101` | Port the bridge plugin listens on, read from the environment CC5 starts from (integer 1024-65535; anything else makes the plugin fail to start). Use it to run a local CC5 next to an ssh tunnel that already holds `127.0.0.1:5101`. The bridge accepts only `Host: 127.0.0.1:<this port>`, so clients must use the same port (`CC5_BRIDGE_URL`, or `python scripts/cc5_http.py --port <n> --path /health` on the CC5 machine) |
 | `CC5_DEV_MODE` | `0` | Development helpers in the bridge plugin: `GET /reload` without a token and the full `GET /api` route list. Accepts `1`, `true` or `yes`. Read from the environment CC5 starts from. It does **not** enable code execution |
 | `CC5_ALLOW_EXEC` | *(unset)* | Enables `exec_python` (`POST /exec/python`) and the silent Export Head routes (`POST /export/head_mh/silent/*`). Accepts `1`, `true` or `yes`. Read **only by the bridge plugin**, from the environment CC5 was started from; the MCP server does not read it -- see [Security](#security) |
 | `CC5_RELOAD_SECRET` | *(empty)* | Auth token for the `/reload` endpoint. If set, requests must include `X-Reload-Token` header |

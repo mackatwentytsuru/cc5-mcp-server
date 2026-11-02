@@ -33,7 +33,9 @@ _timer = None          # 16 ms  — command-queue drain (~60 Hz)
 _health_timer = None   # 5000 ms — watchdog health check (1/5 s)
 _server_thread = None
 
-BRIDGE_PORT = 5101
+# CC5_BRIDGE_PORT in CC5's environment picks another port (default 5101, 1024-65535),
+# e.g. a local CC5 next to an ssh tunnel that already holds 127.0.0.1:5101.
+BRIDGE_PORT = bridge_server.resolve_bridge_port()
 HEALTH_CHECK_INTERVAL_MS = 5000   # watchdog cadence
 COMMAND_QUEUE_INTERVAL_MS = 16    # command-dispatch cadence (~60 fps)
 
