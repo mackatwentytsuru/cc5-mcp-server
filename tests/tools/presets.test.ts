@@ -83,7 +83,7 @@ describe("apply_preset arguments", () => {
 describe("apply_preset job flow", () => {
   const success: UiApplyPresetResult = {
     success: true,
-    avatar: "Beyon",
+    avatar: "Hero",
     files: [{ path: LIP, ok: true, added: [], removed: [], settled: true }],
     answered: [{ rule: "layer_choice", pressed: "replace", window: "SkinGen" }],
     skingen: { editor_active: true, layers: ["Lips"] },
@@ -104,7 +104,7 @@ describe("apply_preset job flow", () => {
     });
     expect(bridge.uiWaitJob).toHaveBeenCalledWith("preset-1", expect.objectContaining({ timeoutMs: 130_000 }));
     const text = texts(result);
-    expect(text).toContain("Applied 1 file(s) to 'Beyon'");
+    expect(text).toContain("Applied 1 file(s) to 'Hero'");
     expect(text).toContain("Answered windows: replace ('SkinGen')");
     expect(text).toContain("SkinGen: editor open; layers: Lips");
     expect(text).toContain("Note: The SkinGen editor is open.");
@@ -168,7 +168,7 @@ describe("apply_preset job flow", () => {
 describe("apply_preset extra messages", () => {
   it("says when nothing changed in the scene and which windows were left alone", () => {
     const text = formatApplyResult({
-      success: true, avatar: "Beyon", files: [{ path: LIP, ok: true, added: [], removed: [] }],
+      success: true, avatar: "Hero", files: [{ path: LIP, ok: true, added: [], removed: [] }],
       blocked_windows: [{ title: "Palette", why: "mentions 'update'" }],
     });
     expect(text).toContain("No scene item was added or removed");

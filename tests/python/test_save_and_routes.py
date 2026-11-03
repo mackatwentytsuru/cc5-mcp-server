@@ -23,7 +23,7 @@ class SaveProjectTest(unittest.TestCase):
     def setUp(self) -> None:
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
-        self.current = os.path.join(self.dir.name, "beyon_v61.ccProject").replace("\\", "/")
+        self.current = os.path.join(self.dir.name, "avatar_v61.ccProject").replace("\\", "/")
         self.saved: list[str] = []
         for patcher in (
             mock.patch.object(cc5_api, "_wf_current_project_path", return_value=self.current),

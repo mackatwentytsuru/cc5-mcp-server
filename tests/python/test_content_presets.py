@@ -123,7 +123,7 @@ class ApplyTest(UiTestCase):
     def setUp(self) -> None:
         super().setUp()
         self.avatar = mock.Mock()
-        self.avatar.GetName.return_value = "Beyon"
+        self.avatar.GetName.return_value = "Hero"
         self.items = ["Cloth:Lash_Up_Old", "Cloth:Lash_Low_Old", "Hair:Bob"]
         self.loads: list[str] = []
         self.on_load = lambda path: None
@@ -281,7 +281,7 @@ class ApplyTest(UiTestCase):
     def test_the_avatar_is_looked_up_again_for_every_file(self) -> None:
         first, second = mock.Mock(), mock.Mock()
         for av in (first, second):
-            av.GetName.return_value = "Beyon"
+            av.GetName.return_value = "Hero"
         seen = []
         RLPy.RScene.SelectObject.side_effect = seen.append
         RLPy.RScene.GetAvatars.side_effect = None
@@ -291,7 +291,7 @@ class ApplyTest(UiTestCase):
         original = cc5_content._avatar
 
         def fresh_avatar(name=""):
-            return next(lookups) if seen is not None and len(seen) < 2 and name == "Beyon" else original(name)
+            return next(lookups) if seen is not None and len(seen) < 2 and name == "Hero" else original(name)
         with mock.patch.object(cc5_content, "_avatar", side_effect=fresh_avatar):
             res = self.apply(file_paths=[a, b])
         RLPy.RScene.SelectObject.side_effect = None

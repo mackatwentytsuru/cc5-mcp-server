@@ -2,13 +2,18 @@
 # combo-box entry in a table row by row name. Synthetic mouse clicks do not open CC5's combo boxes,
 # so this sets them from inside CC5. Run with Script > Load Python; settings below.
 import json
+import os
 from PySide2.QtWidgets import QApplication, QComboBox, QTableWidget, QTableView
 
 WINDOW = "Asset Import Status Report"
-SET_ROW_STARTS = "beyon_boot"     # row whose first column starts with this
+# Row whose first column starts with this (set CC5_PROBE_ROW to choose it).
+SET_ROW_STARTS = os.environ.get("CC5_PROBE_ROW", "my_item")
 SET_COLUMN = 1                    # Type column
 SET_TEXT = "Shoes"
-OUT = r"D:\OTOLUME\beyon_cc5\parts\v29_boot\qt_probe.json"
+# Work folder: set CC5_PIPELINE_DIR to choose it (default: ~/cc5_pipeline).
+WORK = os.environ.get("CC5_PIPELINE_DIR", os.path.join(os.path.expanduser("~"), "cc5_pipeline"))
+os.makedirs(WORK, exist_ok=True)
+OUT = os.path.join(WORK, "qt_probe.json")
 
 report = {"windows": [], "set": None}
 for w in QApplication.instance().topLevelWidgets():

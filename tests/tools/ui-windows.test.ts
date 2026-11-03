@@ -157,8 +157,8 @@ describe("capture_framed_crop", () => {
     expect(texts(await call("capture_framed_crop", { output_path: "C:/a.png", full_path: "C:/a.png" }))).toContain("different files");
     bridge.uiCaptureCrop.mockResolvedValue({ success: true, job_id: "crop-9" });
     bridge.uiWaitJob.mockResolvedValue({ finished: true, result: { success: true, view: "face", full_path: "f", render_size: [1, 1] } });
-    await call("capture_framed_crop", { overwrite: true, avatar_name: "Beyon", size: 3000 });
-    expect(bridge.uiCaptureCrop).toHaveBeenCalledWith({ overwrite: true, avatar_name: "Beyon", size: 3000 });
+    await call("capture_framed_crop", { overwrite: true, avatar_name: "Hero", size: 3000 });
+    expect(bridge.uiCaptureCrop).toHaveBeenCalledWith({ overwrite: true, avatar_name: "Hero", size: 3000 });
   });
 
   it("size is capped where Qt can still read the image back", () => {

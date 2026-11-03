@@ -1,7 +1,7 @@
 """
 Press ONE named button of a CC5 window without the mouse: route /ui/click (a job).
 
-Why (2026-10-30): while the Windows screen is locked (金剛) mouse clicks do nothing, so a worker could
+Why (2026-10-30): while the Windows screen is locked (on the remote CC5 machine) mouse clicks do nothing, so a worker could
 not press Body Wrap's "Save Skeleton" and the owner's hand-fixed points were lost. Qt's
 QAbstractButton.click() still works on a locked screen (proven with Headshot's Paste button).
 

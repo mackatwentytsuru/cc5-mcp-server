@@ -67,7 +67,7 @@ class UiOverHttpTest(unittest.TestCase):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
         self.avatar = mock.Mock()
-        self.avatar.GetName.return_value = "Beyon"
+        self.avatar.GetName.return_value = "Hero"
         status = mock.Mock()
         status.IsError.return_value = False
         for patcher in (mock.patch.object(RLPy.RScene, "GetAvatars", return_value=[self.avatar]),

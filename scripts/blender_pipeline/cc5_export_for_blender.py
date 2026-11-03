@@ -1,9 +1,13 @@
 # Owner: export the avatar for CC/iC Blender Tools the same way the official CC/iC Blender
 # Pipeline plug-in does (btp/exporter.py): FbxKey + json + current frame pose, textures to folders.
 # Run inside CC5 with Script > Load Python.
+import os
 from RLPy import *
 
-OUT = r"D:\OTOLUME\beyon_cc5\parts\v29_boot\beyon_blender.fbx"
+# Work folder: set CC5_PIPELINE_DIR to choose it (default: ~/cc5_pipeline).
+WORK = os.environ.get("CC5_PIPELINE_DIR", os.path.join(os.path.expanduser("~"), "cc5_pipeline"))
+os.makedirs(WORK, exist_ok=True)
+OUT = os.path.join(WORK, "avatar_blender.fbx")
 
 avatar = RScene.GetAvatars()[0]
 o1 = (EExportFbxOptions__None | EExportFbxOptions_AutoSkinRigidMesh | EExportFbxOptions_RemoveAllUnused

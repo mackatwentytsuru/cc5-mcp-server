@@ -75,7 +75,7 @@ different dolly counts had different sizes. Call `capture_framed_crop` once with
 and `preview_scale`), measure the box on the preview (x `preview_scale` = render pixels), then pass the same
 `crop` for every option. It refuses to crop a window screenshot (RenderImage failed) because the scale would be wrong.
 
-**Pressing a button on a locked screen** (金剛 locks itself after ~20 minutes; mouse clicks then do nothing, Qt's
+**Pressing a button on a locked screen** (the remote CC5 machine locks itself after ~20 minutes; mouse clicks then do nothing, Qt's
 `click()` still works):
 1. Find the window: `list_cc5_windows include_other=true` (floating tool windows such as Body Wrap only show with
    `include_other`). Find the button: `find_ui_widgets ancestor=<window objectName> class_name=QToolButton` (or

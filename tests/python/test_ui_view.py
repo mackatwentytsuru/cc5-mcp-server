@@ -111,7 +111,7 @@ class CaptureCropTest(UiTestCase):
         self.api.capture_viewport.return_value = {"success": True, "path": self.full}
         self.api._validate_path.side_effect = cc5_api._validate_path
         self.avatar = mock.Mock()
-        self.avatar.GetName.return_value = "Beyon"
+        self.avatar.GetName.return_value = "Hero"
         for patcher in (mock.patch.object(cc5_ui, "_api", return_value=self.api),
                         mock.patch.object(RLPy.RScene, "GetAvatars", return_value=[self.avatar])):
             patcher.start()

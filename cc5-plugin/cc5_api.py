@@ -694,7 +694,7 @@ def export_fbx(
         texture_size: "Max Texture Size" in pixels (0 = original).
         bone_structure: "UE5" | "UE4" | "" — Unreal skeleton layout (RExportFbxSetting.SetUnrealBoneStructure).
             "UE5" gives the UE5 Mannequin names (spine_01..05, neck_01/02, *_metacarpal_*, ik_* bones,
-            lowercase cc_base_*) that the BeyondCC5 project's C++ and ABPs expect (10-24).
+            lowercase cc_base_*) that the target Unreal project's C++ and ABPs expect (10-24).
         basic_bind_pose: RExportFbxSetting.EnableBasicBindPose(True/False); None leaves the default.
         reset_skin_pose: keep ResetSkinPose in the UE5 preset (default). False keeps the avatar's
             current pose as the bind pose (an HD Neutral body otherwise binds in T-pose, 10-24).
@@ -925,7 +925,7 @@ def export_fbx(
                             notes.append(f"SetUnrealBoneStructure({enum_name}) applied")
                             if enum_name.endswith("UE5_BoneStructure"):
                                 # The UE5 layout of the CC5 UI also lowercases the CC bones and adds
-                                # the ik_* bones (beyon_current_20260720 has both).
+                                # the ik_* bones (some avatars have both).
                                 extra2 = (_safe_flag("EExportFbxOptions2_RenameBoneToLowerCase")
                                           | _safe_flag("EExportFbxOptions2_UnrealIkBone"))
                                 setting.SetOption2(setting.GetOption2() | extra2)
@@ -6819,7 +6819,7 @@ def _wf_node_world(node: Any) -> dict[str, list[float]]:
 def wf_bone_world(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
     """Route /workflow/bone/world: world transforms of bones (and items) at given frames.
 
-    Body: {"bones": ["CC_Base_Pelvis", ...], "items": ["beyon_skirt_v22w", ...] (optional),
+    Body: {"bones": ["CC_Base_Pelvis", ...], "items": ["my_skirt_v1", ...] (optional),
     "frames": [0, 5, ...] (optional, default the current frame)}. Moves the time to each
     frame (playback is paused) and returns pos (cm), quat [x, y, z, w] and scale. Used to
     find where the legs sweep during a motion, so a hip-attached skirt can be kept clear.
@@ -7501,7 +7501,7 @@ def wf_file_dialog_native(body: dict[str, Any] | None = None, **kwargs: Any) -> 
 def wf_dialog_table_combo(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
     """Route /workflow/dialog/table_combo: read, or set, the combo boxes of a table in an open dialog.
 
-    Body: {"window": "Asset Import Status Report", "row_starts": "beyon_boot", "column": 1,
+    Body: {"window": "Asset Import Status Report", "row_starts": "my_boot", "column": 1,
     "text": "Shoes"}. Without "text" it only lists the rows. Synthetic mouse input does not open
     CC5's combo boxes, so this sets them directly (e.g. an imported boot's Type to Shoes).
     """
@@ -8153,7 +8153,7 @@ def wf_save_project(body: dict[str, Any] | None = None, **kwargs: Any) -> dict[s
 
     Body: {"file_path": "X.ccProject"} saves under that name ("path" means the same); {} saves
     the open project in place. Any other key is refused: it used to be ignored, so a mistyped
-    "save as" overwrote the open project (10-26, beyon_v61_chin5_1026).
+    "save as" overwrote the open project (10-26).
     """
     params = _wf_params(body, kwargs)
     try:

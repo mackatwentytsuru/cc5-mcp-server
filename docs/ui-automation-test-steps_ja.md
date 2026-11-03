@@ -1,6 +1,6 @@
-# UI の自動操作: 金剛の CC5 で試す手順(2026-10-26)
+# UI の自動操作: 別の機械の CC5 で試す手順(2026-10-26)
 
-作った人は金剛の CC5 に一度もつないでいません。**ここに書いたことは全部「まだ実機で確かめていない」**ものです。
+作った人は別の機械の CC5 に一度もつないでいません。**ここに書いたことは全部「まだ実機で確かめていない」**ものです。
 撮影が終わったあとに、壊れてもよいプロジェクトで、上から順に試してください。
 
 ## 足したもの(1 分で読む)
@@ -24,9 +24,9 @@
 
 1. 渡すファイルは 5 つ: `cc5-plugin/` の `cc5_api.py`(更新)、`cc5_ui.py`、`cc5_uiview.py`、`cc5_skingen.py`、`cc5_content.py`。
    `server.py` と `main.py` は変えていないので、**CC5 の再起動は要りません**。
-2. 入れる場所(金剛): `C:\Program Files\Reallusion\Character Creator 5\Bin64\OpenPlugin\CC5_MCP_Bridge\`
+2. 入れる場所(別の機械): `C:\Program Files\Reallusion\Character Creator 5\Bin64\OpenPlugin\CC5_MCP_Bridge\`
    - いつも `cc5_api.py` を入れている方法で、**5 つとも**入れる。
-   - 金剛にリポジトリがあるなら `scripts\copy_to_installed.ps1`(`cc5_*.py` を全部コピーする形に直した)。
+   - その機械にリポジトリがあるなら `scripts\copy_to_installed.ps1`(`cc5_*.py` を全部コピーする形に直した)。
    - 新しく入れるなら `install-plugin.ps1`(これも `cc5_*.py` を全部コピーする)。
 3. 反映: `curl http://127.0.0.1:5101/reload`(トンネル越し)。`success: true` が返れば済み。
    CC5 のコンソールに `helper module ... not loaded` が出ていないことを見る。
@@ -76,7 +76,7 @@
 
 ## 2026-10-30 の追加: ボタンを 1 つ押す(click_ui_button)と、exec の切りかえを 1 つに
 
-10-30 の 15 時台に、金剛の CC5(5.2)で A〜G を全部試して、**全部合格**した。結果は、この節の終わりの「実機の結果」に書いた。
+10-30 の 15 時台に、別の機械の CC5(5.2)で A〜G を全部試して、**全部合格**した。結果は、この節の終わりの「実機の結果」に書いた。
 
 - 足したもの: `cc5_uiclick.py`(新しい)。変えたもの: `cc5_api.py`・`cc5_ui.py`・`server.py`。
 - 入れ方: `cc5_*.py` を全部と `server.py` を入れる。`install-plugin.ps1` なら両方入る。`scripts\copy_to_installed.ps1` は
@@ -91,16 +91,16 @@
 | B | `exec_python code="result=1"`(CC5 を `CC5_ALLOW_EXEC` なしで起動したとき) | 「decided ONLY by CC5_ALLOW_EXEC ...」で断られる。MCP 側の設定は関係ない |
 | C | 壊れてよい窓で `click_ui_button window=<題名> text=<ふつうのボタン>` | `Pressed ...`、窓の絵、小窓の一覧。ボタンの働きが起きる |
 | D | 同じ窓で、文字に Points / Delete などがあるボタンを指す | `refused: ... mentions 'point'` などで、何も押されない |
-| E | 画面に鍵がかかった金剛で C をする | 押せる(マウスは効かないが Qt の click は効く、を確かめる) |
+| E | 画面に鍵がかかった機械で C をする | 押せる(マウスは効かないが Qt の click は効く、を確かめる) |
 | F | Body Wrap の 💾▾ を `object_name` で指し、`menu_item` なし | 断られ、項目の一覧が出る。実機では 💾 = `qtSaveIniToolButton` の Save Skeleton / Save Wrap Project(下の「実機の結果」) |
 | G | 先に `POST /workflow/dialog/native {"enable": false}`、そのあと `menu_item="Save Skeleton"` | `click_returned: false` と保存の小窓が出る。`POST /workflow/dialog/file_fill {"path": 新しい名前, "save": true}` で保存し、`native` を true に戻す |
 
-### 実機の結果(2026-10-30、金剛の CC5 5.2)
+### 実機の結果(2026-10-30、別の機械の CC5 5.2)
 
 用意: プラグインの古い版を `CC5_MCP_Bridge\_backup_2026-10-30\` に控え、`cc5_*.py` 全部と `server.py` を入れた(f5502e7)。
 CC5 は `CC5_ALLOW_EXEC` と `CC5_DEV_MODE` を消した環境で、空のプロジェクトで起動した(`/health` は `exec_allowed: false`)。
 MCP は新しい `build/index.js` を自前の stdio の client で動かした(道具 100 個、`click_ui_button` あり)。
-入力は Tripo の素の体 `C:\cos-work\cc5_tripo_wrap\in\bare_body_158cm.fbx`(`/workflow/import_fbx` で Prop「BareBody」として入った)。
+入力は Tripo の素の体 `<入力フォルダ>\bare_body.fbx`(`/workflow/import_fbx` で Prop「BareBody」として入った)。
 
 | # | 結果 | 見えたこと |
 |---|---|---|
@@ -129,14 +129,14 @@ Body Wrap の本当の名前:
 - そのほかの道具の列: `qtSelectToolButton`(Select)・`qtCamMoveToolButton`(Move)・`qtCamRotateToolButton`(Orbit)・
   `qtCamZoomToolButton`(Zoom)・`qtCamViewDirectionToolButton`(Front)・`qtFocusToolButton`・`qtRenderToolButton`。
 - Save Skeleton の小窓: `native` を false にすると Qt の「Save As」(`QFileDialog`、ファイル名の欄あり、INI Files (*.ini))。
-  前に使ったフォルダを覚えている(10-30 は `C:\cos-work\cc5_anime_wrap\export` で開いた)。
+  前に使ったフォルダを覚えている(10-30 は `<前回の書き出しフォルダ>` で開いた)。
 
 気づいたこと:
 
 - 道具 `import_fbx` は、取り込みが成功したのに「Failed: unknown error」と返した。ブリッジの `/workflow/import_fbx` は
   始めるだけで、結果は `GET /workflow/import_fbx/status` に出る形なのに、MCP の道具がそれを見に行かず `item` が無いため。
   (直していない。いまは status を読めば分かる)
-- 10-30 の金剛は、操作が無くても 30 分間鍵がかからなかった(CC5 が開いていたためかもしれない)。E は
+- 10-30 のその機械は、操作が無くても 30 分間鍵がかからなかった(CC5 が開いていたためかもしれない)。E は
   `rundll32 user32.dll,LockWorkStation` をデスクトップのセッションで動かして鍵をかけてから試した。
   鍵の間でも、`CopyFromScreen` の画面の撮影は失敗しなかった(中身は見ていない。10-29 の「handle is invalid」と違う)。
 - 鍵がかかったか・開いたかは、`Microsoft-Windows-Winlogon/Operational` の通知(811/812)の「通知イベント (4)」(鍵)と

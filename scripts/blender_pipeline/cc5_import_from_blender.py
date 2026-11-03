@@ -1,11 +1,13 @@
 # Owner: bring the character back from CC/iC Blender Tools the way the official CC/iC Blender
 # Pipeline plug-in does (btp/importer.py): standard human + FbxKey. It replaces the avatar in the
 # scene, so save the project first. Run inside CC5 with Script > Load Python.
-# The FBX to load is read from cc5_import_from_blender.txt next to this script (one path).
+# The FBX to load is read from cc5_import_from_blender.txt in the work folder (one path).
 import os
 import RLPy
 
-with open(r"D:\OTOLUME\beyon_cc5\scripts\cc5_import_from_blender.txt", encoding="utf-8") as f:
+# Work folder: set CC5_PIPELINE_DIR to choose it (default: ~/cc5_pipeline).
+WORK = os.environ.get("CC5_PIPELINE_DIR", os.path.join(os.path.expanduser("~"), "cc5_pipeline"))
+with open(os.path.join(WORK, "cc5_import_from_blender.txt"), encoding="utf-8") as f:
     FBX = f.read().strip()
 KEY = FBX[:-4] + ".fbxkey"
 
