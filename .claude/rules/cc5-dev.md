@@ -37,7 +37,7 @@ CC5 を再起動するときは必ず以下の順序:
 
 ## RLPy API 参照
 
-- 完全なAPI リファレンス: `docs/rlpy-api-reference.md` (5,393行)
+- 完全なAPI リファレンス: the RLPy stub that ships with Character Creator (`RLPy.py`) (5,393行)
 - 163クラス、90 Enum グループ、287グローバル関数
 - 新機能追加時はまずこのファイルで API の存在を確認
 
