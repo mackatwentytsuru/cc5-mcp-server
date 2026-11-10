@@ -2,8 +2,12 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-1.29-green.svg)](https://github.com/modelcontextprotocol/sdk)
+[![Character Creator](https://img.shields.io/badge/Character%20Creator-5.2-orange.svg)](#prerequisites)
 
 An MCP (Model Context Protocol) server that lets LLMs like Claude control **Reallusion Character Creator 5** through natural language. Adjust facial features, apply body presets, capture viewport screenshots, load assets, and export FBX files -- all via conversational commands.
+
+**Character Creator 5.2 is supported.** The author uses this server every day on CC5.2, including the 5.2 Body Wrap steps (Generate Wrap Points, Align Points, Save / Load Wrap Points).
+CC5.2 に対応しています。作者は毎日 CC5.2 で使っています(5.2 の Body Wrap の手順を含む)。
 
 ## Architecture
 
@@ -196,7 +200,7 @@ These tools drive the `/workflow/*` routes. They work without the GUI and are me
 ## Prerequisites
 
 - **Node.js** 18+ and npm
-- **Reallusion Character Creator 5** (CC5)
+- **Reallusion Character Creator 5** (CC5) -- **5.2 supported** and used daily (including Body Wrap)
 - **Windows** (CC5 is Windows-only)
 - **Blender** 4.5+ (tested with 5.2) **with the CC/iC Blender Tools add-on — required** (step 3 below).
   The goal of this project is to turn 3D models made in Tripo (and similar) into CC5 characters and
