@@ -70,6 +70,28 @@ POINT_EXCEPTION_BUTTONS = frozenset({"generate wrap points", "align points"})
 POINT_EXCEPTION_MENU_ENTRIES = frozenset({"save wrap points", "load wrap points"})
 _POINT_WORDS = frozenset({"point", "ポイント"})
 
+# Owner-approved exception (2026-11-06): ONLY the Cancel button of CC5's start-up box below may be
+# pressed although its text says "update". Title, text and the set of buttons must match exactly;
+# the request must name this window and text "Cancel" (no menu_item).
+UNSAVED_TITLE = "character creator 5"
+UNSAVED_TEXT = "unsaved project data found. would you like to update your project with the unsaved changes?"
+UNSAVED_BUTTONS = frozenset({"ok", "cancel"})
+UNSAVED_PRESS = "cancel"
+
+
+def _is_unsaved_box(info: dict[str, Any]) -> bool:
+    return (label_key(info.get("title", "")) == UNSAVED_TITLE
+            and label_key(info.get("text", "")) == UNSAVED_TEXT
+            and str(info.get("needs_human") or "").startswith("updat")   # forbidden_reason gives the stem
+            and cc5_ui.forbidden_reason(re.sub("update", " ", info.get("_full", ""), flags=re.I)) is None
+            and not info.get("checkboxes")
+            and {label_key(b) for b in info.get("buttons", [])} <= UNSAVED_BUTTONS)
+
+
+def _asks_unsaved_cancel(p: dict[str, Any]) -> bool:
+    return (label_key(p.get("window") or "") == UNSAVED_TITLE and p.get("text") is not None
+            and label_key(p["text"]) == UNSAVED_PRESS and p.get("menu_item") is None)
+
 
 def _call(obj: Any, method: str, default: Any = None) -> Any:
     """obj.method(), or the default when the method is missing or raises (a dead Qt wrapper)."""
@@ -152,10 +174,13 @@ def _top(w: Any) -> Any:
     return _call(w, "window") or w
 
 
-def blocking_reason(q: Any, scope: Any | None = None) -> str | None:
+def blocking_reason(q: Any, scope: Any | None = None, unsaved_cancel: bool = False) -> str | None:
     """Why nothing may be pressed now: a window that needs a person is open, or a modal window is open
-    and the target is not in it. None when pressing is allowed."""
-    for info, _w in cc5_ui.scan_windows():
+    and the target is not in it. None when pressing is allowed. unsaved_cancel: the request is the
+    owner's one exception (Cancel of the unsaved-data box); only that exact box is not counted."""
+    for info, w in cc5_ui.scan_windows():
+        if unsaved_cancel and _is_unsaved_box(info) and (scope is None or cc5_ui._same_widget(_top(scope), w)):
+            continue
         if info["needs_human"]:
             return (f"the window '{info['title']}' mentions '{info['needs_human']}': a person must decide, and "
                     "nothing is pressed while it is open. Show it to the owner (list_cc5_windows)")
@@ -324,13 +349,18 @@ def read_args(body: dict[str, Any] | None) -> tuple[dict[str, Any] | None, str |
 def resolve(p: dict[str, Any]) -> dict[str, Any]:
     """{"window", "button", "target", "hidden_skipped"} for a request, or {"error"}."""
     q = cc5_ui._qt()
-    blocked = blocking_reason(q)
+    unsaved = _asks_unsaved_cancel(p)
+    blocked = blocking_reason(q, unsaved_cancel=unsaved)
     if blocked:
         return {"error": blocked}
-    window, error = find_window(q, p["window"])
+    if unsaved:                                   # the main window shares the title: take the box only
+        boxes = [w for info, w in cc5_ui.scan_windows() if _is_unsaved_box(info)]
+        window, error = (boxes[0], None) if len(boxes) == 1 else find_window(q, p["window"])
+    else:
+        window, error = find_window(q, p["window"])
     if error:
         return {"error": error}
-    blocked = blocking_reason(q, window)
+    blocked = blocking_reason(q, window, unsaved_cancel=unsaved)
     if blocked:
         return {"error": blocked}
     button, error, hidden = find_button(q, window, p.get("object_name"), p.get("text"))

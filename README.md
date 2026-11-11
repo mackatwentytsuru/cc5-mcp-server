@@ -423,6 +423,11 @@ bridge can press a button for you: tool `click_ui_button`, route `POST /ui/click
 - a modal window is open and the button is not in it (a person could not press it either);
 - the button opens a drop-down menu and no `menu_item` was given (the menu would stay open on a locked screen).
 
+**One start-up exception:** CC5's own box "Unsaved project data found. Would you like to update your project
+with the unsaved changes?" (buttons OK / Cancel) appears after CC5 was closed without saving. Its **Cancel** button
+may be pressed with `{"window": "Character Creator 5", "text": "Cancel"}`, although the text contains "update".
+Title, text and button set must match exactly; OK, and every other window, stay refused.
+
 The click runs on CC5's main thread from a Qt timer, so if it opens a modal window (a file dialog, a
 question) the job still finishes: the reply says `click_returned: false` and lists that window with its
 picture. **Nothing in it is answered.** Look at it and ask the owner when it is not routine. The checks

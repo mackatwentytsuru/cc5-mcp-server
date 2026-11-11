@@ -211,6 +211,45 @@ class RefusalTest(ClickTestCase):
         self.assertEqual((self.paste.clicks, cancel.clicks), (0, 1))
 
 
+class UnsavedBoxTest(ClickTestCase):
+    """Owner-approved exception: only Cancel of CC5's start-up 'Unsaved project data found' box."""
+
+    TEXT = "Unsaved project data found. Would you like to update your project with the unsaved changes?"
+
+    def box(self, text: str | None = None, buttons: list[str] | None = None):
+        dlg = self.dialog("Character Creator 5", text or self.TEXT, buttons or ["OK", "Cancel"])
+        dlg._modal = True
+        return dlg
+
+    def button(self, dlg, label: str):
+        return [b for b in dlg.findChildren(fake_qt.PushButton) if b.text() == label][0]
+
+    def test_cancel_of_the_exact_box_is_pressed(self) -> None:
+        dlg = self.box()
+        self.run_click(window="Character Creator 5", text="Cancel")
+        self.assertEqual((self.button(dlg, "Cancel").clicks, self.button(dlg, "OK").clicks), (1, 0))
+
+    def test_ok_of_the_box_is_still_refused(self) -> None:
+        dlg = self.box()
+        self.assert_refused(self.click(window="Character Creator 5", text="OK"), "a person must decide")
+        self.assertEqual(self.button(dlg, "OK").clicks, 0)
+
+    def test_other_buttons_stay_blocked_while_the_box_is_open(self) -> None:
+        self.box()
+        self.assert_refused(self.click(text="Paste"), "a person must decide")
+        self.assertEqual(self.paste.clicks, 0)
+
+    def test_a_box_with_other_text_or_extra_buttons_is_not_the_exception(self) -> None:
+        for kwargs in ({"text": "A new update is available. Would you like to update now?"},
+                       {"buttons": ["OK", "Cancel", "Buy"]}):
+            with self.subTest(kwargs):
+                dlg = self.box(**kwargs)
+                self.assert_refused(self.click(window="Character Creator 5", text="Cancel"), "a person must decide")
+                self.assertEqual(self.button(dlg, "Cancel").clicks, 0)
+                self.q.app.tops.remove(dlg)
+
+
+
 class MenuTest(ClickTestCase):
     def setUp(self) -> None:
         super().setUp()
