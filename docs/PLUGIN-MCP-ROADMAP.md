@@ -68,7 +68,7 @@ This roadmap is grounded in a **live RLPy automation audit** run on the actual C
 - **Never probe an unknown RLPy signature by calling it with `None` / wrong-arity args.**
   A SWIG null-reference error can be caught as a Python exception yet still leave the C++ side
   corrupt, crashing CC5 seconds later. Read the RLPy stub that ships with Character Creator (`RLPy.py`) first.
-  See [headshot3-findings.md](headshot3-findings.md) §2 for two measured crashes.
+  (Two crashes were measured while researching this.)
 - A modal dialog in CC5 blocks the main-thread QTimer queue, so `exec_python` silently stalls
   while the bridge still reports "connected". Watch for dialogs when calls appear to hang.
 
@@ -89,7 +89,6 @@ CC5 のモーダルな小窓が主のスレッドを止めると、ブリッジ�
 
 ## Related docs
 
-- **[headshot3-findings.md](headshot3-findings.md)** — Headshot 3 automation research (2026-07-20).
   Which Headshot API to use (`RLPy2.Headshot3`, not `RLPy.RHeadshot`), measured enum values,
   UE5 FBX export flags and why each is required, plus dev-workflow pitfalls
   (repo vs. Program Files copy, actual hot-reload scope, modal-dialog stalls).
